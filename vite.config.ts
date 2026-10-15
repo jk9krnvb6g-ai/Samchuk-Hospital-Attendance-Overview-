@@ -4,7 +4,7 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
-  const basePath = process.env.VITE_BASE_PATH || '/Sam-attendance/';
+  const basePath = process.env.VITE_BASE_PATH || '/Sam_Att/';
   return {
     base: basePath,
     plugins: [react(), tailwindcss()],

@@ -119,7 +119,7 @@ mysql -u root -p --default-character-set=utf8mb4 < backend/SamchukAttendance.Dat
 # 5. วางไฟล์ FK623Attend.dll จาก SDK ของเครื่อง HIP CMiF68S ในโฟลเดอร์โปรเจกต์
 
 # 6. รันเซิร์ฟเวอร์บนเครื่องเซิร์ฟเวอร์โรงพยาบาลสามชุก (IP: 10.2.0.13)
-# 6.1 รัน Web Frontend (พอร์ต 3001 โฟลเดอร์ /Sam-attendance/):
+# 6.1 รัน Web Frontend (พอร์ต 3001 โฟลเดอร์ /Sam_Att/):
 npm run serve:hospital
 
 # 6.2 รัน Backend API Service (พอร์ต 3002):
@@ -127,9 +127,9 @@ dotnet run --project backend/SamchukAttendance.Api
 ```
 
 ### 🌐 ที่อยู่การเข้าถึงระบบจริงของโรงพยาบาลสามชุก (Hospital Production URLs)
-- **Web User Interface (Frontend):** `https://10.2.0.13:3001/Sam-attendance/`
+- **Web User Interface (Frontend):** `https://10.2.0.13:3001/Sam_Att/`
   - ทำงานบนพอร์ต **3001** ผ่านโปรโตคอล **HTTPS**
-  - จัดเก็บไฟล์และ Assets ใต้โฟลเดอร์ **`Sam-attendance`** (`base: '/Sam-attendance/'`)
+  - จัดเก็บไฟล์และ Assets ใต้โฟลเดอร์ **`Sam_Att`** (`base: '/Sam_Att/'`)
 - **API Gateway Service (Backend):** `https://10.2.0.13:3002`
   - ทำงานบนพอร์ต **3002** เป็นศูนย์กลางรับ-ส่งข้อมูลเวลา
   - ส่งข้อมูลเข้า `hosoffice.fingle_scan` ผ่าน `POST /api/push/batch`

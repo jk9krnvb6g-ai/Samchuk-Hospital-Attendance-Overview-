@@ -547,7 +547,7 @@ namespace SamchukAttendance.Scanner
                   สถาปัตยกรรมเครือข่ายและระบบส่งข้อมูล โรงพยาบาลสามชุก
                 </h3>
                 <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
-                  Web Frontend ทำงานบนโฟลเดอร์ <code className="bg-slate-800 text-teal-300 px-1.5 py-0.5 rounded font-mono">/Sam-attendance/</code> พอร์ต <strong>3001</strong> และใช้ API หลังบ้านบนพอร์ต <strong>3002</strong> ในการส่งข้อมูลเวลาเข้า HOSxP/Hosoffice และควบคุมเครื่องสแกน HIP CMiF68S
+                  Web Frontend ทำงานบนโฟลเดอร์ <code className="bg-slate-800 text-teal-300 px-1.5 py-0.5 rounded font-mono">/Sam_Att/</code> พอร์ต <strong>3001</strong> และใช้ API หลังบ้านบนพอร์ต <strong>3002</strong> ในการส่งข้อมูลเวลาเข้า HOSxP/Hosoffice และควบคุมเครื่องสแกน HIP CMiF68S
                 </p>
               </div>
               <div className="flex items-center gap-3 shrink-0">
@@ -587,11 +587,11 @@ namespace SamchukAttendance.Scanner
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2 font-mono text-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">URL ใช้งานจริง:</span>
-                  <span className="font-bold text-teal-800">https://10.2.0.13:3001/Sam-attendance/</span>
+                  <span className="font-bold text-teal-800">https://10.2.0.13:3001/Sam_Att/</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">โฟลเดอร์ที่จัดเก็บ:</span>
-                  <span className="font-semibold text-slate-700">/Sam-attendance/ (Virtual Directory)</span>
+                  <span className="font-semibold text-slate-700">/Sam_Att/ (Virtual Directory)</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">โปรโตคอลความปลอดภัย:</span>
@@ -599,14 +599,14 @@ namespace SamchukAttendance.Scanner
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500">การตั้งค่า Vite Base:</span>
-                  <span className="text-slate-700 font-semibold">base: '/Sam-attendance/'</span>
+                  <span className="text-slate-700 font-semibold">base: '/Sam_Att/'</span>
                 </div>
               </div>
 
               <div className="text-[11px] text-slate-600 bg-slate-50 rounded p-2.5 border border-slate-100 flex items-start gap-2">
                 <FolderTree className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
                 <span>
-                  โฟลเดอร์ที่เก็บ Web App คือ <code className="font-mono font-bold text-slate-800">Sam-attendance</code> เมื่อนำไปวางในเว็บเซิร์ฟเวอร์ (IIS หรือ Nginx) ระบบจะโหลด Assets ได้ครบถ้วนทุกหน้าโดยไม่มีปัญหา 404
+                  โฟลเดอร์ที่เก็บ Web App คือ <code className="font-mono font-bold text-slate-800">Sam_Att</code> เมื่อนำไปวางในเว็บเซิร์ฟเวอร์ (IIS หรือ Nginx) ระบบจะโหลด Assets ได้ครบถ้วนทุกหน้าโดยไม่มีปัญหา 404
                 </span>
               </div>
             </div>
@@ -761,7 +761,7 @@ namespace SamchukAttendance.Scanner
                   <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-teal-300">NPM / IIS</span>
                 </div>
                 <p className="text-[11px] text-slate-400 font-sans">
-                  บิลด์ไฟล์เพื่อนำไปวางในโฟลเดอร์ <strong>Sam-attendance</strong>:
+                  บิลด์ไฟล์เพื่อนำไปวางในโฟลเดอร์ <strong>Sam_Att</strong>:
                 </p>
                 <pre className="text-teal-300 bg-slate-950 p-2 rounded">
                   npm run build
@@ -789,7 +789,7 @@ namespace SamchukAttendance.Scanner
                   หรือติดตั้งเป็น Windows Service:
                 </p>
                 <pre className="text-indigo-300 bg-slate-950 p-2 rounded">
-                  sc create SamchukAttendanceApi binPath= "D:\Sam-attendance\backend\publish\SamchukAttendance.Api.exe" start= auto
+                  sc create SamchukAttendanceApi binPath= "D:\Sam_Att\backend\publish\SamchukAttendance.Api.exe" start= auto
                 </pre>
               </div>
             </div>

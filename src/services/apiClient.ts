@@ -2,7 +2,7 @@
  * Samchuk Attendance System - API Client Service
  * พอร์ต 3002: API สำหรับรับ-ส่งข้อมูล HOSxP/Hosoffice และควบคุมเครื่องสแกน HIP CMiF68S
  * Endpoint หลัก: https://10.2.0.13:3002
- * Web Frontend: https://10.2.0.13:3001/Sam-attendance/
+ * Web Frontend: https://10.2.0.13:3001/Sam_Att/
  */
 
 export interface ApiHealthResponse {
@@ -44,7 +44,7 @@ export const DEFAULT_API_URL = (typeof import.meta !== 'undefined' && import.met
   ? import.meta.env.VITE_API_URL 
   : 'https://10.2.0.13:3002';
 
-export const HOSPITAL_WEB_URL = 'https://10.2.0.13:3001/Sam-attendance/';
+export const HOSPITAL_WEB_URL = 'https://10.2.0.13:3001/Sam_Att/';
 
 class ApiClientService {
   private customBaseUrl: string = DEFAULT_API_URL;

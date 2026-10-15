@@ -203,7 +203,7 @@ sc.exe start SamchukAttendanceService
 
 ---
 
-## 6. การติดตั้งและ Build Web Frontend (พอร์ต 3001 โฟลเดอร์ Sam-attendance)
+## 6. การติดตั้งและ Build Web Frontend (พอร์ต 3001 โฟลเดอร์ Sam_Att)
 
 ### 6.1 คอมไพล์แอปพลิเคชัน Frontend สำหรับใช้งานจริง
 ```bash
@@ -213,26 +213,26 @@ npm install
 # ตรวจสอบโค้ด
 npm run lint
 
-# สร้าง Production Bundle โดยมี Base Path เป็น /Sam-attendance/
+# สร้าง Production Bundle โดยมี Base Path เป็น /Sam_Att/
 npm run build
 ```
-เมื่อคำสั่งทำงานเสร็จสิ้น ไฟล์หน้าเว็บที่คอมไพล์แล้วจะอยู่ในโฟลเดอร์ `dist/` โดยไฟล์ Assets ทั้งหมดจะถูกอ้างอิงผ่านพาธ `/Sam-attendance/assets/...` อย่างถูกต้อง
+เมื่อคำสั่งทำงานเสร็จสิ้น ไฟล์หน้าเว็บที่คอมไพล์แล้วจะอยู่ในโฟลเดอร์ `dist/` โดยไฟล์ Assets ทั้งหมดจะถูกอ้างอิงผ่านพาธ `/Sam_Att/assets/...` อย่างถูกต้อง
 
 ### 6.2 การนำไป Host บน Web Server (IIS หรือ Nginx)
 - **กรณีใช้ IIS (Internet Information Services):**
-  1. สร้าง Application หรือ Virtual Directory ชื่อ **`Sam-attendance`** ภายใต้ Default Web Site (หรือ Site ที่ Bind พอร์ต HTTPS **3001**)
-  2. ชี้ Physical Path ไปยังโฟลเดอร์ `D:\Sam-attendance\dist`
+  1. สร้าง Application หรือ Virtual Directory ชื่อ **`Sam_Att`** ภายใต้ Default Web Site (หรือ Site ที่ Bind พอร์ต HTTPS **3001**)
+  2. ชี้ Physical Path ไปยังโฟลเดอร์ `D:\Sam_Att\dist`
   3. ใส่ไฟล์ `web.config` ที่มีให้ในโปรเจกต์ลงในโฟลเดอร์ `dist` เพื่อให้ URL Rewrite นำทาง Request ทั้งหมดไปที่ `index.html` (SPA Routing)
   4. ผูก (Bind) ใบรับรอง SSL/TLS (HTTPS) บนพอร์ต **3001**
 - **กรณีใช้ Nginx บน Windows:**
   1. ใช้ไฟล์คอนฟิก `nginx.conf` ที่โปรเจกต์จัดเตรียมไว้ให้
-  2. กำหนด `location /Sam-attendance/ { alias D:/Sam-attendance/dist/; try_files $uri $uri/ /Sam-attendance/index.html; }`
+  2. กำหนด `location /Sam_Att/ { alias D:/Sam_Att/dist/; try_files $uri $uri/ /Sam_Att/index.html; }`
   3. กำหนด `listen 3001 ssl;` สำหรับ Web Frontend และ `listen 3002 ssl;` สำหรับ API Gateway
 - **กรณีรันผ่าน Node Preview:**
   ```bash
   npm run serve:hospital
   ```
-  เข้าใช้งานได้ที่: `https://10.2.0.13:3001/Sam-attendance/`
+  เข้าใช้งานได้ที่: `https://10.2.0.13:3001/Sam_Att/`
 
 ---
 

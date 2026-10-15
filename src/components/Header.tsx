@@ -54,7 +54,7 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Status Indicators & Action Bar */}
       <div className="flex items-center gap-4 shrink-0">
         {/* Network & API Gateway Indicator */}
-        <div className="hidden lg:flex items-center gap-2 text-xs bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-200" title="Web: https://10.2.0.13:3001/Sam-attendance/ | API: https://10.2.0.13:3002">
+        <div className="hidden lg:flex items-center gap-2 text-xs bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-200" title="Web: https://10.2.0.13:3001/Sam_Att/ | API: https://10.2.0.13:3002">
           <div className="flex items-center gap-1.5 font-mono text-[11px]">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             <span className="text-slate-500">API:</span>

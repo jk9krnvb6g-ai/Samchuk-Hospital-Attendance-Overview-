@@ -102,9 +102,9 @@
 
 ### Version 2.2.3 (ล่าสุด)
 - **ปรับเปลี่ยนโครงสร้างที่อยู่ระบบและการส่งข้อมูล (Production Network & Port Architecture):**
-  - **Web Frontend:** ปรับจาก `http://localhost:3000` ไปยัง `https://10.2.0.13:3001/Sam-attendance/`
+  - **Web Frontend:** ปรับจาก `http://localhost:3000` ไปยัง `https://10.2.0.13:3001/Sam_Att/`
     - กำหนดพอร์ตใช้งานจริงเป็น **3001 (HTTPS)**
-    - กำหนด Base Path และโฟลเดอร์จัดเก็บเป็น **`Sam-attendance`** (`base: '/Sam-attendance/'` ใน Vite)
+    - กำหนด Base Path และโฟลเดอร์จัดเก็บเป็น **`Sam_Att`** (`base: '/Sam_Att/'` ใน Vite)
     - รองรับการเข้าถึงผ่าน Web Server IIS / Nginx ด้วย `web.config` และ `nginx.conf`
   - **API Gateway Service:** กำหนดพอร์ต **3002 (HTTPS/HTTP)** (`https://10.2.0.13:3002`)
     - เป็น API กลางในการส่งข้อมูลเข้า HOSxP/Hosoffice (`POST /api/push/batch`)
