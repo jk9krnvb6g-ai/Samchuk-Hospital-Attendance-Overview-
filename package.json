@@ -6,9 +6,13 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "dev:hospital": "vite --port=3001 --host=0.0.0.0",
+    "dev:3000": "vite --port=3000 --host=0.0.0.0",
+    "dev:8080": "vite --port=8080 --host=0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
     "serve:hospital": "vite preview --port=3001 --host=0.0.0.0",
+    "serve:3000": "vite preview --port=3000 --host=0.0.0.0",
+    "serve:8080": "vite preview --port=8080 --host=0.0.0.0",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },
