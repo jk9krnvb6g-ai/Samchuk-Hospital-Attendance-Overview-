@@ -1,0 +1,6 @@
+{
+  "name": "Samchuk Attendance Management",
+  "description": "ระบบจัดการเวลาปฏิบัติงานและเครื่องสแกนนิ้ว โรงพยาบาลสามชุก (Samchuk Hospital Fingerprint & Attendance Web Application v2)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

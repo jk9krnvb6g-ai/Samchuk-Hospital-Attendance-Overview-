@@ -1,0 +1,1255 @@
+import {
+  RawScan,
+  Shift,
+  PersonnelGroup,
+  PersonShiftOverride,
+  PersonRoster,
+  HosFingleScan,
+  PushBatch,
+  Scanner,
+  SyncLog,
+  AuditLog,
+  HrPerson,
+  User,
+  DailyResult,
+  HosofficePersonRow,
+  PersonnelSyncResult,
+  ShiftResolution,
+  PersonnelFieldChange,
+  PersonnelUpdateRecord
+} from '../types/attendance';
+import {
+  INITIAL_SCANNERS,
+  INITIAL_SHIFTS,
+  INITIAL_PERSONNEL,
+  INITIAL_GROUPS,
+  INITIAL_PERSON_OVERRIDES,
+  INITIAL_ROSTER,
+  INITIAL_HOSOFFICE_FINGLE_SCANS,
+  INITIAL_RAW_SCANS,
+  INITIAL_PUSH_BATCHES,
+  INITIAL_SYNC_LOGS,
+  INITIAL_AUDIT_LOGS,
+  INITIAL_USERS,
+  HOSOFFICE_MOCK_PERSONNEL_DATA
+} from './mockData';
+
+const STORAGE_KEY = 'samchuk_attendance_v2_state';
+
+export interface StoreState {
+  currentUser: User;
+  users: User[];
+  scanners: Scanner[];
+  shifts: Shift[];
+  personnel: HrPerson[];
+  groups: PersonnelGroup[];
+  personOverrides: PersonShiftOverride[];
+  roster: PersonRoster[];
+  rawScans: RawScan[];
+  hosofficeScans: HosFingleScan[];
+  pushBatches: PushBatch[];
+  syncLogs: SyncLog[];
+  auditLogs: AuditLog[];
+  autoSyncEnabled: boolean;
+  lastAutoCalculatedAt?: string;
+  cachedDailyResults: Record<string, DailyResult[]>;
+}
+
+export function getDayType(dateStr: string): { id: number; name: string } {
+  const d = new Date(dateStr);
+  const day = d.getDay(); // 0 = Sunday, 1 = Monday ... 6 = Saturday
+  const dayTypes: Record<number, { id: number; name: string }> = {
+    0: { id: 1, name: 'อาทิตย์' },
+    1: { id: 2, name: 'จันทร์' },
+    2: { id: 3, name: 'อังคาร' },
+    3: { id: 4, name: 'พุธ' },
+    4: { id: 5, name: 'พฤหัสบดี' },
+    5: { id: 6, name: 'ศุกร์' },
+    6: { id: 7, name: 'เสาร์' },
+  };
+  return dayTypes[day] || { id: 1, name: 'อาทิตย์' };
+}
+
+export function formatDateTime(d: Date = new Date()): string {
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const mins = pad(d.getMinutes());
+  const secs = pad(d.getSeconds());
+  return `${year}-${month}-${day} ${hours}:${mins}:${secs}`;
+}
+
+export function formatDate(d: Date = new Date()): string {
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  return `${year}-${month}-${day}`;
+}
+
+let globalIdCounter = 1;
+export function generateUniqueId(): number {
+  return Date.now() * 1000 + (globalIdCounter++ % 1000);
+}
+
+class AttendanceStore {
+  private state: StoreState;
+  private listeners: (() => void)[] = [];
+  private autoSyncTimer: number | null = null;
+
+  constructor() {
+    this.state = this.loadState();
+    // Compact any existing oversized legacy state in localStorage
+    this.saveState();
+  }
+
+  private loadState(): StoreState {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const dedupe = <T extends { id?: number }>(arr?: T[]): T[] => {
+          if (!arr) return [];
+          const seen = new Set<number>();
+          return arr.map(item => {
+            let id = item.id;
+            if (!id || seen.has(id)) {
+              id = generateUniqueId();
+            }
+            seen.add(id);
+            return { ...item, id };
+          });
+        };
+
+        return {
+          ...parsed,
+          currentUser: parsed.currentUser || INITIAL_USERS[0],
+          rawScans: (dedupe(parsed.rawScans) || INITIAL_RAW_SCANS).slice(0, 150),
+          syncLogs: (dedupe(parsed.syncLogs) || INITIAL_SYNC_LOGS).slice(0, 40),
+          auditLogs: (dedupe(parsed.auditLogs) || INITIAL_AUDIT_LOGS).slice(0, 40),
+          pushBatches: (dedupe(parsed.pushBatches) || INITIAL_PUSH_BATCHES).slice(0, 25),
+          shifts: dedupe(parsed.shifts) || INITIAL_SHIFTS,
+          groups: dedupe(parsed.groups) || INITIAL_GROUPS,
+          personOverrides: dedupe(parsed.personOverrides) || INITIAL_PERSON_OVERRIDES,
+          cachedDailyResults: {}, // Keep calculation cache strictly in-memory to prevent quota exhaustion
+          lastAutoCalculatedAt: parsed.lastAutoCalculatedAt || formatDateTime()
+        };
+      }
+    } catch {
+      // fallback
+    }
+
+    return {
+      currentUser: INITIAL_USERS[0], // Default ADMIN
+      users: INITIAL_USERS,
+      scanners: INITIAL_SCANNERS,
+      shifts: INITIAL_SHIFTS,
+      personnel: INITIAL_PERSONNEL,
+      groups: INITIAL_GROUPS,
+      personOverrides: INITIAL_PERSON_OVERRIDES,
+      roster: INITIAL_ROSTER,
+      rawScans: INITIAL_RAW_SCANS,
+      hosofficeScans: INITIAL_HOSOFFICE_FINGLE_SCANS,
+      pushBatches: INITIAL_PUSH_BATCHES,
+      syncLogs: INITIAL_SYNC_LOGS,
+      auditLogs: INITIAL_AUDIT_LOGS,
+      autoSyncEnabled: true,
+      lastAutoCalculatedAt: formatDateTime(),
+      cachedDailyResults: {}
+    };
+  }
+
+  private saveState() {
+    // 1. In-memory trims to prevent memory leakage and unbound array growth
+    if (this.state.rawScans && this.state.rawScans.length > 150) {
+      this.state.rawScans = this.state.rawScans.slice(0, 150);
+    }
+    if (this.state.syncLogs && this.state.syncLogs.length > 40) {
+      this.state.syncLogs = this.state.syncLogs.slice(0, 40);
+    }
+    if (this.state.auditLogs && this.state.auditLogs.length > 40) {
+      this.state.auditLogs = this.state.auditLogs.slice(0, 40);
+    }
+    if (this.state.pushBatches && this.state.pushBatches.length > 25) {
+      this.state.pushBatches = this.state.pushBatches.slice(0, 25);
+    }
+    if (this.state.hosofficeScans && this.state.hosofficeScans.length > 150) {
+      this.state.hosofficeScans = this.state.hosofficeScans.slice(0, 150);
+    }
+
+    try {
+      // Exclude large calculation cache from persistent storage to keep payload small (< 100KB)
+      const stateToPersist = {
+        ...this.state,
+        cachedDailyResults: {}
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToPersist));
+    } catch {
+      // If quota exceeded or writing fails, prune aggressively and retry safely
+      try {
+        const compactState = {
+          currentUser: this.state.currentUser,
+          users: this.state.users,
+          scanners: this.state.scanners,
+          shifts: this.state.shifts,
+          personnel: this.state.personnel,
+          groups: this.state.groups,
+          personOverrides: this.state.personOverrides,
+          roster: this.state.roster,
+          rawScans: this.state.rawScans.slice(0, 30),
+          hosofficeScans: this.state.hosofficeScans.slice(0, 30),
+          pushBatches: this.state.pushBatches.slice(0, 5),
+          syncLogs: this.state.syncLogs.slice(0, 5),
+          auditLogs: this.state.auditLogs.slice(0, 5),
+          autoSyncEnabled: this.state.autoSyncEnabled,
+          lastAutoCalculatedAt: this.state.lastAutoCalculatedAt,
+          cachedDailyResults: {}
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(compactState));
+      } catch {
+        // Degrade safely to in-memory state without crashing or logging fatal console.error
+        console.warn('LocalStorage quota limit reached; continuing with in-memory store.');
+      }
+    }
+    this.notify();
+  }
+
+  public subscribe(listener: () => void) {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter(l => l !== listener);
+    };
+  }
+
+  private notify() {
+    this.listeners.forEach(l => l());
+  }
+
+  public getState(): StoreState {
+    return this.state;
+  }
+
+  public setCurrentUser(user: User) {
+    this.state.currentUser = user;
+    this.logAudit(user.username, 'AUTH', `เปลี่ยนผู้ใช้งานเป็น ${user.fullname} (${user.role})`);
+    this.saveState();
+  }
+
+  public logAudit(user: string, module: AuditLog['module'], detail: string, action = 'OPERATION') {
+    const newLog: AuditLog = {
+      id: generateUniqueId(),
+      timestamp: formatDateTime(),
+      user,
+      action,
+      module,
+      detail,
+      ipAddress: '10.1.0.45'
+    };
+    this.state.auditLogs = [newLog, ...this.state.auditLogs];
+  }
+
+  // 16.3 Shift Resolution Order: Roster > Person Override > Group Shift > System Default
+  // สนับสนุนการมีหลายกะในวันเดียวกัน (เช่น เช้า + บ่าย ควบกะ)
+  public resolveShiftsForPerson(personId: number, workDate: string): ShiftResolution[] {
+    const person = this.state.personnel.find(p => p.personId === personId);
+    if (!person) {
+      const def = this.state.shifts.find(s => s.isSystemDefault) || this.state.shifts[0];
+      return [{
+        shift: def,
+        startTime: def ? def.startTime : '08:15',
+        endTime: def ? def.endTime : '16:00',
+        lateGraceMinutes: def ? def.lateGraceMinutes : 0,
+        source: 'SYSTEM_DEFAULT'
+      }];
+    }
+
+    // 1. Roster check: ตรวจสอบตารางเวรทั้งหมดของบุคคลในวันนี้ (คนมีได้หลายกะ)
+    const rosterEntries = this.state.roster.filter(r => r.personId === personId && r.workDate === workDate);
+    if (rosterEntries.length > 0) {
+      const resolvedRosterShifts: ShiftResolution[] = [];
+      for (const entry of rosterEntries) {
+        const shift = this.state.shifts.find(s => s.id === entry.shiftId);
+        if (shift && shift.isActive) {
+          resolvedRosterShifts.push({
+            shift,
+            startTime: shift.startTime,
+            endTime: shift.endTime,
+            lateGraceMinutes: shift.lateGraceMinutes,
+            source: 'ROSTER',
+            note: entry.note,
+            rosterId: entry.id
+          });
+        }
+      }
+
+      if (resolvedRosterShifts.length > 0) {
+        return resolvedRosterShifts;
+      }
+    }
+
+    // 2. Person Override: กะรายบุคคลพิเศษ
+    const overrides = this.state.personOverrides.filter(o => 
+      o.personId === personId &&
+      o.isActive &&
+      workDate >= o.effectiveFrom &&
+      (!o.effectiveTo || workDate <= o.effectiveTo)
+    );
+    if (overrides.length > 0) {
+      return overrides.map(override => {
+        const shift = this.state.shifts.find(s => s.id === override.shiftId);
+        return {
+          shift,
+          startTime: override.startTime,
+          endTime: override.endTime,
+          lateGraceMinutes: shift?.lateGraceMinutes ?? 0,
+          source: 'PERSON_OVERRIDE' as const,
+          note: override.note
+        };
+      });
+    }
+
+    // 3. Group Shift (sorted by group priority ascending)
+    const activeGroups = [...this.state.groups]
+      .filter(g => g.isActive)
+      .sort((a, b) => a.priority - b.priority);
+
+    for (const group of activeGroups) {
+      const isMember = 
+        (group.groupKind === 'PERSON_TYPE' && group.personTypeIds.includes(person.hrPersonTypeId)) ||
+        (group.groupKind === 'CUSTOM' && group.memberPersonIds.includes(person.personId));
+
+      if (isMember) {
+        // Look for default shift or shift 1 (เช้า) in group overrides
+        const defaultShift = this.state.shifts.find(s => s.isSystemDefault) || this.state.shifts[0];
+        if (defaultShift && group.shiftOverrides[defaultShift.id]) {
+          const overrideTimes = group.shiftOverrides[defaultShift.id];
+          return [{
+            shift: defaultShift,
+            startTime: overrideTimes.startTime,
+            endTime: overrideTimes.endTime,
+            lateGraceMinutes: overrideTimes.lateGraceMinutes ?? defaultShift.lateGraceMinutes,
+            source: 'GROUP_OVERRIDE',
+            note: `กลุ่ม ${group.groupName}`
+          }];
+        }
+      }
+    }
+
+    // 4. System Default
+    const sysDefault = this.state.shifts.find(s => s.isSystemDefault && s.isActive) || this.state.shifts.find(s => s.isActive);
+    if (sysDefault) {
+      return [{
+        shift: sysDefault,
+        startTime: sysDefault.startTime,
+        endTime: sysDefault.endTime,
+        lateGraceMinutes: sysDefault.lateGraceMinutes,
+        source: 'SYSTEM_DEFAULT'
+      }];
+    }
+
+    return [{
+      startTime: '08:15',
+      endTime: '16:00',
+      lateGraceMinutes: 0,
+      source: 'NONE'
+    }];
+  }
+
+  // Backwards compatibility helper returning primary shift
+  public resolveShiftForPerson(personId: number, workDate: string): ShiftResolution {
+    const list = this.resolveShiftsForPerson(personId, workDate);
+    return list[0];
+  }
+
+  // Scanner Sync logic - Section 7: Background scanner sync
+  // Reads scanner -> check duplicate in attendance_raw_scan -> maps HR -> stores in attendance_raw_scan only!
+  public triggerScannerSync(machineNo?: number): { totalRead: number; totalNew: number; duplicates: number; processedCount: number } {
+    const targets = machineNo 
+      ? this.state.scanners.filter(s => s.machineNo === machineNo && s.enabled)
+      : this.state.scanners.filter(s => s.enabled);
+
+    let grandTotalRead = 0;
+    let grandTotalNew = 0;
+    let grandDuplicates = 0;
+
+    const now = formatDateTime();
+
+    targets.forEach(scanner => {
+      // Simulate reading general logs from CMiF68S (FK_LoadGeneralLogData)
+      const simulatedCount = Math.floor(Math.random() * 4) + 1;
+      let newCount = 0;
+      let dupCount = 0;
+
+      for (let i = 0; i < simulatedCount; i++) {
+        // pick random personnel or new scan
+        const pIndex = Math.floor(Math.random() * this.state.personnel.length);
+        const p = this.state.personnel[pIndex];
+        const isUnmapped = Math.random() < 0.08; // small chance of unmapped ID
+        const fingleId = isUnmapped ? 999 : p.fingleId;
+
+        // Current time or recent minute
+        const d = new Date();
+        d.setMinutes(d.getMinutes() - Math.floor(Math.random() * 15));
+        const scanDateTime = formatDateTime(d);
+
+        // Section 10: Duplicate check on (fingle_id, scan_date_time)
+        const isDuplicate = this.state.rawScans.some(
+          r => r.fingleId === fingleId && r.scanDateTime === scanDateTime
+        );
+
+        grandTotalRead++;
+        if (isDuplicate) {
+          dupCount++;
+          grandDuplicates++;
+          continue;
+        }
+
+        // Section 11: HR Mapping Snapshot
+        const hr = isUnmapped ? null : p;
+        const newRawScan: RawScan = {
+          id: generateUniqueId(),
+          machineNo: scanner.machineNo,
+          deviceIp: scanner.ip,
+          fingleId,
+          scanDateTime,
+          verifyMode: 1, // FP
+          inOutMode: Math.random() > 0.5 ? 0 : 1, // raw value preserved!
+          personId: hr?.personId,
+          hrFullname: hr?.hrFullname,
+          hrPositionName: hr?.hrPositionName,
+          hrLeavelName: hr?.hrLevelName,
+          hrDepName: hr?.hrDepName,
+          hrDepSubName: hr?.hrDepSubName,
+          hrPersonTypeName: hr?.hrPersonTypeName,
+          hrPersonTypeId: hr?.hrPersonTypeId,
+          hrDepartmentId: hr?.hrDepartmentId,
+          hrDepartmentSubId: hr?.hrDepartmentSubId,
+          hrMapped: !isUnmapped,
+          pushStatus: 'PENDING', // NEVER automatically pushed to hosoffice
+          receivedAt: now
+        };
+
+        this.state.rawScans.unshift(newRawScan);
+        newCount++;
+        grandTotalNew++;
+      }
+
+      scanner.lastSync = now;
+      scanner.status = 'ONLINE';
+      scanner.totalLoadedRecords += simulatedCount;
+
+      // Add sync log
+      const pendingCount = this.state.rawScans.filter(r => r.pushStatus === 'PENDING').length;
+      const syncLog: SyncLog = {
+        id: generateUniqueId(),
+        timestamp: now,
+        scannerId: scanner.id,
+        scannerName: scanner.name,
+        machineNo: scanner.machineNo,
+        ip: scanner.ip,
+        status: 'SUCCESS',
+        recordsTotal: simulatedCount + 80,
+        recordsNew: newCount,
+        recordsDuplicate: dupCount + 80,
+        recordsPending: pendingCount,
+        durationMs: Math.floor(Math.random() * 300) + 200,
+        message: `FK_LoadGeneralLogData(handle: ${scanner.machineNo * 1000 + 1261}) ดึงข้อมูลสำเร็จ`
+      };
+      this.state.syncLogs = [syncLog, ...this.state.syncLogs];
+    });
+
+    // ⚡ แนวทางที่ 1 (Auto-calculate immediately upon sync):
+    // ประมวลผลเวลาทำงาน จับคู่กะ คำนวณเข้า/ออก/สาย ทันทีที่ข้อมูลดิบจากสแกนเนอร์ถูกบันทึกลง Staging
+    const today = '2026-10-14';
+    const autoResults = this.calculateAttendance(today);
+    if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+    this.state.cachedDailyResults[today] = autoResults;
+    this.state.lastAutoCalculatedAt = now;
+
+    this.saveState();
+    return {
+      totalRead: grandTotalRead,
+      totalNew: grandTotalNew,
+      duplicates: grandDuplicates,
+      processedCount: autoResults.length
+    };
+  }
+
+  // ดึงผลการประมวลผลเวลาประจำวัน (ใช้แคช Real-time หรือสั่งคำนวณใหม่)
+  public getDailyAttendance(date: string = '2026-10-14', forceRecalculate = false): DailyResult[] {
+    if (!forceRecalculate && this.state.cachedDailyResults && this.state.cachedDailyResults[date]) {
+      return this.state.cachedDailyResults[date];
+    }
+    const results = this.calculateAttendance(date);
+    if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+    this.state.cachedDailyResults[date] = results;
+    this.state.lastAutoCalculatedAt = formatDateTime();
+    this.saveState();
+    return results;
+  }
+
+  // Section 22: Push Preview (Dry-run before push)
+  public previewPush(filters: {
+    dateFrom?: string;
+    dateTo?: string;
+    machineNo?: number;
+    pendingOnly?: boolean;
+  }) {
+    let candidates = [...this.state.rawScans];
+
+    if (filters.pendingOnly !== false) {
+      candidates = candidates.filter(r => r.pushStatus === 'PENDING');
+    }
+    if (filters.dateFrom) {
+      candidates = candidates.filter(r => r.scanDateTime >= `${filters.dateFrom} 00:00:00`);
+    }
+    if (filters.dateTo) {
+      candidates = candidates.filter(r => r.scanDateTime <= `${filters.dateTo} 23:59:59`);
+    }
+    if (filters.machineNo) {
+      candidates = candidates.filter(r => r.machineNo === filters.machineNo);
+    }
+
+    // Check how many already exist in hosoffice.fingle_scan
+    let willSkipExists = 0;
+    let unmappedCount = 0;
+    let readyToPush = 0;
+
+    candidates.forEach(scan => {
+      if (!scan.hrMapped) {
+        unmappedCount++;
+        return;
+      }
+      const existsInHos = this.state.hosofficeScans.some(
+        h => h.fingleId === scan.fingleId && h.scanDateTime === scan.scanDateTime
+      );
+      if (existsInHos) {
+        willSkipExists++;
+      } else {
+        readyToPush++;
+      }
+    });
+
+    return {
+      totalSelected: candidates.length,
+      readyToPush,
+      willSkipExists,
+      unmappedCount,
+      candidates
+    };
+  }
+
+  // Section 22: Execute Push to MySQL hosoffice.fingle_scan (ADMIN ONLY)
+  public executePush(
+    filters: {
+      dateFrom?: string;
+      dateTo?: string;
+      machineNo?: number;
+      pendingOnly?: boolean;
+      includeUnmapped?: boolean;
+    },
+    requestedByUser: User
+  ): { batch: PushBatch; inserted: number; skippedExists: number; failed: number } {
+    if (requestedByUser.role !== 'ADMIN') {
+      throw new Error('ไม่อนุญาต: สิทธิ์การส่งข้อมูลเข้า hosoffice สงวนไว้สำหรับ ADMIN เท่านั้น');
+    }
+
+    const preview = this.previewPush(filters);
+    const now = formatDateTime();
+    const batchId = generateUniqueId();
+
+    let inserted = 0;
+    let skippedExists = 0;
+    let failed = 0;
+
+    preview.candidates.forEach(scan => {
+      // If unmapped and not explicitly included
+      if (!scan.hrMapped && !filters.includeUnmapped) {
+        scan.pushStatus = 'EXCLUDED';
+        scan.pushError = 'ยังไม่ผูกข้อมูลบุคคล (FINGLE_ID ไม่พบใน hr_person)';
+        return;
+      }
+
+      // Check duplicate in hosoffice.fingle_scan (Section 10 & 22)
+      const exists = this.state.hosofficeScans.some(
+        h => h.fingleId === scan.fingleId && h.scanDateTime === scan.scanDateTime
+      );
+
+      if (exists) {
+        scan.pushStatus = 'SKIPPED_EXISTS';
+        scan.pushBatchId = batchId;
+        scan.pushedAt = now;
+        scan.pushedBy = requestedByUser.id;
+        skippedExists++;
+        return;
+      }
+
+      try {
+        const scanDate = scan.scanDateTime.split(' ')[0];
+        const scanTime = scan.scanDateTime.split(' ')[1] || '00:00:00';
+        const dayType = getDayType(scanDate);
+
+        // Section 12 & 13: Insert format to hosoffice.fingle_scan
+        const hosRecord: HosFingleScan = {
+          id: generateUniqueId(),
+          personId: scan.personId,
+          fingleId: scan.fingleId,
+          scanDateTime: scan.scanDateTime,
+          scanDate,
+          scanTime,
+          dayTypeId: dayType.id,
+          dayTypeName: dayType.name,
+          hrFullname: scan.hrFullname,
+          hrPositionName: scan.hrPositionName,
+          hrLeavelName: scan.hrLeavelName,
+          hrDepName: scan.hrDepName,
+          hrDepSubName: scan.hrDepSubName,
+          hrPersonTypeName: scan.hrPersonTypeName,
+          hrPersonTypeId: scan.hrPersonTypeId,
+          hrDepartmentId: scan.hrDepartmentId,
+          hrDepartmentSubId: scan.hrDepartmentSubId,
+          machinId: scan.machineNo,
+          appTypeSave: 'SCAN',
+          scanSource: 'FINGER',
+          isConfirm: true,
+          isInput: 'SIGN',
+          dateTimeSave: now, // Section 13: Time of push insertion
+          createBy: 'SCAN_PUSH'
+        };
+
+        this.state.hosofficeScans.push(hosRecord);
+
+        scan.pushStatus = 'PUSHED';
+        scan.pushedAt = now;
+        scan.pushedBy = requestedByUser.id;
+        scan.pushBatchId = batchId;
+        scan.pushError = undefined;
+        inserted++;
+      } catch (err: unknown) {
+        scan.pushStatus = 'FAILED';
+        scan.pushError = err instanceof Error ? err.message : 'SQL Insert Exception';
+        failed++;
+      }
+    });
+
+    const batch: PushBatch = {
+      id: batchId,
+      requestedBy: requestedByUser.username,
+      requestedAt: now,
+      filterDateFrom: filters.dateFrom,
+      filterDateTo: filters.dateTo,
+      filterMachineNo: filters.machineNo,
+      totalSelected: preview.totalSelected,
+      totalInserted: inserted,
+      totalSkippedExists: skippedExists,
+      totalFailed: failed,
+      status: failed > 0 ? (inserted > 0 ? 'PARTIAL' : 'FAILED') : 'SUCCESS',
+      finishedAt: formatDateTime()
+    };
+
+    this.state.pushBatches = [batch, ...this.state.pushBatches];
+    this.logAudit(
+      requestedByUser.username,
+      'PUSH',
+      `ส่งข้อมูลเข้า hosoffice สำเร็จ ${inserted} รายการ, ซ้ำ ${skippedExists} รายการ, ล้มเหลว ${failed} รายการ (Batch #${batchId})`,
+      'PUSH_EXECUTE'
+    );
+
+    this.saveState();
+    return { batch, inserted, skippedExists, failed };
+  }
+
+  // Section 20: Attendance Calculation (Recalculate)
+  // รองรับกรณีที่บุคลากรมีหลายกะในวันเดียวกัน (เช่น เวรเช้า + เวรบ่าย ควบกะ)
+  public calculateAttendance(date: string = formatDate(), filterPersonId?: number): DailyResult[] {
+    const results: DailyResult[] = [];
+    const targetPersonnel = filterPersonId 
+      ? this.state.personnel.filter(p => p.personId === filterPersonId)
+      : this.state.personnel;
+
+    targetPersonnel.forEach(p => {
+      // 1. Resolve Shifts for person on this date (คนมีได้หลายกะ)
+      const personShifts = this.resolveShiftsForPerson(p.personId, date);
+
+      // 2. Find all raw scans for this person on this date
+      const scans = this.state.rawScans.filter(
+        r => r.fingleId === p.fingleId && r.scanDateTime.startsWith(date)
+      ).sort((a, b) => a.scanDateTime.localeCompare(b.scanDateTime));
+
+      personShifts.forEach((shiftConfig, shiftIdx) => {
+        if (scans.length === 0) {
+          results.push({
+            id: generateUniqueId(),
+            personId: p.personId,
+            fingleId: p.fingleId,
+            fullname: p.hrFullname,
+            department: p.hrDepName,
+            position: p.hrPositionName,
+            workDate: date,
+            shiftId: shiftConfig.shift?.id,
+            shiftCode: shiftConfig.shift?.shiftCode || 'M',
+            shiftName: shiftConfig.shift?.shiftName || 'เช้า',
+            plannedStartTime: shiftConfig.startTime,
+            plannedEndTime: shiftConfig.endTime,
+            resolutionSource: shiftConfig.source,
+            status: 'NO_SCAN',
+            lateMinutes: 0,
+            earlyMinutes: 0,
+            otMinutes: 0,
+            scansCount: 0,
+            rawScanIds: [],
+            calculatedAt: formatDateTime()
+          });
+          return;
+        }
+
+        // Match scans for this shift
+        let shiftScans = scans;
+        if (personShifts.length > 1) {
+          const [startH] = shiftConfig.startTime.split(':').map(Number);
+          const [endH] = shiftConfig.endTime.split(':').map(Number);
+          shiftScans = scans.filter(s => {
+            const timeStr = s.scanDateTime.split(' ')[1] || '';
+            const [h] = timeStr.split(':').map(Number);
+            const minH = Math.max(0, startH - 2);
+            const maxH = endH === 0 || endH === 24 ? 24 : Math.min(24, endH + 2);
+            return h >= minH && h <= maxH;
+          });
+          if (shiftScans.length === 0) {
+            shiftScans = shiftIdx === 0 ? scans.slice(0, 2) : scans.slice(-2);
+          }
+        }
+
+        const firstScan = shiftScans[0];
+        const lastScan = shiftScans.length > 1 ? shiftScans[shiftScans.length - 1] : undefined;
+
+        const inTime = firstScan ? firstScan.scanDateTime.split(' ')[1] : undefined;
+        const outTime = lastScan && lastScan !== firstScan ? lastScan.scanDateTime.split(' ')[1] : undefined;
+
+        // Parse planned shift start time
+        const [plannedH, plannedM] = shiftConfig.startTime.split(':').map(Number);
+        const plannedStartMinutes = plannedH * 60 + plannedM;
+        const graceEndMinutes = plannedStartMinutes + shiftConfig.lateGraceMinutes;
+
+        let lateMinutes = 0;
+        if (inTime) {
+          const [inH, inM] = inTime.split(':').map(Number);
+          const actualInMinutes = inH * 60 + inM;
+          if (actualInMinutes > graceEndMinutes) {
+            lateMinutes = actualInMinutes - plannedStartMinutes;
+          }
+        }
+
+        let earlyMinutes = 0;
+        let otMinutes = 0;
+        if (outTime) {
+          const [outH, outM] = outTime.split(':').map(Number);
+          const actualOutMinutes = outH * 60 + outM;
+
+          let [endH, endM] = shiftConfig.endTime.split(':').map(Number);
+          if (endH === 24 || endH === 0) endH = 24;
+          const plannedEndMinutes = endH * 60 + endM;
+
+          if (actualOutMinutes < plannedEndMinutes) {
+            earlyMinutes = plannedEndMinutes - actualOutMinutes;
+          } else if (actualOutMinutes > plannedEndMinutes + 30) {
+            otMinutes = actualOutMinutes - plannedEndMinutes;
+          }
+        }
+
+        let status: DailyResult['status'] = 'ON_TIME';
+        if (!inTime) {
+          status = 'NO_SCAN';
+        } else if (!outTime) {
+          status = lateMinutes > 0 ? 'LATE' : 'IN_ONLY';
+        } else if (lateMinutes > 0 && earlyMinutes > 0) {
+          status = 'LATE_AND_EARLY';
+        } else if (lateMinutes > 0) {
+          status = 'LATE';
+        } else if (earlyMinutes > 0) {
+          status = 'EARLY_LEAVE';
+        }
+
+        results.push({
+          id: generateUniqueId(),
+          personId: p.personId,
+          fingleId: p.fingleId,
+          fullname: p.hrFullname,
+          department: p.hrDepName,
+          position: p.hrPositionName,
+          workDate: date,
+          shiftId: shiftConfig.shift?.id,
+          shiftCode: shiftConfig.shift?.shiftCode || 'M',
+          shiftName: shiftConfig.shift?.shiftName || 'เช้า',
+          plannedStartTime: shiftConfig.startTime,
+          plannedEndTime: shiftConfig.endTime,
+          resolutionSource: shiftConfig.source,
+          inTime,
+          outTime,
+          status,
+          lateMinutes,
+          earlyMinutes,
+          otMinutes,
+          scansCount: shiftScans.length,
+          rawScanIds: shiftScans.map(s => s.id),
+          calculatedAt: formatDateTime()
+        });
+      });
+    });
+
+    return results;
+  }
+
+  // Shift Management CRUD
+  public updateShift(id: number, data: Partial<Shift>, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const idx = this.state.shifts.findIndex(s => s.id === id);
+    if (idx >= 0) {
+      this.state.shifts[idx] = {
+        ...this.state.shifts[idx],
+        ...data,
+        updatedAt: formatDateTime()
+      };
+      this.logAudit(user.username, 'SHIFT', `แก้ไขกะ [${this.state.shifts[idx].shiftCode}] ${this.state.shifts[idx].shiftName} (เวลา ${this.state.shifts[idx].startTime} - ${this.state.shifts[idx].endTime})`);
+      this.saveState();
+    }
+  }
+
+  public addShift(shift: Omit<Shift, 'id' | 'createdAt' | 'updatedAt'>, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const newShift: Shift = {
+      ...shift,
+      id: generateUniqueId(),
+      createdAt: formatDateTime(),
+      updatedAt: formatDateTime()
+    };
+    this.state.shifts.push(newShift);
+    this.logAudit(user.username, 'SHIFT', `เพิ่มกะใหม่ [${newShift.shiftCode}] ${newShift.shiftName}`);
+    this.saveState();
+  }
+
+  public deactivateShift(id: number, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    // Section 16.1: Soft delete only!
+    const idx = this.state.shifts.findIndex(s => s.id === id);
+    if (idx >= 0) {
+      this.state.shifts[idx].isActive = false;
+      this.state.shifts[idx].updatedAt = formatDateTime();
+      this.logAudit(user.username, 'SHIFT', `ปิดการใช้งานกะ [${this.state.shifts[idx].shiftCode}] (Soft Delete)`);
+      this.saveState();
+    }
+  }
+
+  // Personnel Group CRUD
+  public saveGroup(group: Partial<PersonnelGroup> & { groupName: string; groupKind: 'PERSON_TYPE' | 'CUSTOM' }, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const now = formatDateTime();
+    if (group.id) {
+      const idx = this.state.groups.findIndex(g => g.id === group.id);
+      if (idx >= 0) {
+        this.state.groups[idx] = {
+          ...this.state.groups[idx],
+          ...group,
+          updatedAt: now
+        } as PersonnelGroup;
+        this.logAudit(user.username, 'GROUP', `แก้ไขกลุ่มบุคลากร "${group.groupName}"`);
+      }
+    } else {
+      const newGroup: PersonnelGroup = {
+        id: generateUniqueId(),
+        groupName: group.groupName,
+        groupKind: group.groupKind,
+        priority: group.priority ?? 100,
+        isActive: true,
+        note: group.note,
+        createdAt: now,
+        updatedAt: now,
+        personTypeIds: group.personTypeIds || [],
+        memberPersonIds: group.memberPersonIds || [],
+        shiftOverrides: group.shiftOverrides || {}
+      };
+      this.state.groups.push(newGroup);
+      this.logAudit(user.username, 'GROUP', `สร้างกลุ่มบุคลากรใหม่ "${newGroup.groupName}"`);
+    }
+    this.saveState();
+  }
+
+  public deactivateGroup(id: number, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const idx = this.state.groups.findIndex(g => g.id === id);
+    if (idx >= 0) {
+      this.state.groups[idx].isActive = false;
+      this.state.groups[idx].updatedAt = formatDateTime();
+      this.logAudit(user.username, 'GROUP', `ปิดการใช้งานกลุ่ม "${this.state.groups[idx].groupName}"`);
+      this.saveState();
+    }
+  }
+
+  // Roster Management
+  public setRosterShift(personId: number, workDate: string, shiftId: number, note = '', user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const existingIdx = this.state.roster.findIndex(r => r.personId === personId && r.workDate === workDate);
+    if (existingIdx >= 0) {
+      this.state.roster[existingIdx].shiftId = shiftId;
+      this.state.roster[existingIdx].note = note;
+    } else {
+      this.state.roster.push({
+        id: generateUniqueId(),
+        personId,
+        workDate,
+        shiftId,
+        note,
+        createdBy: user.id
+      });
+    }
+    this.saveState();
+  }
+
+  public addRosterShift(personId: number, workDate: string, shiftId: number, note = '', user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const newEntry: PersonRoster = {
+      id: generateUniqueId(),
+      personId,
+      workDate,
+      shiftId,
+      note,
+      createdBy: user.id
+    };
+    this.state.roster.push(newEntry);
+    const shift = this.state.shifts.find(s => s.id === shiftId);
+    const person = this.state.personnel.find(p => p.personId === personId);
+    this.logAudit(user.username, 'ROSTER', `เพิ่มกะ ${shift?.shiftCode || ''} (${workDate}) ให้กับ ${person?.hrFullname || `ID ${personId}`}`);
+    this.saveState();
+    return newEntry;
+  }
+
+  public removeRosterShift(rosterId: number, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const idx = this.state.roster.findIndex(r => r.id === rosterId);
+    if (idx >= 0) {
+      const removed = this.state.roster.splice(idx, 1)[0];
+      this.logAudit(user.username, 'ROSTER', `ลบกะตารางเวร ID #${rosterId} (วันที่ ${removed.workDate})`);
+      this.saveState();
+    }
+  }
+
+  // ซิงค์ข้อมูลบุคลากรจาก HOSOffice ตามคำสั่ง SQL:
+  // เช็คว่าข้อมูลไหน ดึงแล้ว ไม่ต้องดึงซ้ำ (skipped)
+  // แต่ถ้า 5 ฟิลด์หลัก (FULLNAME, HR_POSITION_NAME, HR_LEVEL_NAME, HR_DEPARTMENT_SUB, HR_PERSON_TYPE_NAME) ใน hosoffice เปลี่ยนหรือไม่ตรงกับฐานเรา ให้เปลี่ยนให้ตรงกับ hosoffice!
+  public syncPersonnelFromHosoffice(user: User, customRows?: HosofficePersonRow[]): PersonnelSyncResult {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const sourceRows = customRows || HOSOFFICE_MOCK_PERSONNEL_DATA;
+    const now = formatDateTime();
+
+    const inserted: HrPerson[] = [];
+    const updated: PersonnelUpdateRecord[] = [];
+    const skipped: { personId: number; fullname: string; fingleId: number; reason: string }[] = [];
+
+    sourceRows.forEach(row => {
+      // ตรวจสอบว่าเคยดึงมาแล้วหรือยัง (ตาม HP.ID หรือ HR_CID หรือ FINGLE_ID)
+      const existing = this.state.personnel.find(
+        p => p.personId === row.ID || (row.HR_CID && p.hrCid === row.HR_CID) || (row.FINGLE_ID && p.fingleId === row.FINGLE_ID)
+      );
+
+      if (!existing) {
+        // ข้อมูลใหม่ที่ยังไม่เคยดึง: เพิ่มเข้าฐาน
+        let typeId = 1;
+        if (row.HR_PERSON_TYPE_NAME.includes('พนักงานกระทรวง')) typeId = 2;
+        else if (row.HR_PERSON_TYPE_NAME.includes('ลูกจ้าง')) typeId = 3;
+
+        const newPerson: HrPerson = {
+          personId: row.ID,
+          hrCid: row.HR_CID,
+          fingleId: row.FINGLE_ID || row.ID,
+          hrFullname: row.FULLNAME,
+          hrPositionName: row.HR_POSITION_NAME,
+          hrLevelName: row.HR_LEVEL_NAME || '',
+          hrDepName: row.HR_DEPARTMENT_NAME,
+          hrDepSubName: row.HR_DEPARTMENT_SUB,
+          hrPersonTypeName: row.HR_PERSON_TYPE_NAME,
+          hrPersonTypeId: typeId,
+          hrDepartmentId: 100 + (row.ID % 10),
+          hrDepartmentSubId: 1000 + (row.ID % 20),
+          status: 'ACTIVE'
+        };
+
+        this.state.personnel.push(newPerson);
+        inserted.push(newPerson);
+        return;
+      }
+
+      // ข้อมูลที่เคยดึงแล้ว:
+      // ตรวจสอบว่า 5 ฟิลด์หลักใน hosoffice เปลี่ยน หรือไม่ตรงกับฐานเราหรือไม่:
+      // 1. ชื่อ - สกุล (FULLNAME)
+      // 2. ตำแหน่ง (HR_POSITION_NAME)
+      // 3. ระดับ (HR_LEVEL_NAME)
+      // 4. กลุ่มงานหลัก / หน่วยงานย่อย (HR_DEPARTMENT_SUB)
+      // 5. ประเภทบุคลากร (HR_PERSON_TYPE_NAME)
+      const changes: PersonnelFieldChange[] = [];
+
+      // 1. ชื่อ - สกุล (FULLNAME)
+      if (existing.hrFullname.trim() !== row.FULLNAME.trim()) {
+        changes.push({
+          field: 'FULLNAME',
+          label: 'ชื่อ - สกุล',
+          oldValue: existing.hrFullname,
+          newValue: row.FULLNAME
+        });
+        existing.hrFullname = row.FULLNAME;
+      }
+
+      // 2. ตำแหน่ง (HR_POSITION_NAME)
+      if (existing.hrPositionName.trim() !== row.HR_POSITION_NAME.trim()) {
+        changes.push({
+          field: 'HR_POSITION_NAME',
+          label: 'ตำแหน่ง',
+          oldValue: existing.hrPositionName,
+          newValue: row.HR_POSITION_NAME
+        });
+        existing.hrPositionName = row.HR_POSITION_NAME;
+      }
+
+      // 3. ระดับ (HR_LEVEL_NAME)
+      const oldLevel = (existing.hrLevelName || '').trim();
+      const newLevel = (row.HR_LEVEL_NAME || '').trim();
+      if (oldLevel !== newLevel) {
+        changes.push({
+          field: 'HR_LEVEL_NAME',
+          label: 'ระดับ',
+          oldValue: oldLevel || '-',
+          newValue: newLevel || '-'
+        });
+        existing.hrLevelName = row.HR_LEVEL_NAME;
+      }
+
+      // 4. กลุ่มงานหลัก / หน่วยงานย่อย (HR_DEPARTMENT_SUB)
+      const oldSub = `${existing.hrDepName} / ${existing.hrDepSubName}`.trim();
+      const newSub = `${row.HR_DEPARTMENT_NAME} / ${row.HR_DEPARTMENT_SUB}`.trim();
+      if (existing.hrDepSubName.trim() !== row.HR_DEPARTMENT_SUB.trim() || existing.hrDepName.trim() !== row.HR_DEPARTMENT_NAME.trim()) {
+        changes.push({
+          field: 'HR_DEPARTMENT_SUB',
+          label: 'กลุ่มงาน / หน่วยงานย่อย',
+          oldValue: oldSub,
+          newValue: newSub
+        });
+        existing.hrDepName = row.HR_DEPARTMENT_NAME;
+        existing.hrDepSubName = row.HR_DEPARTMENT_SUB;
+      }
+
+      // 5. ประเภทบุคลากร (HR_PERSON_TYPE_NAME)
+      if (existing.hrPersonTypeName.trim() !== row.HR_PERSON_TYPE_NAME.trim()) {
+        changes.push({
+          field: 'HR_PERSON_TYPE_NAME',
+          label: 'ประเภทบุคลากร',
+          oldValue: existing.hrPersonTypeName,
+          newValue: row.HR_PERSON_TYPE_NAME
+        });
+        existing.hrPersonTypeName = row.HR_PERSON_TYPE_NAME;
+        if (row.HR_PERSON_TYPE_NAME.includes('พนักงานกระทรวง')) existing.hrPersonTypeId = 2;
+        else if (row.HR_PERSON_TYPE_NAME.includes('ลูกจ้าง')) existing.hrPersonTypeId = 3;
+        else if (row.HR_PERSON_TYPE_NAME.includes('ข้าราชการ')) existing.hrPersonTypeId = 1;
+      }
+
+      // ปรับปรุง FINGLE_ID ด้วยหากมี
+      if (row.FINGLE_ID && existing.fingleId !== row.FINGLE_ID) {
+        existing.fingleId = row.FINGLE_ID;
+      }
+
+      if (changes.length > 0) {
+        // มีการเปลี่ยนแปลง: ให้เปลี่ยนให้ตรงกับ hosoffice
+        updated.push({
+          personId: existing.personId,
+          fingleId: existing.fingleId,
+          fullname: existing.hrFullname,
+          changes
+        });
+
+        // ซิงค์ snapshot ใน rawScans ของบุคคลนี้ให้ตรงกันด้วย
+        this.state.rawScans.forEach(s => {
+          if (s.personId === existing.personId || s.fingleId === existing.fingleId) {
+            s.hrFullname = existing.hrFullname;
+            s.hrPositionName = existing.hrPositionName;
+            s.hrLeavelName = existing.hrLevelName;
+            s.hrDepName = existing.hrDepName;
+            s.hrDepSubName = existing.hrDepSubName;
+            s.hrPersonTypeName = existing.hrPersonTypeName;
+          }
+        });
+      } else {
+        // ไม่มีการเปลี่ยนแปลง: ข้อมูลไหน ดึงแล้ว ไม่ต้องดึงซ้ำ
+        skipped.push({
+          personId: existing.personId,
+          fullname: existing.hrFullname,
+          fingleId: existing.fingleId,
+          reason: 'ดึงแล้ว ข้อมูลทั้ง 5 ฟิลด์ตรงกับ HOSOffice สมบูรณ์ (ไม่ต้องดึงซ้ำ)'
+        });
+      }
+    });
+
+    this.logAudit(
+      user.username,
+      'PERSONNEL' as any,
+      `ดึงข้อมูลบุคลากรจาก hosoffice: ดึงใหม่ ${inserted.length} ท่าน, ปรับเปลี่ยนข้อมูลให้ตรง ${updated.length} ท่าน, ตรงกันแล้ว ${skipped.length} ท่าน`
+    );
+
+    this.saveState();
+
+    return {
+      totalFromHosoffice: sourceRows.length,
+      insertedCount: inserted.length,
+      updatedCount: updated.length,
+      skippedCount: skipped.length,
+      inserted,
+      updated,
+      skipped,
+      syncedAt: now
+    };
+  }
+
+  public setPersonShiftOverride(override: Omit<PersonShiftOverride, 'id'>, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const newOverride: PersonShiftOverride = {
+      ...override,
+      id: generateUniqueId()
+    };
+    this.state.personOverrides.push(newOverride);
+    this.logAudit(user.username, 'ROSTER', `กำหนดกะรายบุคคลพิเศษสำหรับ person ID ${override.personId}`);
+    this.saveState();
+  }
+
+  public removePersonShiftOverride(id: number, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    this.state.personOverrides = this.state.personOverrides.filter(o => o.id !== id);
+    this.logAudit(user.username, 'ROSTER', `ลบกะรายบุคคลพิเศษ ID ${id}`);
+    this.saveState();
+  }
+
+  // 2. 🔗 Quick Map FINGLE_ID: จับคู่รหัสสแกนนิ้วที่ยังไม่พบใน HR เข้ากับบุคลากร
+  public quickMapFingleId(fingleId: number, targetPersonId: number, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const person = this.state.personnel.find(p => p.personId === targetPersonId);
+    if (!person) throw new Error('ไม่พบบุคลากรที่เลือก');
+
+    // อัปเดต Fingle ID ในทำเนียบบุคลากร
+    person.fingleId = fingleId;
+
+    // อัปเดตทุก Raw Scan ที่มี Fingle ID นี้
+    let updatedScans = 0;
+    this.state.rawScans.forEach(s => {
+      if (s.fingleId === fingleId) {
+        s.personId = person.personId;
+        s.hrFullname = person.hrFullname;
+        s.hrPositionName = person.hrPositionName;
+        s.hrLeavelName = person.hrLevelName;
+        s.hrDepName = person.hrDepName;
+        s.hrDepSubName = person.hrDepSubName;
+        s.hrPersonTypeName = person.hrPersonTypeName;
+        s.hrPersonTypeId = person.hrPersonTypeId;
+        s.hrDepartmentId = person.hrDepartmentId;
+        s.hrDepartmentSubId = person.hrDepartmentSubId;
+        s.hrMapped = true;
+        s.pushError = undefined;
+        updatedScans++;
+      }
+    });
+
+    this.logAudit(
+      user.username,
+      'ATTENDANCE',
+      `จับคู่รหัสสแกนนิ้ว FINGLE_ID #${fingleId} เข้ากับ ${person.hrFullname} (${person.hrDepName}) สำเร็จ (${updatedScans} รายการสแกน)`
+    );
+
+    // ประมวลผลเวลาใหม่อัตโนมัติทันที
+    const today = '2026-10-14';
+    this.state.cachedDailyResults[today] = this.calculateAttendance(today);
+    this.state.lastAutoCalculatedAt = formatDateTime();
+
+    this.saveState();
+    return { person, updatedScans };
+  }
+
+  // 1. 📊 สรุปรายงานประจำเดือนสำหรับฝ่ายบุคคล/การเงิน (Monthly HR Attendance Report)
+  public getMonthlySummary(yearMonth: string = '2026-10'): MonthlyPersonSummary[] {
+    const daysUpToNow = 14; // Today is 2026-10-14
+    const dates: string[] = [];
+    for (let day = 1; day <= daysUpToNow; day++) {
+      const pad = day.toString().padStart(2, '0');
+      dates.push(`${yearMonth}-${pad}`);
+    }
+
+    return this.state.personnel.map(person => {
+      let daysWorked = 0;
+      let onTimeCount = 0;
+      let lateCount = 0;
+      let totalLateMinutes = 0;
+      let earlyLeaveCount = 0;
+      let totalOtMinutes = 0;
+      let noScanCount = 0;
+
+      dates.forEach(d => {
+        const results = this.calculateAttendance(d, person.personId);
+        const r = results[0];
+        if (!r || r.status === 'NO_SCAN') {
+          noScanCount++;
+        } else {
+          daysWorked++;
+          if (r.status === 'ON_TIME') onTimeCount++;
+          if (r.status === 'LATE' || r.status === 'LATE_AND_EARLY') {
+            lateCount++;
+            totalLateMinutes += r.lateMinutes;
+          }
+          if (r.earlyMinutes > 0) earlyLeaveCount++;
+          if (r.otMinutes > 0) totalOtMinutes += r.otMinutes;
+        }
+      });
+
+      return {
+        personId: person.personId,
+        fingleId: person.fingleId,
+        hrCid: person.hrCid,
+        hrFullname: person.hrFullname,
+        hrPositionName: person.hrPositionName,
+        hrDepName: person.hrDepName,
+        hrDepSubName: person.hrDepSubName,
+        hrPersonTypeName: person.hrPersonTypeName,
+        daysWorked,
+        onTimeCount,
+        lateCount,
+        totalLateMinutes,
+        earlyLeaveCount,
+        totalOtMinutes,
+        totalOtHours: parseFloat((totalOtMinutes / 60).toFixed(1)),
+        noScanCount
+      };
+    });
+  }
+
+  public resetAllToDemo() {
+    localStorage.removeItem(STORAGE_KEY);
+    this.state = this.loadState();
+    this.saveState();
+  }
+}
+
+export interface MonthlyPersonSummary {
+  personId: number;
+  fingleId: number;
+  hrCid: string;
+  hrFullname: string;
+  hrPositionName: string;
+  hrDepName: string;
+  hrDepSubName: string;
+  hrPersonTypeName: string;
+  daysWorked: number;
+  onTimeCount: number;
+  lateCount: number;
+  totalLateMinutes: number;
+  earlyLeaveCount: number;
+  totalOtMinutes: number;
+  totalOtHours: number;
+  noScanCount: number;
+}
+
+export const attendanceStore = new AttendanceStore();
