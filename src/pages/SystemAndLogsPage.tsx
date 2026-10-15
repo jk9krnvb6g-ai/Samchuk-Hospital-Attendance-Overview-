@@ -10,17 +10,62 @@ import {
   Server, 
   Cpu, 
   Clock,
-  Terminal
+  Terminal,
+  Globe,
+  Radio,
+  Wifi,
+  ExternalLink,
+  RefreshCw,
+  Sliders,
+  CheckCircle2,
+  AlertTriangle,
+  FolderTree
 } from 'lucide-react';
 import { StoreState } from '../services/attendanceStore';
+import { apiClient, ApiHealthResponse, HOSPITAL_WEB_URL, DEFAULT_API_URL } from '../services/apiClient';
 
 interface SystemAndLogsPageProps {
   state: StoreState;
 }
 
 export const SystemAndLogsPage: React.FC<SystemAndLogsPageProps> = ({ state }) => {
-  const [activeTab, setActiveTab] = useState<'sync' | 'audit' | 'sql' | 'backend'>('sync');
+  const [activeTab, setActiveTab] = useState<'sync' | 'audit' | 'sql' | 'backend' | 'network'>('network');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Network & API Gateway State (:3002 and :3001)
+  const [apiEndpointUrl, setApiEndpointUrl] = useState(apiClient.getBaseUrl());
+  const [isPinging, setIsPinging] = useState(false);
+  const [pingResult, setPingResult] = useState<{
+    tested: boolean;
+    online: boolean;
+    latencyMs: number;
+    data?: ApiHealthResponse;
+    error?: string;
+  } | null>(null);
+
+  const handleTestPing = async () => {
+    setIsPinging(true);
+    const res = await apiClient.checkHealth();
+    setPingResult({
+      tested: true,
+      online: res.online,
+      latencyMs: res.latencyMs,
+      data: res.data,
+      error: res.error
+    });
+    setIsPinging(false);
+  };
+
+  const handleSaveApiUrl = () => {
+    apiClient.setBaseUrl(apiEndpointUrl);
+    handleTestPing();
+  };
+
+  const handleResetApiUrl = () => {
+    apiClient.resetToDefault();
+    setApiEndpointUrl(DEFAULT_API_URL);
+    handleTestPing();
+  };
 
   const handleCopy = (key: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -311,6 +356,15 @@ namespace SamchukAttendance.Scanner
           >
             4. C# / DLL Integration
           </button>
+          <button
+            onClick={() => setActiveTab('network')}
+            className={`px-3 py-1.5 rounded-md transition-colors cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'network' ? 'bg-teal-700 text-white shadow-xs' : 'text-teal-700 hover:text-teal-900'
+            }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            5. Network & API (:3002)
+          </button>
         </div>
       </div>
 
@@ -475,6 +529,270 @@ namespace SamchukAttendance.Scanner
 
           <div className="bg-slate-950 text-slate-200 rounded-xl p-4 font-mono text-xs overflow-x-auto border border-slate-800 max-h-[600px]">
             <pre className="text-emerald-400/90 leading-relaxed">{csharpCodeSnippet}</pre>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: NETWORK & API GATEWAY (:3002 / :3001) */}
+      {activeTab === 'network' && (
+        <div className="space-y-6">
+          {/* Architecture Banner */}
+          <div className="bg-linear-to-r from-teal-900 to-slate-900 rounded-xl p-6 text-white shadow-md">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <span className="px-2.5 py-1 bg-teal-500/20 text-teal-300 border border-teal-400/30 rounded-full font-mono text-xs font-semibold">
+                  Network Architecture v2.2.3
+                </span>
+                <h3 className="text-lg font-bold mt-2 text-white">
+                  สถาปัตยกรรมเครือข่ายและระบบส่งข้อมูล โรงพยาบาลสามชุก
+                </h3>
+                <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                  Web Frontend ทำงานบนโฟลเดอร์ <code className="bg-slate-800 text-teal-300 px-1.5 py-0.5 rounded font-mono">/Sam-attendance/</code> พอร์ต <strong>3001</strong> และใช้ API หลังบ้านบนพอร์ต <strong>3002</strong> ในการส่งข้อมูลเวลาเข้า HOSxP/Hosoffice และควบคุมเครื่องสแกน HIP CMiF68S
+                </p>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  onClick={handleTestPing}
+                  disabled={isPinging}
+                  className="px-4 py-2 bg-teal-500 hover:bg-teal-600 active:bg-teal-700 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-2 cursor-pointer transition-all shadow-sm disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isPinging ? 'animate-spin' : ''}`} />
+                  <span>{isPinging ? 'กำลังทดสอบ...' : 'ทดสอบ Ping API :3002'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 3 Core Nodes Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Node 1: Web Frontend */}
+            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-lg bg-teal-50 text-teal-700 border border-teal-200">
+                    <Globe className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">
+                      1. Web Frontend (พอร์ต 3001)
+                    </h4>
+                    <p className="text-xs text-slate-500">ส่วนติดต่อผู้ใช้งาน (Web User Interface)</p>
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono text-[11px] rounded font-bold">
+                  PORT 3001
+                </span>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2 font-mono text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">URL ใช้งานจริง:</span>
+                  <span className="font-bold text-teal-800">https://10.2.0.13:3001/Sam-attendance/</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">โฟลเดอร์ที่จัดเก็บ:</span>
+                  <span className="font-semibold text-slate-700">/Sam-attendance/ (Virtual Directory)</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">โปรโตคอลความปลอดภัย:</span>
+                  <span className="text-emerald-700 font-semibold">HTTPS (SSL/TLS Certificate)</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">การตั้งค่า Vite Base:</span>
+                  <span className="text-slate-700 font-semibold">base: '/Sam-attendance/'</span>
+                </div>
+              </div>
+
+              <div className="text-[11px] text-slate-600 bg-slate-50 rounded p-2.5 border border-slate-100 flex items-start gap-2">
+                <FolderTree className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                <span>
+                  โฟลเดอร์ที่เก็บ Web App คือ <code className="font-mono font-bold text-slate-800">Sam-attendance</code> เมื่อนำไปวางในเว็บเซิร์ฟเวอร์ (IIS หรือ Nginx) ระบบจะโหลด Assets ได้ครบถ้วนทุกหน้าโดยไม่มีปัญหา 404
+                </span>
+              </div>
+            </div>
+
+            {/* Node 2: Backend API Service */}
+            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    <Radio className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">
+                      2. Backend API Service (พอร์ต 3002)
+                    </h4>
+                    <p className="text-xs text-slate-500">API ในการส่งข้อมูลและดึงข้อมูลเครื่องสแกน</p>
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono text-[11px] rounded font-bold">
+                  PORT 3002
+                </span>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2 font-mono text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Endpoint ส่งข้อมูล:</span>
+                  <span className="font-bold text-indigo-800">https://10.2.0.13:3002</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">API ส่งเข้า hosoffice:</span>
+                  <span className="text-slate-700 font-semibold">POST /api/push/batch</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">API ตรวจสอบระบบ:</span>
+                  <span className="text-slate-700 font-semibold">GET /api/health</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">API เครื่องสแกน:</span>
+                  <span className="text-slate-700 font-semibold">POST /api/scanners/{'{id}'}/read</span>
+                </div>
+              </div>
+
+              <div className="text-[11px] text-slate-600 bg-slate-50 rounded p-2.5 border border-slate-100 flex items-start gap-2">
+                <Cpu className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                <span>
+                  รันเป็น Windows Service x86 เพื่อเรียก DLL <code className="font-mono font-bold text-slate-800">FK623Attend.dll</code> ดึงข้อมูลจากเครื่องสแกนอัตโนมัติทุก 1 นาที และส่งข้อมูลเข้า hosoffice เมื่อได้รับคำสั่ง
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Interactive API Tester & Endpoint Config */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-teal-600" />
+                  <span>ทดสอบการเชื่อมต่อและกำหนดค่า API Gateway (:3002)</span>
+                </h4>
+                <p className="text-xs text-slate-500">
+                  ตรวจสอบการสื่อสารระหว่างหน้าเว็บเบราว์เซอร์กับ API พอร์ต 3002 บนเซิร์ฟเวอร์
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleResetApiUrl}
+                  className="px-2.5 py-1 text-xs text-slate-600 hover:text-slate-900 border border-slate-200 rounded bg-slate-50 hover:bg-slate-100 cursor-pointer"
+                >
+                  คืนค่าเริ่มต้น
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  API Base URL (พอร์ต 3002):
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={apiEndpointUrl}
+                    onChange={(e) => setApiEndpointUrl(e.target.value)}
+                    placeholder="https://10.2.0.13:3002"
+                    className="flex-1 bg-slate-50 border border-slate-300 rounded px-3 py-2 text-xs font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  />
+                  <button
+                    onClick={handleSaveApiUrl}
+                    className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold rounded cursor-pointer transition-colors shrink-0"
+                  >
+                    บันทึก & ทดสอบ
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  สถานะการเชื่อมต่อ:
+                </label>
+                <div className="p-2 border rounded bg-slate-50 flex items-center justify-between min-h-[38px]">
+                  {pingResult ? (
+                    pingResult.online ? (
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>Online ({pingResult.latencyMs} ms)</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-amber-700" title={pingResult.error}>
+                        <AlertTriangle className="w-4 h-4 text-amber-600" />
+                        <span>Standalone Mode (กำลังเชื่อมต่อ)</span>
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-xs text-slate-400">ยังไม่ได้ทดสอบ</span>
+                  )}
+                  <button
+                    onClick={handleTestPing}
+                    disabled={isPinging}
+                    className="text-xs text-teal-700 hover:text-teal-900 font-semibold cursor-pointer underline ml-2"
+                  >
+                    Ping
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Ping Details Result */}
+            {pingResult && pingResult.data && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-900 space-y-1 font-mono">
+                <div className="font-bold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>เชื่อมต่อ API พอร์ต 3002 สำเร็จสมบูรณ์ (200 OK)</span>
+                </div>
+                <div>บริการ: {pingResult.data.service} (v{pingResult.data.version})</div>
+                <div>สถาปัตยกรรม: {pingResult.data.architecture} | ภาษาไทย: {pingResult.data.thaiSupport}</div>
+                <div>เวลาเซิร์ฟเวอร์: {pingResult.data.serverTime}</div>
+              </div>
+            )}
+          </div>
+
+          {/* Configuration Guides for Hospital IT */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+            <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+              <Terminal className="w-4 h-4 text-slate-700" />
+              <span>คำสั่งติดตั้งและคอนฟิกบนเซิร์ฟเวอร์โรงพยาบาลสามชุก (IP: 10.2.0.13)</span>
+            </h4>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono">
+              <div className="bg-slate-900 text-slate-200 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-1 text-slate-400 font-sans font-bold">
+                  <span>1. รัน Web Frontend (พอร์ต 3001)</span>
+                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-teal-300">NPM / IIS</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-sans">
+                  บิลด์ไฟล์เพื่อนำไปวางในโฟลเดอร์ <strong>Sam-attendance</strong>:
+                </p>
+                <pre className="text-teal-300 bg-slate-950 p-2 rounded">
+                  npm run build
+                </pre>
+                <p className="text-[11px] text-slate-400 font-sans">
+                  หรือรันโหมดพรีวิวพอร์ต 3001:
+                </p>
+                <pre className="text-teal-300 bg-slate-950 p-2 rounded">
+                  npm run serve:hospital
+                </pre>
+              </div>
+
+              <div className="bg-slate-900 text-slate-200 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-1 text-slate-400 font-sans font-bold">
+                  <span>2. รัน API Service (พอร์ต 3002)</span>
+                  <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300">ASP.NET x86</span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-sans">
+                  รันผ่าน Command Line บนเซิร์ฟเวอร์:
+                </p>
+                <pre className="text-indigo-300 bg-slate-950 p-2 rounded">
+                  dotnet run --project backend/SamchukAttendance.Api
+                </pre>
+                <p className="text-[11px] text-slate-400 font-sans">
+                  หรือติดตั้งเป็น Windows Service:
+                </p>
+                <pre className="text-indigo-300 bg-slate-950 p-2 rounded">
+                  sc create SamchukAttendanceApi binPath= "D:\Sam-attendance\backend\publish\SamchukAttendance.Api.exe" start= auto
+                </pre>
+              </div>
+            </div>
           </div>
         </div>
       )}

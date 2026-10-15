@@ -100,7 +100,26 @@
 
 ## 3. ประวัติเวอร์ชัน (Changelog)
 
-### Version 2.2.2 (ล่าสุด)
+### Version 2.2.3 (ล่าสุด)
+- **ปรับเปลี่ยนโครงสร้างที่อยู่ระบบและการส่งข้อมูล (Production Network & Port Architecture):**
+  - **Web Frontend:** ปรับจาก `http://localhost:3000` ไปยัง `https://10.2.0.13:3001/Sam-attendance/`
+    - กำหนดพอร์ตใช้งานจริงเป็น **3001 (HTTPS)**
+    - กำหนด Base Path และโฟลเดอร์จัดเก็บเป็น **`Sam-attendance`** (`base: '/Sam-attendance/'` ใน Vite)
+    - รองรับการเข้าถึงผ่าน Web Server IIS / Nginx ด้วย `web.config` และ `nginx.conf`
+  - **API Gateway Service:** กำหนดพอร์ต **3002 (HTTPS/HTTP)** (`https://10.2.0.13:3002`)
+    - เป็น API กลางในการส่งข้อมูลเข้า HOSxP/Hosoffice (`POST /api/push/batch`)
+    - สั่งอ่าน Log เครื่องสแกน HIP CMiF68S (`POST /api/scanners/{id}/read`)
+    - ตรวจสอบความพร้อมของระบบ (`GET /api/health`)
+  - **สร้าง Service API Client (`src/services/apiClient.ts`):**
+    - เชื่อมต่อหน้าเว็บกับ API พอร์ต 3002
+    - มีฟังก์ชันตรวจสอบสถานะ (Ping Health Check) และวัดความหน่วง (Latency)
+    - มี Fallback โหมด Standalone อัตโนมัติเมื่อยังไม่ได้เปิด API Service เพื่อให้หน้าเว็บทำงานได้ต่อเนื่อง 100%
+  - **เพิ่มแท็บ Network & API ในหน้า System & Logs:**
+    - แสดงแผนผังเครือข่าย พอร์ต 3001 (Web) และ พอร์ต 3002 (API)
+    - เครื่องมือทดสอบ Ping API :3002 สดบนหน้าจอพร้อมแก้ไข Endpoint URL ได้
+  - **เพิ่มสคริปต์เปิดระบบพร้อมกัน:** สร้าง `start-hospital.bat` รัน Web (:3001) และ API (:3002) ด้วยคลิกเดียว
+
+### Version 2.2.2
 - **ระบบติดตั้งผ่าน GitHub เต็มรูปแบบ (Full GitHub Installation Suite):**
   - เพิ่มสคริปต์ติดตั้งอัตโนมัติคลิกเดียว `install.bat` (ตรวจสอบสิทธิ์ Admin, Git, Node.js, .NET SDK, คัดลอก .env และ Build Production)
   - เพิ่มสคริปต์นำเข้าฐานข้อมูลภาษาไทย 100% `setup-database.bat` (ระบุ Host, Port, User, Password และสั่งนำเข้าด้วย `--default-character-set=utf8mb4`)

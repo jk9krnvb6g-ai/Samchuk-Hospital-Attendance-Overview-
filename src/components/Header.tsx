@@ -53,6 +53,20 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Status Indicators & Action Bar */}
       <div className="flex items-center gap-4 shrink-0">
+        {/* Network & API Gateway Indicator */}
+        <div className="hidden lg:flex items-center gap-2 text-xs bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-200" title="Web: https://10.2.0.13:3001/Sam-attendance/ | API: https://10.2.0.13:3002">
+          <div className="flex items-center gap-1.5 font-mono text-[11px]">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span className="text-slate-500">API:</span>
+            <span className="font-bold text-teal-700">:3002</span>
+          </div>
+          <span className="text-slate-300">|</span>
+          <div className="flex items-center gap-1 font-mono text-[11px]">
+            <span className="text-slate-500">Web:</span>
+            <span className="font-semibold text-slate-700">:3001</span>
+          </div>
+        </div>
+
         {/* Scanners Status Indicator */}
         <div className="hidden md:flex items-center gap-2 text-xs text-slate-600 bg-slate-100 px-3 py-1.5 rounded-md border border-slate-200">
           <span className="text-slate-500">เครื่องสแกน CMiF68S:</span>

@@ -78,11 +78,17 @@ if exist "FK623Attend.dll" (
 
 echo.
 echo =========================================================================
-echo    ติดตั้งส่วนประกอบหลักเรียบร้อยแล้ว!
+echo    ติดตั้งส่วนประกอบหลักเรียบร้อยแล้ว! (Sam-attendance v2.2.3)
 echo =========================================================================
+echo ข้อมูลระบบและการเข้าใช้งาน:
+echo - โฟลเดอร์ที่เก็บระบบ: Sam-attendance
+echo - Web Frontend:      https://10.2.0.13:3001/Sam-attendance/
+echo - Backend API:       https://10.2.0.13:3002 (API รับ-ส่งข้อมูล)
+echo.
 echo ขั้นตอนต่อไป:
-echo 1. นำเข้าฐานข้อมูลด้วย: setup-database.bat
-echo 2. ตรวจสอบการตั้งค่า IP เครื่องสแกนใน: backend\SamchukAttendance.Api\appsettings.json
-echo 3. เริ่มต้นรันระบบทดสอบด้วย: npm run dev
+echo 1. นำเข้าฐานข้อมูล:   setup-database.bat
+echo 2. ตรวจสอบการตั้งค่า: backend\SamchukAttendance.Api\appsettings.json
+echo 3. เริ่มต้นรันระบบ:   start-hospital.bat
+echo    (หรือรันแยก: Web=npm run serve:hospital / API=dotnet run ใน backend)
 echo.
 pause

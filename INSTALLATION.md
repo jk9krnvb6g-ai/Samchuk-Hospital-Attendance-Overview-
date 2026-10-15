@@ -203,9 +203,9 @@ sc.exe start SamchukAttendanceService
 
 ---
 
-## 6. การติดตั้งและ Build Web Frontend
+## 6. การติดตั้งและ Build Web Frontend (พอร์ต 3001 โฟลเดอร์ Sam-attendance)
 
-### 6.1 คอมไพล์แอปพลิเคชัน Frontend
+### 6.1 คอมไพล์แอปพลิเคชัน Frontend สำหรับใช้งานจริง
 ```bash
 # ติดตั้งไลบรารี
 npm install
@@ -213,35 +213,44 @@ npm install
 # ตรวจสอบโค้ด
 npm run lint
 
-# สร้าง Production Bundle
+# สร้าง Production Bundle โดยมี Base Path เป็น /Sam-attendance/
 npm run build
 ```
-เมื่อคำสั่งทำงานเสร็จสิ้น ไฟล์หน้าเว็บที่คอมไพล์แล้วจะอยู่ในโฟลเดอร์ `dist/`
+เมื่อคำสั่งทำงานเสร็จสิ้น ไฟล์หน้าเว็บที่คอมไพล์แล้วจะอยู่ในโฟลเดอร์ `dist/` โดยไฟล์ Assets ทั้งหมดจะถูกอ้างอิงผ่านพาธ `/Sam-attendance/assets/...` อย่างถูกต้อง
 
 ### 6.2 การนำไป Host บน Web Server (IIS หรือ Nginx)
-- **กรณีใช้ IIS:**
-  1. สร้าง Website ใหม่ใน IIS ชี้ทางกายภาพไปยังโฟลเดอร์ `C:\SamchukAttendance\dist`
-  2. ติดตั้งโมดูล `URL Rewrite`
-  3. ใส่ไฟล์ `web.config` สำหรับรองรับ Single Page Application (SPA Routing)
-- **กรณีใช้ Node.js Serve:**
+- **กรณีใช้ IIS (Internet Information Services):**
+  1. สร้าง Application หรือ Virtual Directory ชื่อ **`Sam-attendance`** ภายใต้ Default Web Site (หรือ Site ที่ Bind พอร์ต HTTPS **3001**)
+  2. ชี้ Physical Path ไปยังโฟลเดอร์ `D:\Sam-attendance\dist`
+  3. ใส่ไฟล์ `web.config` ที่มีให้ในโปรเจกต์ลงในโฟลเดอร์ `dist` เพื่อให้ URL Rewrite นำทาง Request ทั้งหมดไปที่ `index.html` (SPA Routing)
+  4. ผูก (Bind) ใบรับรอง SSL/TLS (HTTPS) บนพอร์ต **3001**
+- **กรณีใช้ Nginx บน Windows:**
+  1. ใช้ไฟล์คอนฟิก `nginx.conf` ที่โปรเจกต์จัดเตรียมไว้ให้
+  2. กำหนด `location /Sam-attendance/ { alias D:/Sam-attendance/dist/; try_files $uri $uri/ /Sam-attendance/index.html; }`
+  3. กำหนด `listen 3001 ssl;` สำหรับ Web Frontend และ `listen 3002 ssl;` สำหรับ API Gateway
+- **กรณีรันผ่าน Node Preview:**
   ```bash
-  npm run preview -- --host 0.0.0.0 --port 3000
+  npm run serve:hospital
   ```
+  เข้าใช้งานได้ที่: `https://10.2.0.13:3001/Sam-attendance/`
 
 ---
 
-## 7. การตั้งค่าระบบเครือข่ายและไฟร์วอลล์ (Network & Firewall)
+## 7. การตั้งค่าระบบเครือข่ายและไฟร์วอลล์ (Network & Firewall: 3001 / 3002 / 5005)
 
-รันคำสั่ง PowerShell บน Windows Server เพื่อเปิดพอร์ตที่จำเป็น:
+รันคำสั่ง PowerShell บน Windows Server (IP: `10.2.0.13`) เพื่อเปิดพอร์ตที่จำเป็น:
 ```powershell
-# 1. อนุญาตให้ติดต่อเครื่องสแกนนิ้วภายนอก (TCP Port 5005)
+# 1. อนุญาตให้เครื่องลูกข่ายเข้าใช้งาน Web Frontend ผ่าน HTTPS (Port 3001 Inbound)
+New-NetFirewallRule -DisplayName "Samchuk Attendance Web HTTPS Port 3001" -Direction Inbound -LocalPort 3001 -Protocol TCP -Action Allow
+
+# 2. อนุญาตให้เชื่อมต่อ Backend API Gateway สำหรับส่งข้อมูล (Port 3002 Inbound)
+New-NetFirewallRule -DisplayName "Samchuk Attendance API Gateway Port 3002" -Direction Inbound -LocalPort 3002 -Protocol TCP -Action Allow
+
+# 3. อนุญาตให้ Backend Service ติดต่อเครื่องสแกนนิ้ว HIP CMiF68S (TCP Port 5005 Outbound)
 New-NetFirewallRule -DisplayName "HIP Scanner Outbound Port 5005" -Direction Outbound -LocalPort Any -Protocol TCP -RemotePort 5005 -Action Allow
 
-# 2. อนุญาตให้เครื่องลูกข่ายเข้าใช้งาน Web Frontend (Port 3000)
-New-NetFirewallRule -DisplayName "Attendance Web HTTP Port 3000" -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow
-
-# 3. อนุญาตให้เชื่อมต่อ Backend API (Port 5000)
-New-NetFirewallRule -DisplayName "Attendance API HTTP Port 5000" -Direction Inbound -LocalPort 5000 -Protocol TCP -Action Allow
+# 4. อนุญาตให้เชื่อมต่อไปยัง MySQL HOSOffice (TCP Port 3306 Outbound ไปยัง 10.1.0.201)
+New-NetFirewallRule -DisplayName "MySQL HosOffice Outbound Port 3306" -Direction Outbound -LocalPort Any -Protocol TCP -RemotePort 3306 -Action Allow
 ```
 
 ---

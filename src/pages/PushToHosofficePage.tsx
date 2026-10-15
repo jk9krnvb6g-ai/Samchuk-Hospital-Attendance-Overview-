@@ -21,6 +21,7 @@ import {
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { PushBatch, RawScan } from '../types/attendance';
 import { QuickMapModal } from '../components/QuickMapModal';
+import { apiClient, HOSPITAL_WEB_URL } from '../services/apiClient';
 
 interface PushToHosofficePageProps {
   state: StoreState;
@@ -74,10 +75,24 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
   };
 
   // Run Push Execution
-  const handleExecutePush = () => {
+  const handleExecutePush = async () => {
     setIsPushing(true);
     setPushErrorMessage(null);
     try {
+      // ลองเรียกผ่าน Backend API พอร์ต 3002 ก่อน
+      try {
+        await apiClient.pushBatch({
+          dateFrom: dateFrom || undefined,
+          dateTo: dateTo || undefined,
+          machineNo: selectedMachine === 'ALL' ? undefined : selectedMachine,
+          pendingOnly,
+          includeUnmapped: false,
+          performedBy: state.currentUser.username
+        });
+      } catch (apiErr) {
+        console.warn('API :3002 unreachable, recording locally in store:', apiErr);
+      }
+
       const res = attendanceStore.executePush({
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
@@ -167,8 +182,14 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
               เลือกช่วงเวลาและเครื่องสแกนที่ต้องการส่งข้อมูลเข้า fingle_scan
             </p>
           </div>
-          <div className="text-xs text-slate-500">
-            ปลายทาง: <span className="font-mono font-semibold text-slate-700">10.1.0.201 / hosoffice.fingle_scan</span>
+          <div className="flex flex-col md:flex-row items-end md:items-center gap-2 text-xs">
+            <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono text-[11px] flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              API ส่งข้อมูล: <strong>:3002</strong> ({apiClient.getBaseUrl()})
+            </span>
+            <span className="text-slate-500 text-[11px]">
+              ปลายทาง: <span className="font-mono font-semibold text-slate-700">10.1.0.201 / hosoffice.fingle_scan</span>
+            </span>
           </div>
         </div>
 
