@@ -7,8 +7,9 @@ using SamchukAttendance.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// กำหนดให้ API รันบนพอร์ต 3002 (รองรับทั้ง HTTPS และ HTTP)
-builder.WebHost.UseUrls("https://0.0.0.0:3002", "http://0.0.0.0:3002");
+// กำหนดให้ API รันบนพอร์ต 3002 (ค่าเริ่มต้น HTTP สำหรับ LAN โรงพยาบาล หรือตาม ASPNETCORE_URLS)
+var defaultUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://0.0.0.0:3002";
+builder.WebHost.UseUrls(defaultUrls);
 
 // เปิดใช้งานการรันเป็น Windows Service
 builder.Host.UseWindowsService();

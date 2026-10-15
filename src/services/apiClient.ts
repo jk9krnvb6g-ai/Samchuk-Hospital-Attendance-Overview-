@@ -40,14 +40,24 @@ export interface ApiPushBatchResponse {
 }
 
 const STORAGE_API_KEY = 'samchuk_api_endpoint_url';
-export const DEFAULT_API_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) 
-  ? import.meta.env.VITE_API_URL 
-  : 'https://10.2.0.13:3002';
 
-export const HOSPITAL_WEB_URL = 'https://10.2.0.13:3001/Sam_Att/';
+export const resolveDefaultApiUrl = (): string => {
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const isHttps = window.location.protocol === 'https:';
+    const host = window.location.hostname && window.location.hostname !== 'localhost' ? window.location.hostname : '10.2.0.13';
+    return isHttps ? `https://${host}:3002` : `http://${host}:3002`;
+  }
+  return 'http://10.2.0.13:3002';
+};
+
+export const DEFAULT_API_URL = resolveDefaultApiUrl();
+export const HOSPITAL_WEB_URL = 'http://10.2.0.13:3001/Sam_Att/';
 
 class ApiClientService {
-  private customBaseUrl: string = DEFAULT_API_URL;
+  private customBaseUrl: string = resolveDefaultApiUrl();
   private isOnline: boolean = false;
   private lastPingMs: number = 0;
   private lastCheckTime: string = '';
@@ -58,6 +68,8 @@ class ApiClientService {
       const saved = localStorage.getItem(STORAGE_API_KEY);
       if (saved && saved.trim()) {
         this.customBaseUrl = saved.trim();
+      } else {
+        this.customBaseUrl = resolveDefaultApiUrl();
       }
     }
   }
