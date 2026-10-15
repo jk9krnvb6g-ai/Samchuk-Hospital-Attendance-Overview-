@@ -50,8 +50,8 @@ if not exist .env (
 )
 
 echo.
-echo [3/5] ติดตั้งไลบรารี Frontend (npm install)...
-call npm install
+echo [3/5] ติดตั้งไลบรารี Frontend (npm install --legacy-peer-deps)...
+call npm install --legacy-peer-deps
 if %errorLevel% neq 0 (
     echo [ผิดพลาด] npm install ล้มเหลว
     pause

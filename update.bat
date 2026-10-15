@@ -18,7 +18,7 @@ if %errorLevel% neq 0 (
 
 echo.
 echo [2/3] อัปเดตแพ็กเกจ Frontend...
-call npm install
+call npm install --legacy-peer-deps
 
 echo.
 echo [3/3] คอมไพล์ Frontend...
