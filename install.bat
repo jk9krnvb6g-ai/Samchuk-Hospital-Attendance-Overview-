@@ -1,9 +1,12 @@
 @echo off
+setlocal enabledelayedexpansion
+cd /d "%~dp0"
 chcp 65001 >nul
 echo =========================================================================
 echo    โรงพยาบาลสามชุก - ตัวติดตั้งระบบจัดการเวลาปฏิบัติงาน (v2) ผ่าน GitHub
-echo    Samchuk Attendance & Biometric System Auto-Installer
+echo    Samchuk Attendance and Biometric System Auto-Installer
 echo =========================================================================
+echo [ไดเรกทอรีทำงาน]: %CD%
 echo.
 
 :: ตรวจสอบสิทธิ์ Administrator

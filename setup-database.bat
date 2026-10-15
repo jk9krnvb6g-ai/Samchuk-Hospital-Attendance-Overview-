@@ -1,8 +1,11 @@
 @echo off
+setlocal enabledelayedexpansion
+cd /d "%~dp0"
 chcp 65001 >nul
 echo =========================================================================
 echo    โรงพยาบาลสามชุก - สคริปต์นำเข้าฐานข้อมูล (MySQL UTF8MB4 ภาษาไทย 100%%)
 echo =========================================================================
+echo [ไดเรกทอรีทำงาน]: %CD%
 echo.
 
 set /p MYSQL_HOST="ระบุ Host ของ MySQL [ค่าเริ่มต้น: localhost]: " || set MYSQL_HOST=localhost
