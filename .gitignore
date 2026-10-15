@@ -6,3 +6,17 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# .NET / C# Build Outputs
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+*.local
+
+# Published artifacts and native dlls (user downloads/copies from zip)
+*.dll
+*.exe
+!backend/**/FK623Attend.dll.example

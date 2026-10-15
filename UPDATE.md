@@ -100,7 +100,20 @@
 
 ## 3. ประวัติเวอร์ชัน (Changelog)
 
-### Version 2.2.1 (ล่าสุด)
+### Version 2.2.2 (ล่าสุด)
+- **ระบบติดตั้งผ่าน GitHub เต็มรูปแบบ (Full GitHub Installation Suite):**
+  - เพิ่มสคริปต์ติดตั้งอัตโนมัติคลิกเดียว `install.bat` (ตรวจสอบสิทธิ์ Admin, Git, Node.js, .NET SDK, คัดลอก .env และ Build Production)
+  - เพิ่มสคริปต์นำเข้าฐานข้อมูลภาษาไทย 100% `setup-database.bat` (ระบุ Host, Port, User, Password และสั่งนำเข้าด้วย `--default-character-set=utf8mb4`)
+  - เพิ่มสคริปต์อัปเดตระบบอัตโนมัติผ่าน GitHub `update.bat` (`git pull`, `npm install`, `npm run build`)
+  - จัดเตรียมโครงสร้าง C# .NET Backend ให้พร้อม Build ทันทีเมื่อ Clone จาก GitHub:
+    - ไฟล์ Solution `backend/SamchukAttendance.sln`
+    - ไฟล์โปรเจกต์ `SamchukAttendance.Api.csproj` (Target .NET 8.0/10.0, Platform x86 สำหรับเรียกใช้ `FK623Attend.dll`)
+    - จุดเข้าโปรแกรม `Program.cs` (Windows Service, CORS, DI, Background Worker)
+    - Web API Controllers: `AttendanceController`, `PushController`, `ScannersController`, `ShiftsController`, `HealthController`
+  - ปรับปรุง `.gitignore` ให้ครอบคลุมทั้ง Node.js, Vite, .NET C# build artifacts (`bin/`, `obj/`, `.vs/`)
+  - อัปเดตคู่มือ `INSTALLATION.md` และ `README.md` เพิ่มขั้นตอนการติดตั้งผ่าน GitHub อย่างละเอียด
+
+### Version 2.2.1
 - ยืนยันและปรับปรุงมาตรฐานฐานข้อมูลให้รองรับภาษาไทย 100% (`utf8mb4` / `utf8mb4_unicode_ci` / `utf8mb4_thai_520_w2`)
 - อัปเดตไฟล์ Migration DDL `001_create_attendance_db.sql` และ `002_hosoffice_integration.sql` ให้กำหนด Charset และ Collation ภาษาไทยในทุกตาราง
 - ปรับปรุง Connection Strings ใน `appsettings.json` ให้มีพารามิเตอร์ `CharSet=utf8mb4;`

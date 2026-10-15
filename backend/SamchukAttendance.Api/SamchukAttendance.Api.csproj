@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- สำคัญ: กำหนด PlatformTarget เป็น x86 เพื่อให้เรียกใช้ FK623Attend.dll (32-bit Native DLL) ได้ถูกต้อง -->
+    <PlatformTarget>x86</PlatformTarget>
+    <Platforms>AnyCPU;x86</Platforms>
+    <RootNamespace>SamchukAttendance.Api</RootNamespace>
+    <AssemblyName>SamchukAttendance.Api</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows Service Support เพื่อให้รันเป็น Background Service ได้อัตโนมัติ -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
+    
+    <!-- MySQL Database Connector พร้อมรับรอง UTF8MB4 ภาษาไทย 100% -->
+    <PackageReference Include="MySqlConnector" Version="2.3.7" />
+    <PackageReference Include="Dapper" Version="2.1.35" />
+    
+    <!-- Swagger / OpenAPI Documentation -->
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+  </ItemGroup>
+
+  <!-- คัดลอก DLL เครื่องสแกนไปยัง Output โฟลเดอร์เมื่อมีไฟล์ -->
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="FK623Attend.dll" Condition="Exists('FK623Attend.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

@@ -17,22 +17,73 @@
 ### 1.2 ซอฟต์แวร์ที่ต้องติดตั้งล่วงหน้า (Prerequisites Software)
 | ซอฟต์แวร์ | เวอร์ชันที่รองรับ | ลิงก์ดาวน์โหลด / แหล่งที่มา | วัตถุประสงค์ |
 |---|---|---|---|
-| **.NET SDK / Runtime** | .NET 10.0 (หรือ .NET 8.0 LTS) | [Microsoft .NET Download](https://dotnet.microsoft.com/download) | สำหรับรัน C# Backend Service & Worker |
+| **Git for Windows** | v2.40+ | [Git Official](https://git-scm.com/download/win) | สำหรับ Clone และอัปเดตโค้ดระบบจาก GitHub |
+| **.NET SDK / Runtime** | .NET 8.0 LTS หรือ 10.0 | [Microsoft .NET Download](https://dotnet.microsoft.com/download) | สำหรับรัน C# Backend Service & Worker |
 | **Node.js** | v20.x หรือ v22.x LTS | [Node.js Official](https://nodejs.org/) | สำหรับคอมไพล์และรัน Web Frontend |
 | **MySQL Server** | MySQL 8.0+ หรือ MariaDB 10.5+ | [MySQL Community](https://dev.mysql.com/downloads/) | จัดเก็บฐานข้อมูล Staging (`samchuk_attendance`) |
 | **VC++ Redistributable** | 2013 (x86) และ 2015–2022 (x86) | [Microsoft Visual C++](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) | จำเป็นสำหรับ `FK623Attend.dll` (ห้ามข้าม) |
 
 ---
 
-## 2. การจัดการไฟล์ไดรเวอร์เครื่องสแกนนิ้ว `FK623Attend.dll`
+## 2. ขั้นตอนการติดตั้งผ่าน GitHub (GitHub Installation & Setup Workflow)
 
-### 2.1 ไฟล์ที่ได้จากการแตก zip SDK ของเครื่อง HIP CMiF68S
+### 2.1 โคลนโปรเจกต์จาก GitHub (Clone Repository)
+เปิด Command Prompt หรือ PowerShell (หรือ Git Bash) บนเครื่องเซิร์ฟเวอร์ แล้วรันคำสั่ง:
+```bash
+# นำทางไปยังไดเรกทอรีที่ต้องการติดตั้ง (เช่น C:\Apps หรือ D:\SamchukProjects)
+cd C:\
+
+# โคลนโปรเจกต์จาก GitHub
+git clone https://github.com/your-hospital-org/samchuk-attendance.git
+
+# เข้าสู่โฟลเดอร์โปรเจกต์
+cd samchuk-attendance
+```
+
+### 2.2 คัดลอกและกำหนดค่า Environment Variables
+```bash
+# คัดลอกไฟล์ตัวแปรสภาพแวดล้อม
+copy .env.example .env
+```
+ตรวจสอบและแก้ไขค่าในไฟล์ `.env` ตามสภาพแวดล้อมจริงของโรงพยาบาล
+
+### 2.3 ติดตั้งอัตโนมัติด้วยสคริปต์คลิกเดียว (Automated One-Click Installer)
+โปรเจกต์ได้เตรียมสคริปต์ติดตั้งอัตโนมัติไว้ให้แล้ว:
+1. คลิกขวาที่ไฟล์ `install.bat`
+2. เลือก **"Run as administrator"** (รันด้วยสิทธิ์ผู้ดูแลระบบ)
+3. ตัวสคริปต์จะทำการ:
+   - ตรวจสอบ Git, Node.js, .NET SDK
+   - คัดลอกไฟล์ `.env`
+   - ติดตั้ง Node Packages (`npm install`)
+   - คอมไพล์ Production Web Frontend (`npm run build`)
+   - ตรวจสอบไฟล์ DLL เครื่องสแกน
+
+### 2.4 นำเข้าฐานข้อมูลด้วยคลิกเดียว (Database Import)
+1. รันไฟล์ `setup-database.bat`
+2. กรอก Host, Port, Username และ Password ของ MySQL Server
+3. สคริปต์จะนำเข้าไฟล์ `001_create_attendance_db.sql` โดยกำหนด Character Set เป็น `utf8mb4` ให้อัตโนมัติ รองรับภาษาไทย 100%
+
+### 2.5 การอัปเดตระบบในอนาคตผ่าน GitHub (System Update Workflow)
+เมื่อมีการออกอัปเดตใหม่ สามารถอัปเดตได้ง่ายๆ เพียง:
+- ดับเบิลคลิกที่ไฟล์ `update.bat` 
+- หรือพิมพ์คำสั่ง:
+  ```bash
+  git pull origin main
+  npm install
+  npm run build
+  ```
+
+---
+
+## 3. การจัดการไฟล์ไดรเวอร์เครื่องสแกนนิ้ว `FK623Attend.dll`
+
+### 3.1 ไฟล์ที่ได้จากการแตก zip SDK ของเครื่อง HIP CMiF68S
 เมื่อแตกไฟล์ zip จะพบไฟล์ไลบรารีดังนี้:
 1. `FK623Attend.dll` - ไฟล์ไลบรารีหลักสำหรับต่อ Socket Port 5005
 2. `FKAttend.dll` หรือ `RealandAttend.dll` - โมดูลถอดรหัสแพ็กเก็ตข้อมูล
 3. `msvcr120.dll` / `msvcp120.dll` - ไฟล์ C++ Runtime (หากมีใน zip ให้วางไว้คู่กัน)
 
-### 2.2 การจัดการสถาปัตยกรรม (x86 vs x64)
+### 3.2 การจัดการสถาปัตยกรรม (x86 vs x64)
 เครื่องสแกน HIP CMiF68S ใช้ DLL ที่คอมไพล์แบบ **32-bit (x86)** เป็นมาตรฐาน หากนำไปรันบนกระบวนการแบบ 64-bit จะเกิดข้อผิดพลาด:
 ```text
 System.BadImageFormatException: An attempt was made to load a program with an incorrect format. (Exception from HRESULT: 0x8007000B)
@@ -42,14 +93,14 @@ System.BadImageFormatException: An attempt was made to load a program with an in
 กำหนดให้โปรเจกต์ `SamchukAttendance.Api.csproj` คอมไพล์ในโหมด x86:
 ```xml
 <PropertyGroup>
-  <TargetFramework>net10.0</TargetFramework>
+  <TargetFramework>net8.0</TargetFramework>
   <PlatformTarget>x86</PlatformTarget>
   <Nullable>enable</Nullable>
   <ImplicitUsings>enable</ImplicitUsings>
 </PropertyGroup>
 ```
 
-### 2.3 ตำแหน่งการวางไฟล์ DLL
+### 3.3 ตำแหน่งการวางไฟล์ DLL
 - **ตำแหน่งแนะนำ:** วางไฟล์ `FK623Attend.dll` (และไฟล์ `.dll` ที่ติดมาใน zip) ไว้ในโฟลเดอร์เดียวกันกับไฟล์ `.exe` ของ Backend Service หลัง Publish เช่น:
   ```text
   C:\SamchukAttendance\Api\FK623Attend.dll
@@ -61,18 +112,18 @@ System.BadImageFormatException: An attempt was made to load a program with an in
 
 ---
 
-## 3. ขั้นตอนการติดตั้งฐานข้อมูล (Database Setup)
+## 4. ขั้นตอนการติดตั้งฐานข้อมูล (Database Setup)
 
 ระบบแบ่งออกเป็น 2 ฐานข้อมูล โดยติดตั้งตามขั้นตอนต่อไปนี้ (ดูรายละเอียดเพิ่มเติมใน [DATABASE.md](DATABASE.md)):
 
-### 3.1 การสร้างฐานข้อมูล Staging (`samchuk_attendance`)
-เข้าสู่ MySQL Server บนเครื่องเซิร์ฟเวอร์ระบบลงเวลา แล้วรันไฟล์สคริปต์ (ระบุ `--default-character-set=utf8mb4` เพื่อรับรองภาษาไทย 100%):
+### 4.1 การสร้างฐานข้อมูล Staging (`samchuk_attendance`)
+สามารถรันผ่านไฟล์สคริปต์ `setup-database.bat` หรือรันคำสั่งตรงผ่าน MySQL Client (ระบุ `--default-character-set=utf8mb4` เพื่อรับรองภาษาไทย 100%):
 ```bash
 mysql -u root -p --default-character-set=utf8mb4 < backend/SamchukAttendance.Database/Migrations/001_create_attendance_db.sql
 ```
 คำสั่งนี้จะสร้าง Database `samchuk_attendance` ด้วย Character Set `utf8mb4` และ Collation `utf8mb4_unicode_ci` พร้อมตารางที่เกี่ยวข้องครบถ้วน
 
-### 3.2 การกำหนดสิทธิ์บนฐานข้อมูล HOSOffice (`hosoffice` @ 10.1.0.201)
+### 4.2 การกำหนดสิทธิ์บนฐานข้อมูล HOSOffice (`hosoffice` @ 10.1.0.201)
 เข้าสู่เซิร์ฟเวอร์ฐานข้อมูล HOSOffice แล้วรันคำสั่งกำหนดสิทธิ์ตามหลักความปลอดภัย:
 ```sql
 -- 1. สร้างผู้ใช้สำหรับระบบสแกนเวลา (หากยังไม่มี)
@@ -96,9 +147,9 @@ FLUSH PRIVILEGES;
 
 ---
 
-## 4. การติดตั้งและตั้งค่า Backend Service (C# .NET 10)
+## 5. การติดตั้งและตั้งค่า Backend Service (C# .NET)
 
-### 4.1 ปรับแต่งไฟล์ `appsettings.json`
+### 5.1 ปรับแต่งไฟล์ `appsettings.json`
 เข้าไปที่โฟลเดอร์ `backend/SamchukAttendance.Api/appsettings.json` และกำหนดค่าการเชื่อมต่อ (ระบุ `CharSet=utf8mb4;` เพื่อให้ภาษาไทยถูกต้อง 100%):
 ```json
 {
@@ -126,7 +177,7 @@ FLUSH PRIVILEGES;
 }
 ```
 
-### 4.2 คอมไพล์และ Publish โปรเจกต์
+### 5.2 คอมไพล์และ Publish โปรเจกต์
 เปิด PowerShell หรือ Terminal และรันคำสั่ง:
 ```powershell
 cd backend\SamchukAttendance.Api
@@ -134,10 +185,10 @@ dotnet restore
 dotnet publish -c Release -r win-x86 --self-contained false -o C:\SamchukAttendance\Api
 ```
 
-### 4.3 นำไฟล์ `FK623Attend.dll` ไปวาง
+### 5.3 นำไฟล์ `FK623Attend.dll` ไปวาง
 คัดลอกไฟล์ `FK623Attend.dll` และไฟล์เสริมจาก SDK ไปวางไว้ใน `C:\SamchukAttendance\Api\`
 
-### 4.4 ติดตั้งเป็น Windows Service (ทำงานอัตโนมัติเมื่อเปิดเครื่อง)
+### 5.4 ติดตั้งเป็น Windows Service (ทำงานอัตโนมัติเมื่อเปิดเครื่อง)
 เปิด Command Prompt หรือ PowerShell ในสิทธิ์ Administrator:
 ```powershell
 # สร้าง Service
@@ -152,9 +203,9 @@ sc.exe start SamchukAttendanceService
 
 ---
 
-## 5. การติดตั้งและ Build Web Frontend
+## 6. การติดตั้งและ Build Web Frontend
 
-### 5.1 คอมไพล์แอปพลิเคชัน Frontend
+### 6.1 คอมไพล์แอปพลิเคชัน Frontend
 ```bash
 # ติดตั้งไลบรารี
 npm install
@@ -167,7 +218,7 @@ npm run build
 ```
 เมื่อคำสั่งทำงานเสร็จสิ้น ไฟล์หน้าเว็บที่คอมไพล์แล้วจะอยู่ในโฟลเดอร์ `dist/`
 
-### 5.2 การนำไป Host บน Web Server (IIS หรือ Nginx)
+### 6.2 การนำไป Host บน Web Server (IIS หรือ Nginx)
 - **กรณีใช้ IIS:**
   1. สร้าง Website ใหม่ใน IIS ชี้ทางกายภาพไปยังโฟลเดอร์ `C:\SamchukAttendance\dist`
   2. ติดตั้งโมดูล `URL Rewrite`
@@ -179,7 +230,7 @@ npm run build
 
 ---
 
-## 6. การตั้งค่าระบบเครือข่ายและไฟร์วอลล์ (Network & Firewall)
+## 7. การตั้งค่าระบบเครือข่ายและไฟร์วอลล์ (Network & Firewall)
 
 รันคำสั่ง PowerShell บน Windows Server เพื่อเปิดพอร์ตที่จำเป็น:
 ```powershell
@@ -195,7 +246,7 @@ New-NetFirewallRule -DisplayName "Attendance API HTTP Port 5000" -Direction Inbo
 
 ---
 
-## 7. ตรวจสอบความถูกต้องหลังการติดตั้ง (Post-Installation Health Check)
+## 8. ตรวจสอบความถูกต้องหลังการติดตั้ง (Post-Installation Health Check)
 
 1. **ทดสอบเครื่องสแกน:** เข้าเมนู **"สถานะเครื่องสแกน"** และกดปุ่ม "ทดสอบการเชื่อมต่อ" ระบบต้องขึ้นสถานะ **ONLINE** ทั้ง 3 เครื่อง
 2. **ทดสอบการดึงข้อมูล HOSOffice:** เข้าเมนู **"ข้อมูลบุคลากรและรหัสสแกนนิ้ว"** และกดปุ่ม **"ดึงข้อมูลจาก HOSOffice"** ตรวจสอบว่ามีข้อมูลบุคลากรขึ้นครบถ้วน

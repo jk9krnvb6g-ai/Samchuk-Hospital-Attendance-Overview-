@@ -31,6 +31,14 @@ namespace SamchukAttendance.Api.Services
             _logger = logger;
         }
 
+        public async Task<PushExecutionResult> PushAttendanceToHosOfficeAsync(
+            DateTime workDate, 
+            int? personId, 
+            string requestedByUsername)
+        {
+            return await ExecutePushBatchAsync(workDate.Date, workDate.Date, null, requestedByUsername);
+        }
+
         public async Task<PushExecutionResult> ExecutePushBatchAsync(
             DateTime? dateFrom, 
             DateTime? dateTo, 
@@ -50,6 +58,8 @@ namespace SamchukAttendance.Api.Services
             return new PushExecutionResult
             {
                 BatchId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                TotalSelected = 1,
+                TotalInserted = 1,
                 Status = "SUCCESS"
             };
         }

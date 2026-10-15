@@ -85,23 +85,52 @@
 
 ---
 
-## 🚀 เริ่มต้นใช้งานอย่างรวดเร็ว (Quick Start)
+## 🚀 เริ่มต้นใช้งานและติดตั้งผ่าน GitHub (GitHub Quickstart & Installation)
 
-### 1. การรันระบบ Web Frontend (Development)
+### วิธีที่ 1: ติดตั้งอัตโนมัติด้วย One-Click Script บน Windows (แนะนำ)
+เมื่อโคลนโปรเจกต์จาก GitHub มาแล้ว สามารถติดตั้งได้ทันทีใน 3 ขั้นตอน:
 ```bash
-# 1. ติดตั้งไลบรารี
+# 1. โคลน Repository จาก GitHub
+git clone https://github.com/your-hospital-org/samchuk-attendance.git
+cd samchuk-attendance
+
+# 2. คลิกขวาที่ไฟล์ install.bat เลือก "Run as administrator"
+# สคริปต์จะตรวจสอบ Git, Node.js, .NET SDK, คัดลอก .env, ติดตั้ง npm dependencies, และคอมไพล์โปรเจกต์อัตโนมัติ
+
+# 3. นำเข้าฐานข้อมูลภาษาไทย 100% ด้วยสคริปต์
+# ดับเบิลคลิก setup-database.bat เพื่อสร้างฐานข้อมูล samchuk_attendance (utf8mb4)
+```
+
+### วิธีที่ 2: ติดตั้งแบบ Manual ทีละขั้นตอน
+```bash
+# 1. โคลนและเข้าโฟลเดอร์
+git clone https://github.com/your-hospital-org/samchuk-attendance.git
+cd samchuk-attendance
+
+# 2. คัดลอก Environment Variables
+copy .env.example .env
+
+# 3. ติดตั้งไลบรารี Node.js
 npm install
 
-# 2. ตรวจสอบโค้ด
-npm run lint
+# 4. นำเข้าฐานข้อมูล Staging (utf8mb4 รองรับภาษาไทย 100%)
+mysql -u root -p --default-character-set=utf8mb4 < backend/SamchukAttendance.Database/Migrations/001_create_attendance_db.sql
 
-# 3. รันเซิร์ฟเวอร์ทดสอบ
+# 5. วางไฟล์ FK623Attend.dll จาก SDK ของเครื่อง HIP CMiF68S ในโฟลเดอร์โปรเจกต์
+
+# 6. รันเซิร์ฟเวอร์ทดสอบ
 npm run dev
 ```
 เปิดเบราว์เซอร์ไปที่ `http://localhost:3000`
 
-### 2. การคอมไพล์สำหรับ Production
+### การอัปเดตระบบในอนาคตผ่าน GitHub
 ```bash
+# อัปเดตผ่านสคริปต์คลิกเดียว
+update.bat
+
+# หรือพิมพ์คำสั่ง Git
+git pull origin main
+npm install
 npm run build
 ```
 
