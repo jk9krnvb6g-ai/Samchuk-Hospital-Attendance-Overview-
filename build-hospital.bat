@@ -9,37 +9,59 @@ echo =========================================================================
 echo [ไดเรกทอรี]: %CD%
 echo.
 
-:: 1. ตรวจสอบ node_modules
-if not exist node_modules (
-    echo [1/3] กำลังติดตั้ง Dependencies...
-    call npm install --legacy-peer-deps
+:: 0. กู้คืนไฟล์ index.html จาก index.src.html ก่อนเสมอ เพื่อป้องกัน Vite สับสนกับไฟล์ที่คอมไพล์แล้ว
+echo [1/4] กำลังตรวจสอบความถูกต้องของไฟล์ Source Template...
+if exist "index.src.html" (
+    copy /Y "index.src.html" "index.html" >nul
+    echo       [OK] คืนค่า index.html สู่สถานะ Source โค้ดเรียบร้อย
+) else (
+    echo       [INFO] สร้าง index.src.html จาก index.html ต้นฉบับ
+    copy /Y "index.html" "index.src.html" >nul
 )
 
-:: 2. คอมไพล์โปรเจกต์
-echo [2/3] กำลังคอมไพล์โปรเจกต์ (Vite Build)...
+:: 1. ตรวจสอบและติดตั้ง node_modules
+echo [2/4] กำลังตรวจสอบ Dependencies...
+if not exist "node_modules" (
+    echo       กำลังติดตั้ง Dependencies ผ่าน npm...
+    call npm install --legacy-peer-deps
+) else (
+    echo       [OK] node_modules พร้อมใช้งาน
+)
+
+:: 2. คอมไพล์โปรเจกต์ด้วย Vite Build
+echo [3/4] กำลังคอมไพล์โปรเจกต์ (Vite Build สู่ dist/)...
 call npm run build
 if %errorLevel% neq 0 (
-    echo [ข้อผิดพลาด] คอมไพล์ไม่สำเร็จ
+    echo.
+    echo [ข้อผิดพลาด] คอมไพล์ไม่สำเร็จ! กรุณาตรวจสอบข้อความ Error ด้านบน
+    echo หากมีปัญหาไฟล์ Git ค้าง ให้พิมพ์:
+    echo   git checkout -- index.html
+    echo   git pull
+    echo.
     pause
     exit /b 1
 )
+echo       [OK] Vite Build สำเร็จเรียบร้อย!
 
 :: 3. เตรียมไฟล์สำหรับ IIS ในโฟลเดอร์ C:\inetpub\wwwroot\Sam_Att
-echo [3/3] กำลังเตรียมไฟล์สำหรับ IIS (https://10.2.0.13:3001/Sam_Att/)...
-if exist dist\assets (
-    if not exist assets mkdir assets
-    xcopy /Y /E /I dist\assets assets >nul
+echo [4/4] กำลังติดตั้งไฟล์ลง IIS (https://10.2.0.13:3001/Sam_Att/)...
+if exist "dist\assets" (
+    if not exist "assets" mkdir "assets"
+    xcopy /Y /E /I "dist\assets" "assets" >nul
+    echo       [OK] คัดลอก assets ไปยังโฟลเดอร์รันไทม์เรียบร้อย
 )
-if exist dist\index.html (
-    copy /Y dist\index.html index.html >nul
+if exist "dist\index.html" (
+    copy /Y "dist\index.html" "index.html" >nul
+    echo       [OK] คัดลอก production index.html สำหรับ IIS เรียบร้อย
 )
-if exist public\web.config (
-    copy /Y public\web.config web.config >nul
+if exist "public\web.config" (
+    copy /Y "public\web.config" "web.config" >nul
+    echo       [OK] อัปเดต web.config เรียบร้อย
 )
 
 echo.
 echo =========================================================================
-echo  [สำเร็จ] คอมไพล์และติดตั้งไฟล์สำหรับ IIS เรียบร้อยแล้ว!
+echo  [สำเร็จ 100%%] คอมไพล์และติดตั้งไฟล์สำหรับ IIS เรียบร้อยแล้ว!
 echo =========================================================================
 echo  ท่านสามารถเปิดใช้งานได้ทันทีที่:
 echo    https://10.2.0.13:3001/Sam_Att/
