@@ -230,7 +230,30 @@ class ApiClientService {
           timeoutMs: 3000
         })
       });
-      return await res.json();
+
+      const rawText = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        return {
+          success: false,
+          ipAddress: req.ipAddress,
+          port: req.port || 5005,
+          message: `Backend พอร์ต 3002 ตอบกลับ Status ${res.status} (ยังไม่ได้ลงทะเบียน Route /api/scanners/test-connection ใน Backend Service)`
+        };
+      }
+
+      if (!res.ok) {
+        return {
+          success: false,
+          ipAddress: req.ipAddress,
+          port: req.port || 5005,
+          message: data?.message || `Backend ส่งรหัสผิดพลาด (${res.status})`
+        };
+      }
+
+      return data;
     } catch (err: unknown) {
       return {
         success: false,
@@ -253,7 +276,19 @@ class ApiClientService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(scanners)
       });
-      return await res.json();
+
+      const rawText = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        return {
+          success: false,
+          message: `Backend พอร์ต 3002 ตอบกลับ Status ${res.status} (ยังไม่มี Route /api/scanners/test-all)`
+        };
+      }
+
+      return data;
     } catch (err: unknown) {
       return {
         success: false,
