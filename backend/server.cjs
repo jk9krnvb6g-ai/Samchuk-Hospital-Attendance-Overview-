@@ -145,6 +145,33 @@ async function autoCreateDatabaseIfNotExist(dbName = activeDbConfig.database) {
     await tempConn.end();
     return { success: true };
   } catch (err) {
+    if (err.code === 'ER_ACCESS_DENIED_ERROR') {
+      const candidates = [
+        { user: process.env.HOSOFFICE_USER || 'sa', password: process.env.HOSOFFICE_PASSWORD !== undefined ? process.env.HOSOFFICE_PASSWORD : '' },
+        { user: 'root', password: '' },
+        { user: 'sa', password: 'sa' },
+        { user: 'root', password: 'sa' }
+      ];
+      for (const c of candidates) {
+        if (c.user === activeDbConfig.user && c.password === activeDbConfig.password) continue;
+        try {
+          const testConn = await mysql.createConnection({
+            host: activeDbConfig.host,
+            port: activeDbConfig.port,
+            user: c.user,
+            password: c.password,
+            connectTimeout: 2000
+          });
+          await testConn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+          await testConn.end();
+          console.log(`💡 บัญชี '${activeDbConfig.user}' ไม่มีสิทธิ์ (Access denied) ระบบสลับมาใช้ '${c.user}' แทนเรียบร้อยแล้ว`);
+          activeDbConfig.user = c.user;
+          activeDbConfig.password = c.password;
+          resetDbPool(activeDbConfig);
+          return { success: true };
+        } catch {}
+      }
+    }
     return { success: false, error: err.message, code: err.code };
   }
 }

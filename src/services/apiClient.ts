@@ -299,6 +299,18 @@ class ApiClientService {
     }
   }
 
+  private getFriendlyFetchError(err: unknown, serviceName: string = 'Backend API'): string {
+    const rawMsg = err instanceof Error ? err.message : 'Failed';
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    if (rawMsg.toLowerCase().includes('failed to fetch') || rawMsg.toLowerCase().includes('networkerror')) {
+      if (isHttps) {
+        return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (เกิดจากบราวเซอร์บล็อก Mixed Content เพราะเข้าเว็บด้วย HTTPS) -> กรุณาเปลี่ยน URL หน้าเว็บเป็น http://10.2.0.13:3001/Sam_Att/ (ใช้ http:// แทน https://)`;
+      }
+      return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (${rawMsg}) -> กรุณาตรวจสอบว่าได้รันคำสั่ง call start-backend.bat บนเซิร์ฟเวอร์แล้วหรือไม่ และ Windows Firewall เปิดพอร์ต 3002 หรือยัง`;
+    }
+    return `ไม่สามารถติดต่อ ${serviceName} ได้ (${rawMsg})`;
+  }
+
   /**
    * ทดสอบการเชื่อมต่อฐานข้อมูล MySQL samchuk_attendance ผ่าน Backend API
    */
@@ -310,7 +322,7 @@ class ApiClientService {
     } catch (err: unknown) {
       return {
         success: false,
-        message: `ไม่สามารถติดต่อ Backend API พอร์ต 3002 เพื่อเช็คฐานข้อมูลได้ (${err instanceof Error ? err.message : 'Failed'})`
+        message: this.getFriendlyFetchError(err, 'Backend API (samchuk_attendance)')
       };
     }
   }
@@ -326,7 +338,7 @@ class ApiClientService {
     } catch (err: unknown) {
       return {
         success: false,
-        message: `ไม่สามารถติดต่อ Backend API พอร์ต 3002 เพื่อเช็ค hosoffice ได้ (${err instanceof Error ? err.message : 'Failed'})`
+        message: this.getFriendlyFetchError(err, 'Backend API (hosoffice)')
       };
     }
   }
@@ -342,7 +354,7 @@ class ApiClientService {
     } catch (err: unknown) {
       return {
         success: false,
-        message: `ไม่สามารถติดต่อ Backend API พอร์ต 3002 ได้ (${err instanceof Error ? err.message : 'Failed'})`
+        message: this.getFriendlyFetchError(err, 'Backend API')
       };
     }
   }
