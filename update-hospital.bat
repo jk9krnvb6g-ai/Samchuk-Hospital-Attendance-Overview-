@@ -8,7 +8,9 @@ echo    โรงพยาบาลสามชุก - ซิงค์อัป
 echo =========================================================================
 echo.
 
-echo [1/2] กำลังล้างไฟล์ค้างและดึงโค้ดเวอร์ชันล่าสุดจาก Git...
+echo [1/2] กำลังอนุญาตสิทธิ์โฟลเดอร์และดึงโค้ดเวอร์ชันล่าสุดจาก Git...
+git config --global --add safe.directory "%CD%" >nul 2>&1
+git config --global --add safe.directory "C:/inetpub/wwwroot/Sam_Att" >nul 2>&1
 git reset --hard HEAD
 git pull origin main
 
