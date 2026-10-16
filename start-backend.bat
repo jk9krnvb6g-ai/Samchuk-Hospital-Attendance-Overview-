@@ -23,7 +23,13 @@ if not exist "node_modules\mysql2" (
     call npm install --legacy-peer-deps
 )
 
-:: 3. เริ่มต้นรัน Backend บนพอร์ต 3002
+:: 3. ตรวจสอบและเคลียร์พอร์ต 3002 หากมีโปรเซสเดิมเปิดค้างอยู่ (ป้องกัน Error EADDRINUSE)
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3002 ^| findstr LISTENING') do (
+    echo [INFO] พบระบบเดิมเปิดค้างอยู่ที่พอร์ต 3002 (PID: %%a) กำลังปิดโปรเซสเดิม...
+    taskkill /F /PID %%a >nul 2>&1
+)
+
+:: 4. เริ่มต้นรัน Backend บนพอร์ต 3002
 echo [OK] สตาร์ท Backend API Service บนพอร์ต 3002...
 echo.
 node backend\server.cjs
