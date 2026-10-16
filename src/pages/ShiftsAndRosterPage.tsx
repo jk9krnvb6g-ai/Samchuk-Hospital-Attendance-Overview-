@@ -16,10 +16,13 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
-  CalendarCheck
+  CalendarCheck,
+  Database,
+  RefreshCw
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { Shift, PersonnelGroup, HrPerson } from '../types/attendance';
+import { apiClient } from '../services/apiClient';
 
 interface ShiftsAndRosterPageProps {
   state: StoreState;
@@ -27,6 +30,11 @@ interface ShiftsAndRosterPageProps {
 
 export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state }) => {
   const isAdmin = state.currentUser.role === 'ADMIN';
+
+  // DB Sync State
+  const [isSyncingDb, setIsSyncingDb] = useState(false);
+  const [dbSyncMsg, setDbSyncMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [dbStats, setDbStats] = useState<any>(null);
 
   // Sub-tabs
   const [activeTab, setActiveTab] = useState<'shifts' | 'groups' | 'overrides' | 'roster'>('shifts');
@@ -58,8 +66,46 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
     };
   });
 
+  // Sync Shifts to MySQL 10.2.0.201
+  const handleSyncAllShiftsToDb = async () => {
+    setIsSyncingDb(true);
+    setDbSyncMsg({ type: 'info', text: 'กำลังเชื่อมต่อ MySQL 10.2.0.201 และบันทึกข้อมูลกะ...' });
+    try {
+      const res = await apiClient.syncShiftsToDb(state.shifts);
+      if (res.success) {
+        setDbSyncMsg({ type: 'success', text: res.message || 'บันทึกกะลง MySQL samchuk_attendance @ 10.2.0.201 สำเร็จ 100%' });
+        const testRes = await apiClient.testDatabaseConnection();
+        if (testRes.success) setDbStats(testRes);
+      } else {
+        setDbSyncMsg({ type: 'error', text: res.message || 'ไม่สามารถบันทึกลง MySQL ได้ (กรุณาเปิด start-backend.bat)' });
+      }
+    } catch (err: any) {
+      setDbSyncMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err.message}` });
+    } finally {
+      setIsSyncingDb(false);
+    }
+  };
+
+  const handleTestDb = async () => {
+    setIsSyncingDb(true);
+    setDbSyncMsg({ type: 'info', text: 'กำลังตรวจสอบสถานะ MySQL บน 10.2.0.201...' });
+    try {
+      const res = await apiClient.testDatabaseConnection();
+      if (res.success) {
+        setDbStats(res);
+        setDbSyncMsg({ type: 'success', text: `เชื่อมต่อ MySQL บน 10.2.0.201 สำเร็จ! พบข้อมูลกะในตาราง: ${res.tables?.shifts ?? 0} กะ` });
+      } else {
+        setDbSyncMsg({ type: 'error', text: res.message || 'ติดต่อ MySQL 10.2.0.201 ไม่สำเร็จ (กรุณาตรวจสอบว่า Backend 3002 ทำงานอยู่)' });
+      }
+    } catch (err: any) {
+      setDbSyncMsg({ type: 'error', text: `ข้อผิดพลาด: ${err.message}` });
+    } finally {
+      setIsSyncingDb(false);
+    }
+  };
+
   // Handle Save Shift
-  const handleSaveShift = (e: React.FormEvent) => {
+  const handleSaveShift = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingShift) return;
 
@@ -84,6 +130,13 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
     }
 
     setEditingShift(null);
+
+    // ซิงค์เข้า MySQL 10.2.0.201 ทันที
+    try {
+      await apiClient.syncShiftsToDb(state.shifts);
+    } catch {
+      // ignore
+    }
   };
 
   // Handle Save Group
@@ -182,6 +235,67 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
       {/* TAB 1: SHIFTS MANAGEMENT - Section 16 */}
       {activeTab === 'shifts' && (
         <div className="space-y-4">
+          {/* MySQL Database Sync Banner */}
+          <div className="bg-slate-900 text-white rounded-xl p-4 shadow-sm border border-slate-800">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-lg bg-teal-500/20 text-teal-400 border border-teal-500/30">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-200">ฐานข้อมูลบันทึกกะจริง:</span>
+                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-teal-300 font-semibold border border-slate-700">
+                      10.2.0.201 / samchuk_attendance.attendance_shift
+                    </span>
+                    {dbStats?.tables?.shifts !== undefined && (
+                      <span className="text-[11px] text-emerald-400 font-mono">
+                        (มีใน DB: {dbStats.tables.shifts} กะ)
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    เมื่อคุณเพิ่ม/แก้ไขกะ ข้อมูลจะถูกบันทึกใน LocalStorage ทันที และสามารถกดปุ่มซิงค์เพื่อเขียนลงตาราง MySQL 10.2.0.201 ได้ตลอดเวลา
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleTestDb}
+                  disabled={isSyncingDb}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 cursor-pointer disabled:opacity-50"
+                  title="ทดสอบว่า MySQL บน 10.2.0.201 เชื่อมต่อได้หรือไม่"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`} />
+                  <span>เช็ค MySQL</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSyncAllShiftsToDb}
+                  disabled={isSyncingDb}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{isSyncingDb ? 'กำลังบันทึกลง DB...' : '💾 บันทึกกะลง MySQL 10.2.0.201'}</span>
+                </button>
+              </div>
+            </div>
+
+            {dbSyncMsg && (
+              <div className={`mt-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2 ${
+                dbSyncMsg.type === 'success' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60' :
+                dbSyncMsg.type === 'error' ? 'bg-rose-950/80 text-rose-300 border border-rose-800/60' :
+                'bg-blue-950/80 text-blue-300 border border-blue-800/60'
+              }`}>
+                {dbSyncMsg.type === 'success' ? <Check className="w-4 h-4 shrink-0 text-emerald-400" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+                <span>{dbSyncMsg.text}</span>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <h3 className="text-sm font-bold text-slate-800">

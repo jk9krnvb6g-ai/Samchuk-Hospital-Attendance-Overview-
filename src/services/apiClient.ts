@@ -298,6 +298,65 @@ class ApiClientService {
       };
     }
   }
+
+  /**
+   * ทดสอบการเชื่อมต่อฐานข้อมูล MySQL 10.2.0.201 ผ่าน Backend API
+   */
+  public async testDatabaseConnection() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/db/test`);
+      const data = await res.json();
+      return data;
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: `ไม่สามารถติดต่อ Backend API พอร์ต 3002 เพื่อเช็คฐานข้อมูลได้ (${err instanceof Error ? err.message : 'Failed'})`
+      };
+    }
+  }
+
+  /**
+   * สั่งให้ Backend สร้างโครงสร้างตาราง samchuk_attendance ลงใน MySQL 10.2.0.201 อัตโนมัติ
+   */
+  public async initDatabaseTables() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/db/init`, { method: 'POST' });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: `สั่งสร้างตารางไม่สำเร็จ: ${err instanceof Error ? err.message : 'Failed'}`
+      };
+    }
+  }
+
+  /**
+   * ดึงรายการกะจาก MySQL 10.2.0.201
+   */
+  public async getShiftsFromDb() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/shifts`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ซิงค์กะทั้งหมดจากหน้าเว็บเข้าสู่ MySQL 10.2.0.201
+   */
+  public async syncShiftsToDb(shifts: any[]) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/shifts/sync-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shifts })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
 }
 
 export const apiClient = new ApiClientService();
