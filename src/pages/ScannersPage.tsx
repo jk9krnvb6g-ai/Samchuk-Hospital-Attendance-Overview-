@@ -95,6 +95,23 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
     enabled: true
   });
 
+  // Simulator State
+  const [simRunning, setSimRunning] = useState<boolean>(false);
+  const [simMachineNo, setSimMachineNo] = useState<number>(1);
+  const [simIp, setSimIp] = useState<string>('192.168.111.163');
+  const [simPort, setSimPort] = useState<number>(5005);
+  const [simLicense, setSimLicense] = useState<number>(1261);
+  const [simLogs, setSimLogs] = useState<Array<{ time: string; type: 'info' | 'success' | 'warning' | 'error'; text: string }>>([]);
+
+  // Clipboard State
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
+  // File Upload State
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadedFileSize, setUploadedFileSize] = useState<string | null>(null);
+  const [uploadedFileInfo, setUploadedFileInfo] = useState<string | null>(null);
+
   const handleOpenAddModal = () => {
     const nextMachineNo = state.scanners.length > 0 
       ? Math.max(...state.scanners.map(s => s.machineNo)) + 1 
@@ -1082,7 +1099,7 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
                   <span className="text-slate-500 shrink-0">[{log.time}]</span>
                   <span className={
                     log.type === 'success' ? 'text-emerald-400 font-semibold' :
-                    log.type === 'warn' ? 'text-amber-400' :
+                    log.type === 'warning' ? 'text-amber-400' :
                     log.type === 'error' ? 'text-rose-400 font-bold' :
                     'text-teal-300'
                   }>

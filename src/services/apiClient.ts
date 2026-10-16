@@ -46,9 +46,8 @@ export const resolveDefaultApiUrl = (): string => {
     return import.meta.env.VITE_API_URL;
   }
   if (typeof window !== 'undefined') {
-    const isHttps = window.location.protocol === 'https:';
     const host = window.location.hostname && window.location.hostname !== 'localhost' ? window.location.hostname : '10.2.0.13';
-    return isHttps ? `https://${host}:3002` : `http://${host}:3002`;
+    return `http://${host}:3002`;
   }
   return 'http://10.2.0.13:3002';
 };
@@ -67,7 +66,12 @@ class ApiClientService {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(STORAGE_API_KEY);
       if (saved && saved.trim()) {
-        this.customBaseUrl = saved.trim();
+        if (saved.startsWith('https://') && saved.includes(':3002')) {
+          this.customBaseUrl = saved.replace('https://', 'http://');
+          localStorage.setItem(STORAGE_API_KEY, this.customBaseUrl);
+        } else {
+          this.customBaseUrl = saved.trim();
+        }
       } else {
         this.customBaseUrl = resolveDefaultApiUrl();
       }
@@ -232,7 +236,9 @@ class ApiClientService {
         success: false,
         ipAddress: req.ipAddress,
         port: req.port || 5005,
-        message: err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อไปยัง Backend API (พอร์ต 3002) ได้'
+        message: (err instanceof Error && err.message !== 'Failed to fetch')
+          ? err.message
+          : `ไม่สามารถติดต่อ Backend API ที่ ${this.customBaseUrl} ได้ (กรุณาตรวจสอบว่า Service พอร์ต 3002 เปิดรันอยู่หรือไม่)`
       };
     }
   }
@@ -251,7 +257,9 @@ class ApiClientService {
     } catch (err: unknown) {
       return {
         success: false,
-        message: err instanceof Error ? err.message : 'Connection failed'
+        message: (err instanceof Error && err.message !== 'Failed to fetch')
+          ? err.message
+          : `ไม่สามารถติดต่อ Backend API ที่ ${this.customBaseUrl} ได้`
       };
     }
   }
