@@ -90,16 +90,22 @@ function getDbPool() {
   return dbPool;
 }
 
-// Pool สำหรับ hosoffice
+// Pool สำหรับ hosoffice (ฐานข้อมูลบุคลากร HR และ fingle_scan)
 let hosofficePool = null;
 function getHosofficePool() {
   if (!hosofficePool) {
+    const hosHost = process.env.HOSOFFICE_HOST || activeDbConfig.host;
+    const hosPort = parseInt(process.env.HOSOFFICE_PORT || activeDbConfig.port, 10);
+    const hosUser = process.env.HOSOFFICE_USER || 'sa';
+    const hosPass = process.env.HOSOFFICE_PASSWORD !== undefined ? process.env.HOSOFFICE_PASSWORD : activeDbConfig.password;
+    const hosDb = process.env.HOSOFFICE_DB || hosofficeDbName;
+
     hosofficePool = mysql.createPool({
-      host: activeDbConfig.host,
-      port: activeDbConfig.port,
-      user: process.env.HOSOFFICE_USER || activeDbConfig.user,
-      password: process.env.HOSOFFICE_PASSWORD !== undefined ? process.env.HOSOFFICE_PASSWORD : activeDbConfig.password,
-      database: hosofficeDbName,
+      host: hosHost,
+      port: hosPort,
+      user: hosUser,
+      password: hosPass,
+      database: hosDb,
       charset: 'utf8mb4',
       waitForConnections: true,
       connectionLimit: 10,
@@ -691,7 +697,7 @@ app.get('/api/db/probe-auth', async (req, res) => {
 
 // 4.2.5 ปรับเปลี่ยนการตั้งค่าเชื่อมต่อ MySQL และบันทึกลง .env ทันที
 app.post('/api/db/configure', async (req, res) => {
-  const { host, port, user, password, database, hosofficeDb } = req.body;
+  const { host, port, user, password, database, hosofficeDb, hosofficeUser, hosofficePassword } = req.body;
   if (!host) {
     return res.status(400).json({ success: false, message: 'กรุณาระบุ Host' });
   }
@@ -706,6 +712,12 @@ app.post('/api/db/configure', async (req, res) => {
 
   if (hosofficeDb) {
     hosofficeDbName = hosofficeDb.trim();
+  }
+  if (hosofficeUser) {
+    process.env.HOSOFFICE_USER = hosofficeUser.trim();
+  }
+  if (hosofficePassword !== undefined) {
+    process.env.HOSOFFICE_PASSWORD = hosofficePassword;
   }
 
   try {
@@ -746,6 +758,8 @@ app.post('/api/db/configure', async (req, res) => {
     updateKey('DB_PASSWORD', testConfig.password);
     updateKey('DB_NAME', testConfig.database);
     if (hosofficeDb) updateKey('HOSOFFICE_DB', hosofficeDbName);
+    if (hosofficeUser) updateKey('HOSOFFICE_USER', hosofficeUser.trim());
+    if (hosofficePassword !== undefined) updateKey('HOSOFFICE_PASSWORD', hosofficePassword);
     fs.writeFileSync(envPath, envData.trim() + '\n', 'utf8');
 
     // 6. สร้างตารางเริ่มต้นอัตโนมัติ
@@ -1399,10 +1413,12 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`🚀 กำลังให้บริการ API บนพอร์ต: ${PORT}`);
   console.log(`🌐 Base URL: http://10.2.0.13:${PORT}`);
   console.log(`🏥 เชื่อมต่อกับ Web Frontend: https://10.2.0.13:3001/Sam_Att/`);
-  console.log(`🗄️  ฐานข้อมูลเป้าหมายทั้ง 2 ฐาน (Host: ${activeDbConfig.host}:${activeDbConfig.port}):`);
-  console.log(`   1. ${activeDbConfig.database} (ระบบลงเวลา, กะ, Roster, Staging สแกน)`);
-  console.log(`   2. ${hosofficeDbName} (ระบบบุคลากร HOSxP/HOSOffice, fingle_scan)`);
-  console.log(`👤 MySQL User: ${activeDbConfig.user}`);
+  const hosHost = process.env.HOSOFFICE_HOST || activeDbConfig.host;
+  const hosPort = parseInt(process.env.HOSOFFICE_PORT || activeDbConfig.port, 10);
+  const hosUser = process.env.HOSOFFICE_USER || 'sa';
+  console.log(`🗄️  ฐานข้อมูลเป้าหมายทั้ง 2 ฐาน:`);
+  console.log(`   1. [Attendance] ${activeDbConfig.database} (Host: ${activeDbConfig.host}:${activeDbConfig.port}, User: ${activeDbConfig.user})`);
+  console.log(`   2. [HosOffice]  ${hosofficeDbName} (Host: ${hosHost}:${hosPort}, User: ${hosUser})`);
   console.log('=========================================================================');
   
   // พยายามเชื่อมต่อและตรวจสอบตาราง
