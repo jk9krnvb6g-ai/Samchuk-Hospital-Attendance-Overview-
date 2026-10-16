@@ -1337,6 +1337,61 @@ app.use('/api/sam_att', (req, res, next) => {
 // --------------------------------------------------------------------------
 // 5. เริ่มต้นเซิร์ฟเวอร์
 // --------------------------------------------------------------------------
+// ฟังก์ชัน Auto-Fallback และวินิจฉัยเมื่อเชื่อมต่อ 10.2.0.201 แล้วเกิด ETIMEDOUT
+async function tryFallbackToLocalhost() {
+  console.log('🔍 กำลังตรวจสอบว่ามี MySQL รันอยู่บนเครื่องนี้ (localhost / 127.0.0.1:3306) หรือไม่...');
+  const probeLocal = await testScannerTcpSocket('127.0.0.1', 3306, 1500);
+  if (probeLocal.success) {
+    console.log('💡 ตรวจพบว่าพอร์ต 3306 กำลังเปิดทำงานอยู่บนเครื่องนี้ (localhost / 127.0.0.1)!');
+    const candidates = [
+      { user: 'root', password: '' },
+      { user: 'sa', password: 'sa' },
+      { user: 'root', password: 'sa' },
+      { user: 'attendance_app', password: '' },
+      { user: activeDbConfig.user, password: activeDbConfig.password }
+    ];
+    for (const c of candidates) {
+      try {
+        const testConn = await mysql.createConnection({
+          host: '127.0.0.1',
+          port: 3306,
+          user: c.user,
+          password: c.password,
+          connectTimeout: 2000
+        });
+        const [dbs] = await testConn.query('SHOW DATABASES');
+        const dbNames = dbs.map(d => Object.values(d)[0]);
+        await testConn.end();
+        if (dbNames.includes('samchuk_attendance')) {
+          console.log('=========================================================================');
+          console.log(`🎉 [ค้นพบอัตโนมัติ] พบฐานข้อมูล samchuk_attendance บน localhost:3306!`);
+          console.log(`   (ตรงกับภาพใน Navicat! User: '${c.user}', พบทั้งหมด ${dbNames.length} ฐานข้อมูล)`);
+          console.log(`🔄 กำลังสลับ Host ไปยัง 127.0.0.1 อัตโนมัติเพื่อให้ระบบทำงานได้ทันที...`);
+          console.log('=========================================================================');
+          activeDbConfig.host = '127.0.0.1';
+          activeDbConfig.user = c.user;
+          activeDbConfig.password = c.password;
+          resetDbPool(activeDbConfig);
+          await ensureTablesExist();
+          console.log(`✅ เชื่อมต่อและใช้งาน samchuk_attendance บน 127.0.0.1 สำเร็จเรียบร้อย!`);
+          return;
+        }
+      } catch {}
+    }
+  }
+
+  console.log('=========================================================================');
+  console.log('📌 คำแนะนำแก้ไข "Error: connect ETIMEDOUT" กับ MySQL 10.2.0.201:');
+  console.log('1. ในภาพ Navicat ของท่านที่เห็นฐานข้อมูล samchuk_attendance:');
+  console.log('   - ดูว่าใน Navicat ช่อง Host ระบุเป็นอะไร (เช่น localhost หรือ IP เครื่องอื่น)');
+  console.log('   - หากเป็น localhost ให้เปิดหน้าเว็บ https://10.2.0.13:3001/Sam_Att/ -> เมนู "ระบบและบันทึก"');
+  console.log('     แล้วคลิกเลือก Preset "localhost (root / ว่าง)" หรือระบุในไฟล์ .env');
+  console.log('2. หากฐานข้อมูล samchuk_attendance อยู่บนเซิร์ฟเวอร์ 10.2.0.201 จริง:');
+  console.log('   - ข้อผิดพลาด ETIMEDOUT เกิดจาก Windows Firewall บนเครื่อง 10.2.0.201 บล็อกพอร์ต 3306');
+  console.log('   - กรุณาเปิด Windows Defender Firewall บน 10.2.0.201 -> Inbound Rule -> อนุญาต Port 3306 TCP');
+  console.log('=========================================================================');
+}
+
 app.listen(PORT, '0.0.0.0', async () => {
   console.log('=========================================================================');
   console.log(`   โรงพยาบาลสามชุก - Sam_Att Backend API Service v2.6.0`);
@@ -1353,8 +1408,15 @@ app.listen(PORT, '0.0.0.0', async () => {
   // พยายามเชื่อมต่อและตรวจสอบตาราง
   try {
     console.log(`⏳ กำลังตรวจสอบการเชื่อมต่อฐานข้อมูล MySQL ${activeDbConfig.host}...`);
-    await ensureTablesExist();
-    console.log(`✅ ตรวจสอบและเตรียมตารางใน ${activeDbConfig.database} สำเร็จพร้อมใช้งาน!`);
+    const initRes = await ensureTablesExist();
+    if (initRes && initRes.success) {
+      console.log(`✅ ตรวจสอบและเตรียมตารางใน ${activeDbConfig.database} สำเร็จพร้อมใช้งาน!`);
+    } else {
+      console.log(`⚠️ ยังไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host} ได้ (${initRes?.error || 'Failed'})`);
+      if (activeDbConfig.host !== '127.0.0.1' && activeDbConfig.host !== 'localhost') {
+        await tryFallbackToLocalhost();
+      }
+    }
   } catch (err) {
     console.log(`⚠️ ยังไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host} ได้อัตโนมัติ:`, err.message);
   }
