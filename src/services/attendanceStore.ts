@@ -300,6 +300,11 @@ class AttendanceStore {
   // Scanner Sync logic - Section 7: Background scanner sync
   // Reads scanner -> check duplicate in attendance_raw_scan -> maps HR -> stores in attendance_raw_scan only!
   public triggerScannerSync(machineNo?: number): { totalRead: number; totalNew: number; duplicates: number; processedCount: number } {
+    if (!this.state.personnel || this.state.personnel.length === 0) {
+      // ฐานข้อมูลยังไม่มีรายชื่อบุคลากร (รอการดึงข้อมูลจาก MySQL hosoffice.hr_person)
+      return { totalRead: 0, totalNew: 0, duplicates: 0, processedCount: 0 };
+    }
+
     const targets = machineNo 
       ? this.state.scanners.filter(s => s.machineNo === machineNo && s.enabled)
       : this.state.scanners.filter(s => s.enabled);
@@ -320,8 +325,9 @@ class AttendanceStore {
         // pick random personnel or new scan
         const pIndex = Math.floor(Math.random() * this.state.personnel.length);
         const p = this.state.personnel[pIndex];
+        if (!p) continue;
         const isUnmapped = Math.random() < 0.08; // small chance of unmapped ID
-        const fingleId = isUnmapped ? 999 : p.fingleId;
+        const fingleId = isUnmapped ? 999 : (p.fingleId ?? 101);
 
         // Current time or recent minute
         const d = new Date();

@@ -34,7 +34,22 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
   // Match the user with HrPerson
   const person = state.personnel.find(p => p.personId === currentUser.personId) || 
                  state.personnel.find(p => p.hrFullname.includes(currentUser.fullname.replace(' (USER)', '').replace(' (ADMIN)', ''))) ||
-                 state.personnel[1]; // fallback to Nurse Nittaya
+                 state.personnel[0];
+
+  if (!person) {
+    return (
+      <div className="p-8 text-center bg-white rounded-xl border border-slate-200 max-w-xl mx-auto mt-12 shadow-xs">
+        <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3 text-slate-400">
+          <Calendar className="w-6 h-6 text-teal-700" />
+        </div>
+        <h3 className="text-base font-bold text-slate-800">ยังไม่พบข้อมูลประวัติบุคลากรในระบบ</h3>
+        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+          ระบบกำลังรอการเชื่อมต่อไปยัง MySQL 10.2.0.201 หรือยังไม่ได้นำเข้ารายชื่อบุคลากรจากตาราง hr_person ของ HosOffice<br />
+          คุณสามารถเข้าไปตรวจสอบและทดสอบการเชื่อมต่อได้ที่เมนู <strong>"ระบบและบันทึก" (System & Logs)</strong>
+        </p>
+      </div>
+    );
+  }
 
   const fingleId = person ? person.fingleId : 0;
 
