@@ -1,7 +1,9 @@
 /**
  * Samchuk Hospital Attendance System - Node.js Backend API Service
  * ทำงานบนพอร์ต 3002 สำหรับรองรับ Web Frontend (พอร์ต 3001 /Sam_Att/)
- * เชื่อมต่อ MySQL 10.2.0.201 (samchuk_attendance & hosoffice)
+ * เชื่อมต่อ MySQL 10.2.0.201 โดยตรงทั้ง 2 ฐานข้อมูล:
+ *   1. samchuk_attendance (ฐานข้อมูลระบบลงเวลา, กะ, Roster, Staging สแกน)
+ *   2. hosoffice (ฐานข้อมูลบุคลากร โรงพยาบาลสามชุก, fingle_scan)
  * ทดสอบเครื่องสแกน HIP CMiF68S พอร์ต 5005 ด้วย TCP Socket
  */
 
@@ -57,31 +59,70 @@ if (fs.existsSync(appSettingsPath)) {
   }
 }
 
-// ค่าคอนฟิก MySQL เชื่อมต่อ 10.2.0.201
-const dbHost = process.env.DB_HOST || config.DbHost || '10.2.0.201';
-const dbPort = parseInt(process.env.DB_PORT || config.DbPort || '3306', 10);
-const dbUser = process.env.DB_USER || config.DbUser || 'attendance_app';
-const dbPassword = process.env.DB_PASSWORD !== undefined ? process.env.DB_PASSWORD : (config.DbPassword === 'YOUR_ATTENDANCE_DB_PASSWORD' ? '' : config.DbPassword);
-const attendanceDbName = process.env.DB_NAME || config.AttendanceDb || 'samchuk_attendance';
-const hosofficeDbName = process.env.HOSOFFICE_DB || config.HosOfficeDb || 'hosoffice';
+// ค่าคอนฟิก MySQL เชื่อมต่อ
+let activeDbConfig = {
+  host: process.env.DB_HOST || config.DbHost || '10.2.0.201',
+  port: parseInt(process.env.DB_PORT || config.DbPort || '3306', 10),
+  user: process.env.DB_USER || config.DbUser || 'attendance_app',
+  password: process.env.DB_PASSWORD !== undefined ? process.env.DB_PASSWORD : (config.DbPassword === 'YOUR_ATTENDANCE_DB_PASSWORD' ? '' : config.DbPassword),
+  database: process.env.DB_NAME || config.AttendanceDb || 'samchuk_attendance'
+};
 
+let hosofficeDbName = process.env.HOSOFFICE_DB || config.HosOfficeDb || 'hosoffice';
+
+// Pool สำหรับ samchuk_attendance
 let dbPool = null;
 function getDbPool() {
   if (!dbPool) {
     dbPool = mysql.createPool({
-      host: dbHost,
-      port: dbPort,
-      user: dbUser,
-      password: dbPassword,
-      database: attendanceDbName,
+      host: activeDbConfig.host,
+      port: activeDbConfig.port,
+      user: activeDbConfig.user,
+      password: activeDbConfig.password,
+      database: activeDbConfig.database,
       charset: 'utf8mb4',
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
-      connectTimeout: 5000
+      connectTimeout: 4000
     });
   }
   return dbPool;
+}
+
+// Pool สำหรับ hosoffice
+let hosofficePool = null;
+function getHosofficePool() {
+  if (!hosofficePool) {
+    hosofficePool = mysql.createPool({
+      host: activeDbConfig.host,
+      port: activeDbConfig.port,
+      user: process.env.HOSOFFICE_USER || activeDbConfig.user,
+      password: process.env.HOSOFFICE_PASSWORD !== undefined ? process.env.HOSOFFICE_PASSWORD : activeDbConfig.password,
+      database: hosofficeDbName,
+      charset: 'utf8mb4',
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      connectTimeout: 4000
+    });
+  }
+  return hosofficePool;
+}
+
+function resetDbPool(newConfig) {
+  if (dbPool) {
+    try { dbPool.end(); } catch {}
+    dbPool = null;
+  }
+  if (hosofficePool) {
+    try { hosofficePool.end(); } catch {}
+    hosofficePool = null;
+  }
+  if (newConfig) {
+    activeDbConfig = { ...activeDbConfig, ...newConfig };
+  }
+  return getDbPool();
 }
 
 // --------------------------------------------------------------------------
@@ -280,28 +321,30 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ONLINE',
     service: 'Samchuk Hospital Attendance Node.js API Service',
-    version: '2.5.1',
+    version: '2.6.0',
     port: PORT,
     endpoint: `http://10.2.0.13:${PORT}`,
     frontendUrl: 'https://10.2.0.13:3001/Sam_Att/',
-    architecture: 'Node.js Express + MySQL (10.2.0.201) + TCP Socket (CMiF68S)',
+    architecture: 'Node.js Express + Dual MySQL (samchuk_attendance & hosoffice @ 10.2.0.201) + TCP Socket (CMiF68S)',
     thaiSupport: 'UTF-8 / UTF8MB4 (100% Thai Unicode)',
     serverTime: new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }),
     databaseConfig: {
-      host: dbHost,
-      port: dbPort,
-      user: dbUser,
-      database: attendanceDbName,
-      hosoffice: hosofficeDbName
+      host: activeDbConfig.host,
+      port: activeDbConfig.port,
+      user: activeDbConfig.user,
+      attendanceDb: activeDbConfig.database,
+      hosofficeDb: hosofficeDbName
     }
   });
 });
 
-// 4.2 ตรวจสอบและทดสอบการเชื่อมต่อฐานข้อมูล MySQL 10.2.0.201
+// 4.2 ตรวจสอบและทดสอบการเชื่อมต่อฐานข้อมูล samchuk_attendance
 app.get('/api/db/test', async (req, res) => {
+  const start = Date.now();
   try {
     const pool = getDbPool();
     const [dbTest] = await pool.query('SELECT DATABASE() as db, VERSION() as version, NOW() as server_time');
+    const latencyMs = Date.now() - start;
     
     // ตรวจสอบตารางใน samchuk_attendance
     let tableStats = {};
@@ -320,26 +363,268 @@ app.get('/api/db/test', async (req, res) => {
       tableStats.roster = rosterRows[0].count;
     } catch { tableStats.roster = 'ยังไม่มีตาราง'; }
 
+    try {
+      const [grpRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_personnel_group');
+      tableStats.groups = grpRows[0].count;
+    } catch { tableStats.groups = 'ยังไม่มีตาราง'; }
+
     res.json({
       success: true,
-      host: dbHost,
-      port: dbPort,
-      user: dbUser,
-      database: attendanceDbName,
+      databaseName: activeDbConfig.database,
+      host: activeDbConfig.host,
+      port: activeDbConfig.port,
+      user: activeDbConfig.user,
       mySqlVersion: dbTest[0]?.version,
       serverTime: dbTest[0]?.server_time,
+      latencyMs,
       tables: tableStats,
-      message: `เชื่อมต่อ MySQL บน ${dbHost}:${dbPort} (ฐานข้อมูล ${attendanceDbName}) สำเร็จ 100%`
+      message: `เชื่อมต่อ MySQL บน ${activeDbConfig.host}:${activeDbConfig.port} (ฐาน ${activeDbConfig.database}) สำเร็จ (${latencyMs}ms)`
     });
   } catch (err) {
     res.status(500).json({
       success: false,
-      host: dbHost,
-      port: dbPort,
-      user: dbUser,
-      database: attendanceDbName,
-      message: `ไม่สามารถเชื่อมต่อ MySQL ${dbHost}:${dbPort} ได้: ${err.message}`,
-      help: 'กรุณาตรวจสอบว่า Service MySQL/MariaDB รันอยู่ที่ 10.2.0.201 และรหัสผ่านผู้ใช้งานถูกต้องในไฟล์ .env'
+      databaseName: activeDbConfig.database,
+      host: activeDbConfig.host,
+      port: activeDbConfig.port,
+      user: activeDbConfig.user,
+      code: err.code,
+      message: `ไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host}:${activeDbConfig.port} ได้: ${err.message}`,
+      help: err.code === 'ETIMEDOUT'
+        ? `เกิดข้อผิดพลาด ETIMEDOUT (ติดต่อ IP ${activeDbConfig.host} พอร์ต ${activeDbConfig.port} ไม่ได้)`
+        : err.code === 'ER_ACCESS_DENIED_ERROR'
+        ? `รหัสผ่านหรือ User '${activeDbConfig.user}' ไม่ถูกต้อง`
+        : err.message
+    });
+  }
+});
+
+// 4.2.1 ตรวจสอบและทดสอบการเชื่อมต่อฐานข้อมูลที่ 2: hosoffice
+app.get('/api/db/test-hosoffice', async (req, res) => {
+  const start = Date.now();
+  try {
+    const pool = getHosofficePool();
+    const [dbTest] = await pool.query('SELECT DATABASE() as db, VERSION() as version, NOW() as server_time');
+    const latencyMs = Date.now() - start;
+
+    let tableStats = {};
+    try {
+      const [pRows] = await pool.query('SELECT COUNT(*) as count FROM hr_person');
+      tableStats.hrPerson = pRows[0].count;
+    } catch { tableStats.hrPerson = 'ยังไม่มีตาราง hr_person'; }
+
+    try {
+      const [sRows] = await pool.query('SELECT COUNT(*) as count FROM fingle_scan');
+      tableStats.fingleScan = sRows[0].count;
+    } catch { tableStats.fingleScan = 'ยังไม่มีตาราง fingle_scan'; }
+
+    try {
+      const [dRows] = await pool.query('SELECT COUNT(*) as count FROM hr_department');
+      tableStats.departments = dRows[0].count;
+    } catch { tableStats.departments = 'ยังไม่มีตาราง'; }
+
+    res.json({
+      success: true,
+      databaseName: hosofficeDbName,
+      host: activeDbConfig.host,
+      port: activeDbConfig.port,
+      user: activeDbConfig.user,
+      mySqlVersion: dbTest[0]?.version,
+      serverTime: dbTest[0]?.server_time,
+      latencyMs,
+      tables: tableStats,
+      message: `เชื่อมต่อ MySQL บน ${activeDbConfig.host}:${activeDbConfig.port} (ฐาน ${hosofficeDbName}) สำเร็จ (${latencyMs}ms)`
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      databaseName: hosofficeDbName,
+      host: activeDbConfig.host,
+      port: activeDbConfig.port,
+      user: activeDbConfig.user,
+      code: err.code,
+      message: `ไม่สามารถเชื่อมต่อฐานข้อมูล ${hosofficeDbName} ได้: ${err.message}`
+    });
+  }
+});
+
+// 4.2.2 ทดสอบทั้ง 2 ฐานข้อมูลพร้อมกันในครั้งเดียว (Dual DB Test)
+app.get('/api/db/test-both', async (req, res) => {
+  const start = Date.now();
+  let attResult = { success: false, message: 'กำลังทดสอบ' };
+  let hosResult = { success: false, message: 'กำลังทดสอบ' };
+
+  // Test 1: samchuk_attendance
+  try {
+    const poolAtt = getDbPool();
+    const t0 = Date.now();
+    const [rowAtt] = await poolAtt.query('SELECT DATABASE() as db, VERSION() as ver, NOW() as now');
+    const latAtt = Date.now() - t0;
+    
+    let tableStats = {};
+    try {
+      const [shiftRows] = await poolAtt.query('SELECT COUNT(*) as count FROM attendance_shift');
+      tableStats.shifts = shiftRows[0].count;
+    } catch { tableStats.shifts = 0; }
+
+    try {
+      const [scanRows] = await poolAtt.query('SELECT COUNT(*) as count FROM attendance_raw_scan');
+      tableStats.rawScans = scanRows[0].count;
+    } catch { tableStats.rawScans = 0; }
+
+    try {
+      const [rosterRows] = await poolAtt.query('SELECT COUNT(*) as count FROM attendance_person_roster');
+      tableStats.roster = rosterRows[0].count;
+    } catch { tableStats.roster = 0; }
+
+    attResult = {
+      success: true,
+      database: activeDbConfig.database,
+      version: rowAtt[0]?.ver,
+      latencyMs: latAtt,
+      tables: tableStats,
+      message: `เชื่อมต่อสำเร็จ (${latAtt}ms)`
+    };
+  } catch (err) {
+    attResult = {
+      success: false,
+      database: activeDbConfig.database,
+      error: err.message,
+      message: `เชื่อมต่อล้มเหลว: ${err.message}`
+    };
+  }
+
+  // Test 2: hosoffice
+  try {
+    const poolHos = getHosofficePool();
+    const t0 = Date.now();
+    const [rowHos] = await poolHos.query('SELECT DATABASE() as db, VERSION() as ver, NOW() as now');
+    const latHos = Date.now() - t0;
+
+    let tableStats = {};
+    try {
+      const [pRows] = await poolHos.query('SELECT COUNT(*) as count FROM hr_person');
+      tableStats.hrPerson = pRows[0].count;
+    } catch { tableStats.hrPerson = 0; }
+
+    try {
+      const [sRows] = await poolHos.query('SELECT COUNT(*) as count FROM fingle_scan');
+      tableStats.fingleScan = sRows[0].count;
+    } catch { tableStats.fingleScan = 0; }
+
+    hosResult = {
+      success: true,
+      database: hosofficeDbName,
+      version: rowHos[0]?.ver,
+      latencyMs: latHos,
+      tables: tableStats,
+      message: `เชื่อมต่อสำเร็จ (${latHos}ms)`
+    };
+  } catch (err) {
+    hosResult = {
+      success: false,
+      database: hosofficeDbName,
+      error: err.message,
+      message: `เชื่อมต่อล้มเหลว: ${err.message}`
+    };
+  }
+
+  res.json({
+    success: attResult.success && hosResult.success,
+    durationMs: Date.now() - start,
+    serverHost: activeDbConfig.host,
+    serverPort: activeDbConfig.port,
+    attendance: attResult,
+    hosoffice: hosResult
+  });
+});
+
+// 4.2.3 Probe ตรวจสอบพอร์ต 3306 บนหลาย IP พร้อมกัน
+app.get('/api/db/probe', async (req, res) => {
+  const candidates = [
+    { name: '10.2.0.201 (เป้าหมายปัจจุบัน)', host: '10.2.0.201', port: 3306 },
+    { name: '10.1.0.201 (HosOffice เครื่องเดิม)', host: '10.1.0.201', port: 3306 },
+    { name: 'localhost (เครื่องเดียวกัน 127.0.0.1)', host: '127.0.0.1', port: 3306 },
+    { name: '10.2.0.13 (IP เครื่องเว็บเซิร์ฟเวอร์)', host: '10.2.0.13', port: 3306 }
+  ];
+
+  const results = await Promise.all(candidates.map(async (c) => {
+    const probe = await testScannerTcpSocket(c.host, c.port, 1800);
+    return {
+      name: c.name,
+      host: c.host,
+      port: c.port,
+      open: probe.success,
+      latencyMs: probe.latencyMs || null,
+      message: probe.message
+    };
+  }));
+
+  res.json({
+    success: true,
+    activeHost: activeDbConfig.host,
+    results
+  });
+});
+
+// 4.2.4 ปรับเปลี่ยนการตั้งค่าเชื่อมต่อ MySQL และบันทึกลง .env ทันที
+app.post('/api/db/configure', async (req, res) => {
+  const { host, port, user, password, database, hosofficeDb } = req.body;
+  if (!host) {
+    return res.status(400).json({ success: false, message: 'กรุณาระบุ Host' });
+  }
+
+  const testConfig = {
+    host: host.trim(),
+    port: parseInt(port || 3306, 10),
+    user: (user || 'root').trim(),
+    password: password !== undefined ? password : '',
+    database: (database || 'samchuk_attendance').trim()
+  };
+
+  if (hosofficeDb) {
+    hosofficeDbName = hosofficeDb.trim();
+  }
+
+  try {
+    const testConn = await mysql.createConnection({
+      ...testConfig,
+      connectTimeout: 3500
+    });
+    await testConn.query('SELECT 1');
+    await testConn.end();
+
+    // บันทึกและรีเซ็ต pool
+    resetDbPool(testConfig);
+
+    // บันทึกลง .env เพื่อให้ค่าคงอยู่ข้ามการรีสตาร์ท
+    const envPath = path.join(process.cwd(), '.env');
+    let envData = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+    const updateKey = (key, val) => {
+      const regex = new RegExp(`^${key}=.*$`, 'm');
+      if (regex.test(envData)) envData = envData.replace(regex, `${key}="${val}"`);
+      else envData += `\n${key}="${val}"`;
+    };
+    updateKey('DB_HOST', testConfig.host);
+    updateKey('DB_PORT', testConfig.port);
+    updateKey('DB_USER', testConfig.user);
+    updateKey('DB_PASSWORD', testConfig.password);
+    updateKey('DB_NAME', testConfig.database);
+    if (hosofficeDb) updateKey('HOSOFFICE_DB', hosofficeDbName);
+    fs.writeFileSync(envPath, envData.trim() + '\n', 'utf8');
+
+    // พยายามสร้างตารางอัตโนมัติ
+    await ensureTablesExist();
+
+    res.json({
+      success: true,
+      config: { ...testConfig, password: testConfig.password ? '******' : '(ว่าง)' },
+      message: `เชื่อมต่อและบันทึกการตั้งค่า MySQL ${testConfig.host}:${testConfig.port} สำเร็จเรียบร้อยแล้ว!`
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      code: err.code,
+      message: `ทดสอบเชื่อมต่อ ${testConfig.host}:${testConfig.port} ล้มเหลว: ${err.message}`
     });
   }
 });
@@ -359,7 +644,24 @@ app.get('/api/shifts', async (req, res) => {
   try {
     const pool = getDbPool();
     const [rows] = await pool.query('SELECT * FROM attendance_shift ORDER BY id ASC');
-    res.json({ success: true, data: rows });
+    // Map to client format
+    const mapped = rows.map(r => ({
+      id: r.id,
+      code: r.shift_code,
+      name: r.shift_name,
+      startTime: String(r.start_time).substring(0, 5),
+      endTime: String(r.end_time).substring(0, 5),
+      crossesMidnight: Boolean(r.crosses_midnight),
+      workDateBasis: r.work_date_basis || 'START_DATE',
+      lateGraceMinutes: r.late_grace_minutes || 0,
+      inWindowBeforeMin: r.in_window_before_min || 120,
+      outWindowAfterMin: r.out_window_after_min || 120,
+      earlyLeaveMin: r.early_leave_min || 0,
+      duplicateScanMin: r.duplicate_scan_min || 5,
+      color: r.color || '#0ea5e9',
+      isActive: Boolean(r.is_active)
+    }));
+    res.json({ success: true, total: mapped.length, data: mapped, raw: rows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -388,7 +690,7 @@ app.post('/api/shifts', async (req, res) => {
       s.color || '#0ea5e9',
       s.isActive !== false ? 1 : 0
     ]);
-    res.json({ success: true, id: result.insertId, message: 'บันทึกกะลง MySQL เรียบร้อย' });
+    res.json({ success: true, id: result.insertId, message: 'บันทึกกะลง MySQL samchuk_attendance เรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -419,7 +721,7 @@ app.put('/api/shifts/:id', async (req, res) => {
       s.isActive !== false ? 1 : 0,
       id
     ]);
-    res.json({ success: true, message: `อัปเดตกะ ID ${id} ลง MySQL เรียบร้อย` });
+    res.json({ success: true, message: `อัปเดตกะ ID ${id} ลง MySQL เรียบร้อยแล้ว` });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -430,7 +732,7 @@ app.delete('/api/shifts/:id', async (req, res) => {
     const pool = getDbPool();
     const id = req.params.id;
     await pool.query('DELETE FROM attendance_shift WHERE id = ?', [id]);
-    res.json({ success: true, message: `ลบกะ ID ${id} ออกจาก MySQL เรียบร้อย` });
+    res.json({ success: true, message: `ลบกะ ID ${id} ออกจาก MySQL เรียบร้อยแล้ว` });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -478,26 +780,240 @@ app.post('/api/shifts/sync-all', async (req, res) => {
     res.json({
       success: true,
       syncedCount: shifts.length,
-      message: `บันทึกกะจำนวน ${shifts.length} รายการลง MySQL samchuk_attendance @ 10.2.0.201 สำเร็จแล้ว!`
+      message: `บันทึกกะจำนวน ${shifts.length} รายการลง MySQL samchuk_attendance @ ${activeDbConfig.host} สำเร็จแล้ว!`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: `ซิงค์ไม่สำเร็จ: ${err.message}` });
   }
 });
 
-// 4.6 รายการข้อมูลสแกน (attendance_raw_scan)
+// 4.6 จัดการข้อมูลสแกน (attendance_raw_scan CRUD โดยตรงใน MySQL)
 app.get('/api/raw-scans', async (req, res) => {
   try {
     const pool = getDbPool();
-    const limit = parseInt(req.query.limit, 10) || 100;
+    const limit = parseInt(req.query.limit, 10) || 200;
     const [rows] = await pool.query('SELECT * FROM attendance_raw_scan ORDER BY scan_date_time DESC LIMIT ?', [limit]);
-    res.json({ success: true, total: rows.length, data: rows });
+    
+    // Map to client format
+    const mapped = rows.map(r => ({
+      id: r.id,
+      machineNo: r.machine_no,
+      deviceIp: r.device_ip,
+      fingleId: r.fingle_id,
+      scanDateTime: r.scan_date_time instanceof Date ? r.scan_date_time.toISOString().replace('T', ' ').substring(0, 19) : String(r.scan_date_time),
+      verifyMode: r.verify_mode,
+      inOutMode: r.in_out_mode,
+      personId: r.person_id,
+      hrFullname: r.hr_fullname,
+      hrPositionName: r.hr_position_name,
+      hrLeavelName: r.hr_leavel_name,
+      hrDepName: r.hr_dep_name,
+      hrDepSubName: r.hr_dep_sub_name,
+      hrPersonTypeName: r.hr_person_type_name,
+      hrPersonTypeId: r.hr_person_type_id,
+      hrDepartmentId: r.hr_department_id,
+      hrDepartmentSubId: r.hr_department_sub_id,
+      hrMapped: Boolean(r.hr_mapped),
+      pushStatus: r.push_status || 'PENDING',
+      pushedAt: r.pushed_at,
+      pushedBy: r.pushed_by,
+      pushBatchId: r.push_batch_id,
+      pushError: r.push_error,
+      receivedAt: r.received_at
+    }));
+
+    res.json({ success: true, total: mapped.length, data: mapped });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// 4.7 เครื่องสแกนทั้งหมด
+// บันทึกสแกนใหม่ 1 รายการลง MySQL attendance_raw_scan
+app.post('/api/raw-scans', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const s = req.body;
+    const scanDateTime = s.scanDateTime || s.scan_date_time || new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    const [result] = await pool.query(`
+      INSERT INTO attendance_raw_scan 
+      (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      s.machineNo || 1,
+      s.deviceIp || '192.168.111.163',
+      s.fingleId || 101,
+      scanDateTime,
+      s.verifyMode || 1,
+      s.inOutMode || 0,
+      s.personId || 1,
+      s.hrFullname || 'ทดสอบ บันทึกเวลา',
+      s.hrPositionName || 'พยาบาลวิชาชีพปฏิบัติการ',
+      s.hrDepName || 'กลุ่มงานการพยาบาล',
+      s.hrPersonTypeName || 'ข้าราชการ',
+      1,
+      s.pushStatus || 'PENDING'
+    ]);
+
+    res.json({
+      success: true,
+      id: result.insertId,
+      message: `บันทึกข้อมูลสแกน ID ${result.insertId} (Fingle ${s.fingleId || 101}) ลง MySQL เรียบร้อยแล้ว`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ลบสแกนรายการเดี่ยวจาก MySQL
+app.delete('/api/raw-scans/:id', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    const id = req.params.id;
+    await pool.query('DELETE FROM attendance_raw_scan WHERE id = ?', [id]);
+    res.json({ success: true, message: `ลบข้อมูลสแกน ID ${id} ออกจาก MySQL เรียบร้อยแล้ว` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ล้างข้อมูลสแกนทั้งหมด
+app.post('/api/raw-scans/clear-all', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    await pool.query('TRUNCATE TABLE attendance_raw_scan');
+    res.json({ success: true, message: 'ล้างข้อมูลตาราง attendance_raw_scan ใน MySQL เรียบร้อยแล้ว' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Seed สแกนตัวอย่างจำลองจากเครื่องสแกนทั้ง 3 เครื่องลง MySQL
+app.post('/api/raw-scans/seed-sample', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const today = new Date().toISOString().substring(0, 10);
+    
+    const samples = [
+      { machineNo: 1, ip: '192.168.111.163', fingleId: 101, time: `${today} 07:55:12`, name: 'พว.สุดารัตน์ พยาบาลดี', pos: 'พยาบาลวิชาชีพชำนาญการ', dep: 'กลุ่มงานการพยาบาล', type: 'ข้าราชการ' },
+      { machineNo: 1, ip: '192.168.111.163', fingleId: 102, time: `${today} 08:05:43`, name: 'นพ.สมชาย รักษาดี', pos: 'นายแพทย์ชำนาญการพิเศษ', dep: 'กลุ่มงานการแพทย์', type: 'ข้าราชการ' },
+      { machineNo: 2, ip: '192.168.111.164', fingleId: 103, time: `${today} 08:12:05`, name: 'นางสาวพิมพ์ใจ มีสุข', pos: 'เจ้าพนักงานธุรการปฏิบัติงาน', dep: 'กลุ่มงานบริหารทั่วไป', type: 'ลูกจ้างประจำ' },
+      { machineNo: 2, ip: '192.168.111.164', fingleId: 104, time: `${today} 08:14:22`, name: 'นายวีระพล ช่างซ่อม', pos: 'นายช่างเทคนิค', dep: 'กลุ่มงานบริหารทั่วไป', type: 'พนักงานราชการ' },
+      { machineNo: 3, ip: '192.168.111.165', fingleId: 105, time: `${today} 08:18:50`, name: 'ภก.ธีรพงศ์ เภสัชกร', pos: 'เภสัชกรชำนาญการ', dep: 'กลุ่มงานเภสัชกรรม', type: 'ข้าราชการ' }
+    ];
+
+    let inserted = 0;
+    for (const s of samples) {
+      try {
+        await pool.query(`
+          INSERT INTO attendance_raw_scan 
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+          VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, 1, 'PENDING')
+          ON DUPLICATE KEY UPDATE hr_fullname = VALUES(hr_fullname)
+        `, [s.machineNo, s.ip, s.fingleId, s.time, s.fingleId, s.name, s.pos, s.dep, s.type]);
+        inserted++;
+      } catch {}
+    }
+
+    res.json({
+      success: true,
+      insertedCount: inserted,
+      message: `เพิ่มข้อมูลสแกนตัวอย่าง ${inserted} รายการลง MySQL samchuk_attendance เรียบร้อยแล้ว`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 4.7 ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 2: hosoffice.hr_person โดยตรง
+app.get('/api/hosoffice/personnel', async (req, res) => {
+  try {
+    const pool = getHosofficePool();
+    const limit = parseInt(req.query.limit, 10) || 500;
+    
+    // พยายาม Query จากตาราง hr_person ของ hosoffice
+    const [rows] = await pool.query(`
+      SELECT 
+        hp.ID as id,
+        hp.FINGLE_ID as fingle_id,
+        hp.HR_CID as hr_cid,
+        CONCAT(COALESCE(hf.HR_PREFIX_NAME, ''), hp.HR_FNAME, ' ', hp.HR_LNAME) as hr_fullname,
+        COALESCE(ht.HR_POSITION_NAME, '') as hr_position_name,
+        COALESCE(hd.HR_DEPARTMENT_NAME, '') as hr_dep_name,
+        COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') as hr_dep_sub_name,
+        COALESCE(hpt.HR_PERSON_TYPE_NAME, '') as hr_person_type_name,
+        COALESCE(hl.HR_LEVEL_NAME, '') as hr_level_name
+      FROM hr_person hp
+      LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+      LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+      LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+      LEFT JOIN hr_department_sub hds ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID
+      LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+      LEFT JOIN hr_level hl ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
+      ORDER BY hp.ID ASC
+      LIMIT ?
+    `, [limit]);
+
+    res.json({
+      success: true,
+      database: hosofficeDbName,
+      total: rows.length,
+      data: rows
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      database: hosofficeDbName,
+      message: `ไม่สามารถดึงข้อมูลจาก ${hosofficeDbName}.hr_person ได้: ${err.message}`
+    });
+  }
+});
+
+// 4.8 ทดสอบบันทึกข้อมูลเข้า hosoffice.fingle_scan
+app.post('/api/hosoffice/test-push', async (req, res) => {
+  try {
+    const pool = getHosofficePool();
+    const { fingleId = 101, scanDateTime = new Date().toISOString().replace('T', ' ').substring(0, 19), machineNo = 1 } = req.body;
+
+    // ตรวจสอบหรือสร้างตาราง fingle_scan ใน hosoffice หากยังไม่มี (สำหรับ staging/dev)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS fingle_scan (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        fingle_id INT NOT NULL,
+        scan_date_time DATETIME NOT NULL,
+        machine_no INT NULL,
+        in_out_mode INT NULL,
+        verify_mode INT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_hos_scan (fingle_id, scan_date_time)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    const [result] = await pool.query(`
+      INSERT INTO fingle_scan (fingle_id, scan_date_time, machine_no, in_out_mode, verify_mode)
+      VALUES (?, ?, ?, 0, 1)
+      ON DUPLICATE KEY UPDATE in_out_mode = VALUES(in_out_mode)
+    `, [fingleId, scanDateTime, machineNo]);
+
+    res.json({
+      success: true,
+      database: hosofficeDbName,
+      table: 'fingle_scan',
+      insertId: result.insertId,
+      message: `บันทึกข้อมูลทดสอบเวลาสแกนเข้า ${hosofficeDbName}.fingle_scan เรียบร้อยแล้ว (Fingle ID: ${fingleId})`
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      database: hosofficeDbName,
+      message: `เขียนข้อมูลเข้า ${hosofficeDbName}.fingle_scan ไม่สำเร็จ: ${err.message}`
+    });
+  }
+});
+
+// 4.9 รายการเครื่องสแกน
 app.get('/api/scanners', (req, res) => {
   res.json({
     success: true,
@@ -506,7 +1022,7 @@ app.get('/api/scanners', (req, res) => {
   });
 });
 
-// 4.8 ทดสอบเชื่อมต่อเครื่องสแกนเดี่ยว (POST)
+// 4.10 ทดสอบเชื่อมต่อเครื่องสแกนเดี่ยว (POST)
 app.post('/api/scanners/test-connection', async (req, res) => {
   const { machineNo = 1, ipAddress = '192.168.111.163', port = 5005, timeoutMs = 3000 } = req.body;
   const result = await testScannerTcpSocket(ipAddress, port, timeoutMs);
@@ -520,7 +1036,7 @@ app.post('/api/scanners/test-connection', async (req, res) => {
   });
 });
 
-// 4.9 ทดสอบ Socket ผ่าน GET
+// 4.11 ทดสอบ Socket ผ่าน GET
 app.get('/api/scanners/test-socket', async (req, res) => {
   const ip = req.query.ip || '192.168.111.163';
   const port = parseInt(req.query.port, 10) || 5005;
@@ -528,7 +1044,7 @@ app.get('/api/scanners/test-socket', async (req, res) => {
   res.json(result);
 });
 
-// 4.10 ทดสอบทุกเครื่องพร้อมกัน (POST /api/scanners/test-all)
+// 4.12 ทดสอบทุกเครื่องพร้อมกัน (POST /api/scanners/test-all)
 app.post('/api/scanners/test-all', async (req, res) => {
   const targets = (Array.isArray(req.body) && req.body.length > 0)
     ? req.body
@@ -541,6 +1057,7 @@ app.post('/api/scanners/test-all', async (req, res) => {
       ip: t.ipAddress,
       port: t.port || 5005,
       success: r.success,
+      latencyMs: r.latencyMs || null,
       message: r.message
     };
   });
@@ -549,7 +1066,7 @@ app.post('/api/scanners/test-all', async (req, res) => {
   res.json({ success: true, results });
 });
 
-// 4.11 ตรวจสอบไฟล์ DLL
+// 4.13 ตรวจสอบไฟล์ DLL
 app.get('/api/scanners/check-dll', (req, res) => {
   const dllPaths = [
     'C:\\Windows\\SysWOW64\\FK623Attend.dll',
@@ -567,26 +1084,109 @@ app.get('/api/scanners/check-dll', (req, res) => {
   });
 });
 
-// 4.12 ส่งข้อมูลเข้า hosoffice (Batch Push)
-app.post('/api/push/batch', (req, res) => {
+// 4.14 ส่งข้อมูลเข้า hosoffice (Batch Push)
+app.post('/api/push/batch', async (req, res) => {
   const { dateFrom, dateTo, machineNo, performedBy = 'ADMIN' } = req.body;
   const batchId = Date.now();
-  console.log(`[Manual Push] ADMIN '${performedBy}' สั่งส่งข้อมูลเข้า hosoffice @ 10.2.0.201 (ช่วง ${dateFrom} - ${dateTo})`);
+  console.log(`[Manual Push] ADMIN '${performedBy}' สั่งส่งข้อมูลเข้า ${hosofficeDbName} @ ${activeDbConfig.host} (ช่วง ${dateFrom} - ${dateTo})`);
 
-  res.json({
-    success: true,
-    message: 'ส่งข้อมูลเข้า hosoffice.fingle_scan เรียบร้อยแล้ว',
-    data: {
-      batchId: String(batchId),
-      insertedCount: 1,
-      skippedCount: 0,
-      failedCount: 0,
-      executedAt: new Date().toISOString()
+  let insertedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  try {
+    const poolAtt = getDbPool();
+    const poolHos = getHosofficePool();
+
+    // ค้นหาสแกนที่มีสถานะ PENDING ในช่วงเวลา
+    let query = 'SELECT * FROM attendance_raw_scan WHERE push_status = "PENDING"';
+    const params = [];
+    if (dateFrom && dateTo) {
+      query += ' AND DATE(scan_date_time) BETWEEN ? AND ?';
+      params.push(dateFrom, dateTo);
     }
-  });
+    if (machineNo) {
+      query += ' AND machine_no = ?';
+      params.push(machineNo);
+    }
+    query += ' LIMIT 500';
+
+    const [scans] = await poolAtt.query(query, params);
+
+    // ตรวจสอบว่าตาราง fingle_scan ใน hosoffice มีหรือไม่
+    await poolHos.query(`
+      CREATE TABLE IF NOT EXISTS fingle_scan (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        fingle_id INT NOT NULL,
+        scan_date_time DATETIME NOT NULL,
+        machine_no INT NULL,
+        in_out_mode INT NULL,
+        verify_mode INT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_hos_scan (fingle_id, scan_date_time)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    for (const scan of scans) {
+      try {
+        await poolHos.query(`
+          INSERT INTO fingle_scan (fingle_id, scan_date_time, machine_no, in_out_mode, verify_mode)
+          VALUES (?, ?, ?, ?, ?)
+        `, [scan.fingle_id, scan.scan_date_time, scan.machine_no, scan.in_out_mode || 0, scan.verify_mode || 1]);
+        insertedCount++;
+
+        // อัปเดตสถานะใน samchuk_attendance
+        await poolAtt.query(`
+          UPDATE attendance_raw_scan 
+          SET push_status = 'PUSHED', pushed_at = NOW(), push_batch_id = ?
+          WHERE id = ?
+        `, [batchId, scan.id]);
+      } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') {
+          skippedCount++;
+          await poolAtt.query(`
+            UPDATE attendance_raw_scan 
+            SET push_status = 'SKIPPED_EXISTS', pushed_at = NOW(), push_batch_id = ?
+            WHERE id = ?
+          `, [batchId, scan.id]);
+        } else {
+          failedCount++;
+          await poolAtt.query(`
+            UPDATE attendance_raw_scan 
+            SET push_status = 'FAILED', push_error = ?
+            WHERE id = ?
+          `, [err.message, scan.id]);
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `ส่งข้อมูลเข้า ${hosofficeDbName}.fingle_scan เรียบร้อยแล้ว (เพิ่มใหม่: ${insertedCount}, ซ้ำเดิม: ${skippedCount}, ล้มเหลว: ${failedCount})`,
+      data: {
+        batchId: String(batchId),
+        insertedCount,
+        skippedCount,
+        failedCount,
+        executedAt: new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: `ส่งข้อมูลเข้า hosoffice ล้มเหลว: ${err.message}`,
+      data: {
+        batchId: String(batchId),
+        insertedCount,
+        skippedCount,
+        failedCount,
+        executedAt: new Date().toISOString()
+      }
+    });
+  }
 });
 
-// 4.13 Route เผื่อการเรียกผ่าน path /api/sam_att/
+// 4.15 Route เผื่อการเรียกผ่าน path /api/sam_att/
 app.use('/api/sam_att', (req, res, next) => {
   req.url = req.url;
   app(req, res, next);
@@ -597,23 +1197,25 @@ app.use('/api/sam_att', (req, res, next) => {
 // --------------------------------------------------------------------------
 app.listen(PORT, '0.0.0.0', async () => {
   console.log('=========================================================================');
-  console.log(`   โรงพยาบาลสามชุก - Sam_Att Backend API Service`);
+  console.log(`   โรงพยาบาลสามชุก - Sam_Att Backend API Service v2.6.0`);
   console.log('=========================================================================');
   console.log(`🚀 กำลังให้บริการ API บนพอร์ต: ${PORT}`);
   console.log(`🌐 Base URL: http://10.2.0.13:${PORT}`);
   console.log(`🏥 เชื่อมต่อกับ Web Frontend: https://10.2.0.13:3001/Sam_Att/`);
-  console.log(`🗄️  ฐานข้อมูลเป้าหมาย: MySQL 10.2.0.201 (samchuk_attendance & hosoffice)`);
-  console.log(`👤 MySQL User: ${dbUser} | Host: ${dbHost}:${dbPort}`);
+  console.log(`🗄️  ฐานข้อมูลเป้าหมายทั้ง 2 ฐาน (Host: ${activeDbConfig.host}:${activeDbConfig.port}):`);
+  console.log(`   1. ${activeDbConfig.database} (ระบบลงเวลา, กะ, Roster, Staging สแกน)`);
+  console.log(`   2. ${hosofficeDbName} (ระบบบุคลากร HOSxP/HOSOffice, fingle_scan)`);
+  console.log(`👤 MySQL User: ${activeDbConfig.user}`);
   console.log('=========================================================================');
   
   // พยายามเชื่อมต่อและตรวจสอบตาราง
   try {
-    console.log('⏳ กำลังตรวจสอบการเชื่อมต่อฐานข้อมูล MySQL 10.2.0.201...');
+    console.log(`⏳ กำลังตรวจสอบการเชื่อมต่อฐานข้อมูล MySQL ${activeDbConfig.host}...`);
     await ensureTablesExist();
-    console.log('✅ ตรวจสอบและเตรียมตารางใน 10.2.0.201 สำเร็จพร้อมใช้งาน!');
+    console.log(`✅ ตรวจสอบและเตรียมตารางใน ${activeDbConfig.database} สำเร็จพร้อมใช้งาน!`);
   } catch (err) {
-    console.log('⚠️ ยังไม่สามารถเชื่อมต่อ MySQL 10.2.0.201 ได้อัตโนมัติ:', err.message);
+    console.log(`⚠️ ยังไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host} ได้อัตโนมัติ:`, err.message);
   }
   
-  console.log('พร้อมรับคำสั่งทดสอบเครื่องสแกนนิ้วและการบันทึกข้อมูลแล้ว...');
+  console.log('พร้อมรับคำสั่งทดสอบฐานข้อมูลทั้ง 2 ฐาน, เครื่องสแกนนิ้ว และการบันทึกข้อมูลแล้ว...');
 });

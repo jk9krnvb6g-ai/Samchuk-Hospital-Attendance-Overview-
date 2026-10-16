@@ -18,7 +18,11 @@ import {
   ShieldCheck,
   CalendarCheck,
   Database,
-  RefreshCw
+  RefreshCw,
+  Settings,
+  Search,
+  Wifi,
+  Key
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { Shift, PersonnelGroup, HrPerson } from '../types/attendance';
@@ -33,8 +37,19 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
 
   // DB Sync State
   const [isSyncingDb, setIsSyncingDb] = useState(false);
-  const [dbSyncMsg, setDbSyncMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [dbSyncMsg, setDbSyncMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string; help?: string } | null>(null);
   const [dbStats, setDbStats] = useState<any>(null);
+  const [showDbSettings, setShowDbSettings] = useState(false);
+  const [isProbing, setIsProbing] = useState(false);
+  const [probeResults, setProbeResults] = useState<any[] | null>(null);
+  const [dbConfigForm, setDbConfigForm] = useState({
+    host: '10.2.0.201',
+    port: 3306,
+    user: 'root',
+    password: '',
+    database: 'samchuk_attendance'
+  });
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
 
   // Sub-tabs
   const [activeTab, setActiveTab] = useState<'shifts' | 'groups' | 'overrides' | 'roster'>('shifts');
@@ -66,14 +81,14 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
     };
   });
 
-  // Sync Shifts to MySQL 10.2.0.201
+  // Sync Shifts to MySQL
   const handleSyncAllShiftsToDb = async () => {
     setIsSyncingDb(true);
-    setDbSyncMsg({ type: 'info', text: 'กำลังเชื่อมต่อ MySQL 10.2.0.201 และบันทึกข้อมูลกะ...' });
+    setDbSyncMsg({ type: 'info', text: 'กำลังเชื่อมต่อ MySQL และบันทึกข้อมูลกะ...' });
     try {
       const res = await apiClient.syncShiftsToDb(state.shifts);
       if (res.success) {
-        setDbSyncMsg({ type: 'success', text: res.message || 'บันทึกกะลง MySQL samchuk_attendance @ 10.2.0.201 สำเร็จ 100%' });
+        setDbSyncMsg({ type: 'success', text: res.message || 'บันทึกกะลง MySQL สำเร็จ 100%' });
         const testRes = await apiClient.testDatabaseConnection();
         if (testRes.success) setDbStats(testRes);
       } else {
@@ -88,19 +103,73 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
 
   const handleTestDb = async () => {
     setIsSyncingDb(true);
-    setDbSyncMsg({ type: 'info', text: 'กำลังตรวจสอบสถานะ MySQL บน 10.2.0.201...' });
+    setDbSyncMsg({ type: 'info', text: 'กำลังตรวจสอบสถานะ MySQL...' });
     try {
       const res = await apiClient.testDatabaseConnection();
       if (res.success) {
         setDbStats(res);
-        setDbSyncMsg({ type: 'success', text: `เชื่อมต่อ MySQL บน 10.2.0.201 สำเร็จ! พบข้อมูลกะในตาราง: ${res.tables?.shifts ?? 0} กะ` });
+        setDbSyncMsg({ 
+          type: 'success', 
+          text: `เชื่อมต่อ MySQL บน ${res.host}:${res.port} สำเร็จ! พบข้อมูลกะในตาราง: ${res.tables?.shifts ?? 0} กะ` 
+        });
       } else {
-        setDbSyncMsg({ type: 'error', text: res.message || 'ติดต่อ MySQL 10.2.0.201 ไม่สำเร็จ (กรุณาตรวจสอบว่า Backend 3002 ทำงานอยู่)' });
+        setDbSyncMsg({ 
+          type: 'error', 
+          text: res.message || 'ติดต่อ MySQL ไม่สำเร็จ',
+          help: res.help
+        });
       }
     } catch (err: any) {
       setDbSyncMsg({ type: 'error', text: `ข้อผิดพลาด: ${err.message}` });
     } finally {
       setIsSyncingDb(false);
+    }
+  };
+
+  const handleProbePorts = async () => {
+    setIsProbing(true);
+    setDbSyncMsg({ type: 'info', text: 'กำลังทดสอบยิงพอร์ต 3306 ไปยัง IP เป้าหมายทั้งหมด...' });
+    try {
+      const res = await apiClient.probeDatabasePorts();
+      if (res.success && res.results) {
+        setProbeResults(res.results);
+        const opened = res.results.filter((r: any) => r.open);
+        if (opened.length > 0) {
+          setDbSyncMsg({ 
+            type: 'info', 
+            text: `พบเซิร์ฟเวอร์เปิดพอร์ต 3306 อยู่ที่: ${opened.map((o: any) => o.host).join(', ')} (คุณสามารถคลิกเลือกใช้ IP ดังกล่าวได้)` 
+          });
+        } else {
+          setDbSyncMsg({ 
+            type: 'error', 
+            text: 'ไม่พบพอร์ต 3306 เปิดอยู่ใน IP ใดๆ เลย (อาจติด Firewall หรือ MySQL ยังไม่เริ่มทำงาน)' 
+          });
+        }
+      }
+    } catch (err: any) {
+      setDbSyncMsg({ type: 'error', text: `Probe Error: ${err.message}` });
+    } finally {
+      setIsProbing(false);
+    }
+  };
+
+  const handleSaveDbConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingConfig(true);
+    setDbSyncMsg({ type: 'info', text: `กำลังทดสอบเชื่อมต่อ ${dbConfigForm.host}:${dbConfigForm.port}...` });
+    try {
+      const res = await apiClient.configureDatabase(dbConfigForm);
+      if (res.success) {
+        setDbSyncMsg({ type: 'success', text: res.message || 'บันทึกการตั้งค่าและเชื่อมต่อ MySQL สำเร็จ!' });
+        setShowDbSettings(false);
+        handleTestDb();
+      } else {
+        setDbSyncMsg({ type: 'error', text: res.message || 'เชื่อมต่อไม่สำเร็จ' });
+      }
+    } catch (err: any) {
+      setDbSyncMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err.message}` });
+    } finally {
+      setIsSavingConfig(false);
     }
   };
 
@@ -235,18 +304,18 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
       {/* TAB 1: SHIFTS MANAGEMENT - Section 16 */}
       {activeTab === 'shifts' && (
         <div className="space-y-4">
-          {/* MySQL Database Sync Banner */}
-          <div className="bg-slate-900 text-white rounded-xl p-4 shadow-sm border border-slate-800">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* MySQL Database Sync & Diagnostic Banner */}
+          <div className="bg-slate-900 text-white rounded-xl p-4 shadow-sm border border-slate-800 space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-lg bg-teal-500/20 text-teal-400 border border-teal-500/30">
                   <Database className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-200">ฐานข้อมูลบันทึกกะจริง:</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold text-slate-200">ฐานข้อมูล MySQL:</span>
                     <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-teal-300 font-semibold border border-slate-700">
-                      10.2.0.201 / samchuk_attendance.attendance_shift
+                      {dbStats?.host || dbConfigForm.host}:{dbStats?.port || dbConfigForm.port} / {dbStats?.database || dbConfigForm.database}
                     </span>
                     {dbStats?.tables?.shifts !== undefined && (
                       <span className="text-[11px] text-emerald-400 font-mono">
@@ -255,21 +324,69 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
                     )}
                   </div>
                   <p className="text-[11px] text-slate-400 mt-0.5">
-                    เมื่อคุณเพิ่ม/แก้ไขกะ ข้อมูลจะถูกบันทึกใน LocalStorage ทันที และสามารถกดปุ่มซิงค์เพื่อเขียนลงตาราง MySQL 10.2.0.201 ได้ตลอดเวลา
+                    เซิร์ฟเวอร์ Backend (พอร์ต 3002) จะทำการอ่าน/เขียนข้อมูลกะและประวัติสแกนนิ้วลงใน MySQL โดยตรง
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={handleTestDb}
                   disabled={isSyncingDb}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 cursor-pointer disabled:opacity-50"
-                  title="ทดสอบว่า MySQL บน 10.2.0.201 เชื่อมต่อได้หรือไม่"
+                  title="ทดสอบว่า MySQL เชื่อมต่อได้หรือไม่"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`} />
                   <span>เช็ค MySQL</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleProbePorts}
+                  disabled={isProbing}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-900/80 hover:bg-sky-800 text-sky-200 text-xs font-semibold rounded-lg border border-sky-700 cursor-pointer disabled:opacity-50"
+                  title="สแกนตรวจหาว่า IP ไหนเปิดพอร์ต 3306 บ้าง"
+                >
+                  <Search className={`w-3.5 h-3.5 ${isProbing ? 'animate-spin' : ''}`} />
+                  <span>{isProbing ? 'กำลังสแกน...' : '🔍 สแกนหาพอร์ต MySQL'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowDbSettings(!showDbSettings)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                    showDbSettings ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                  <span>ตั้งค่า IP/รหัสผ่าน</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsSyncingDb(true);
+                    setDbSyncMsg({ type: 'info', text: 'กำลังโหลดกะสดจาก MySQL 10.2.0.201...' });
+                    try {
+                      const res = await attendanceStore.loadFromMySqlDb();
+                      if (res.success) {
+                        setDbSyncMsg({ type: 'success', text: res.message });
+                        const testRes = await apiClient.testDatabaseConnection();
+                        if (testRes.success) setDbStats(testRes);
+                      } else {
+                        setDbSyncMsg({ type: 'error', text: res.message });
+                      }
+                    } finally {
+                      setIsSyncingDb(false);
+                    }
+                  }}
+                  disabled={isSyncingDb}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white text-xs font-semibold rounded-lg shadow-sm cursor-pointer disabled:opacity-50"
+                  title="ดึงข้อมูลกะสดจากตาราง attendance_shift ใน MySQL 10.2.0.201"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`} />
+                  <span>โหลดกะสดจาก MySQL</span>
                 </button>
 
                 <button
@@ -279,20 +396,186 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
                   className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm cursor-pointer disabled:opacity-50"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  <span>{isSyncingDb ? 'กำลังบันทึกลง DB...' : '💾 บันทึกกะลง MySQL 10.2.0.201'}</span>
+                  <span>{isSyncingDb ? 'กำลังบันทึก...' : '💾 บันทึกกะลง MySQL'}</span>
                 </button>
               </div>
             </div>
 
+            {/* Sync / Test Alert Message */}
             {dbSyncMsg && (
-              <div className={`mt-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2 ${
+              <div className={`p-3 rounded-lg text-xs space-y-1 ${
                 dbSyncMsg.type === 'success' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60' :
                 dbSyncMsg.type === 'error' ? 'bg-rose-950/80 text-rose-300 border border-rose-800/60' :
                 'bg-blue-950/80 text-blue-300 border border-blue-800/60'
               }`}>
-                {dbSyncMsg.type === 'success' ? <Check className="w-4 h-4 shrink-0 text-emerald-400" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-                <span>{dbSyncMsg.text}</span>
+                <div className="flex items-start gap-2">
+                  {dbSyncMsg.type === 'success' ? <Check className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />}
+                  <div>
+                    <div className="font-semibold">{dbSyncMsg.text}</div>
+                    {dbSyncMsg.help && (
+                      <div className="text-[11px] opacity-90 mt-1 pl-1 border-l-2 border-rose-500/40">
+                        {dbSyncMsg.help}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
+            )}
+
+            {/* Probe Results Panel */}
+            {probeResults && (
+              <div className="p-3 bg-slate-950/90 rounded-lg border border-slate-800 text-xs space-y-2">
+                <div className="flex items-center justify-between font-bold text-slate-200">
+                  <span className="flex items-center gap-1.5">
+                    <Wifi className="w-3.5 h-3.5 text-sky-400" />
+                    <span>ผลการสแกนตรวจหาพอร์ต MySQL (3306) ในระบบ:</span>
+                  </span>
+                  <span className="text-[11px] text-slate-400 font-normal">คลิก "เลือกใช้ IP นี้" เพื่อเปลี่ยนทันที</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {probeResults.map((r, idx) => (
+                    <div
+                      key={idx}
+                      className={`p-2.5 rounded-lg border flex items-center justify-between ${
+                        r.open ? 'bg-emerald-950/40 border-emerald-800/60' : 'bg-slate-900 border-slate-800'
+                      }`}
+                    >
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${r.open ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                          <span className="font-mono font-bold text-slate-100">{r.host}:{r.port}</span>
+                          <span className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
+                            r.open ? 'bg-emerald-800/60 text-emerald-300' : 'bg-rose-950 text-rose-400'
+                          }`}>
+                            {r.open ? `เปิดอยู่ (${r.latencyMs}ms)` : 'ปิด/Timeout'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">{r.name}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDbConfigForm({ ...dbConfigForm, host: r.host });
+                          setShowDbSettings(true);
+                        }}
+                        className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-teal-300 text-[11px] font-semibold border border-slate-700 cursor-pointer"
+                      >
+                        เลือก IP นี้
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Inline DB Settings Form */}
+            {showDbSettings && (
+              <form onSubmit={handleSaveDbConfig} className="p-4 bg-slate-950 rounded-lg border border-amber-600/40 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2 text-amber-400 text-xs font-bold">
+                    <Settings className="w-4 h-4" />
+                    <span>ตั้งค่าเชื่อมต่อ MySQL (บันทึกอัตโนมัติลงไฟล์ .env บนเซิร์ฟเวอร์)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowDbSettings(false)}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="text-slate-400">เลือก IP ด่วน:</span>
+                  <button
+                    type="button"
+                    onClick={() => setDbConfigForm({ ...dbConfigForm, host: '10.2.0.201' })}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono text-[11px]"
+                  >
+                    10.2.0.201
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDbConfigForm({ ...dbConfigForm, host: '10.1.0.201' })}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono text-[11px]"
+                  >
+                    10.1.0.201
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDbConfigForm({ ...dbConfigForm, host: 'localhost' })}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono text-[11px]"
+                  >
+                    localhost (127.0.0.1)
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Host / IP เซิร์ฟเวอร์</label>
+                    <input
+                      type="text"
+                      value={dbConfigForm.host}
+                      onChange={(e) => setDbConfigForm({ ...dbConfigForm, host: e.target.value })}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Port</label>
+                    <input
+                      type="number"
+                      value={dbConfigForm.port}
+                      onChange={(e) => setDbConfigForm({ ...dbConfigForm, port: Number(e.target.value) })}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">MySQL Username</label>
+                    <input
+                      type="text"
+                      value={dbConfigForm.user}
+                      onChange={(e) => setDbConfigForm({ ...dbConfigForm, user: e.target.value })}
+                      placeholder="root หรือ attendance_app"
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">MySQL Password</label>
+                    <input
+                      type="password"
+                      value={dbConfigForm.password}
+                      onChange={(e) => setDbConfigForm({ ...dbConfigForm, password: e.target.value })}
+                      placeholder="(ถ้ามีรหัสผ่าน ให้ใส่ที่นี่)"
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-2">
+                  <div className="text-[11px] text-slate-400">
+                    ฐานข้อมูล: <span className="font-mono text-amber-300">{dbConfigForm.database}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowDbSettings(false)}
+                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded hover:bg-slate-700"
+                    >
+                      ยกเลิก
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingConfig}
+                      className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs rounded shadow-sm disabled:opacity-50"
+                    >
+                      {isSavingConfig ? 'กำลังทดสอบและบันทึก...' : 'บันทึกและเชื่อมต่อทันที'}
+                    </button>
+                  </div>
+                </div>
+              </form>
             )}
           </div>
 

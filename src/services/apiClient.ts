@@ -300,7 +300,7 @@ class ApiClientService {
   }
 
   /**
-   * ทดสอบการเชื่อมต่อฐานข้อมูล MySQL 10.2.0.201 ผ่าน Backend API
+   * ทดสอบการเชื่อมต่อฐานข้อมูล MySQL samchuk_attendance ผ่าน Backend API
    */
   public async testDatabaseConnection() {
     try {
@@ -316,7 +316,39 @@ class ApiClientService {
   }
 
   /**
-   * สั่งให้ Backend สร้างโครงสร้างตาราง samchuk_attendance ลงใน MySQL 10.2.0.201 อัตโนมัติ
+   * ทดสอบการเชื่อมต่อฐานข้อมูล hosoffice ผ่าน Backend API
+   */
+  public async testHosofficeDatabase() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/db/test-hosoffice`);
+      const data = await res.json();
+      return data;
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: `ไม่สามารถติดต่อ Backend API พอร์ต 3002 เพื่อเช็ค hosoffice ได้ (${err instanceof Error ? err.message : 'Failed'})`
+      };
+    }
+  }
+
+  /**
+   * ทดสอบการเชื่อมต่อทั้ง 2 ฐานข้อมูลพร้อมกัน (Dual DB Test)
+   */
+  public async testBothDatabases() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/db/test-both`);
+      const data = await res.json();
+      return data;
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: `ไม่สามารถติดต่อ Backend API พอร์ต 3002 ได้ (${err instanceof Error ? err.message : 'Failed'})`
+      };
+    }
+  }
+
+  /**
+   * สั่งให้ Backend สร้างโครงสร้างตาราง samchuk_attendance ลงใน MySQL อัตโนมัติ
    */
   public async initDatabaseTables() {
     try {
@@ -331,7 +363,7 @@ class ApiClientService {
   }
 
   /**
-   * ดึงรายการกะจาก MySQL 10.2.0.201
+   * ดึงรายการกะจาก MySQL โดยตรง
    */
   public async getShiftsFromDb() {
     try {
@@ -343,7 +375,53 @@ class ApiClientService {
   }
 
   /**
-   * ซิงค์กะทั้งหมดจากหน้าเว็บเข้าสู่ MySQL 10.2.0.201
+   * สร้างกะใหม่ลงใน MySQL โดยตรง
+   */
+  public async createShiftInDb(shift: any) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/shifts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(shift)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * แก้ไขกะใน MySQL โดยตรง
+   */
+  public async updateShiftInDb(id: number, shift: any) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/shifts/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(shift)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ลบกะออกจาก MySQL โดยตรง
+   */
+  public async deleteShiftFromDb(id: number) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/shifts/${id}`, {
+        method: 'DELETE'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ซิงค์กะทั้งหมดจากหน้าเว็บเข้าสู่ MySQL
    */
   public async syncShiftsToDb(shifts: any[]) {
     try {
@@ -351,6 +429,132 @@ class ApiClientService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shifts })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ดึงข้อมูลสแกน (attendance_raw_scan) จาก MySQL โดยตรง
+   */
+  public async getRawScansFromDb(limit: number = 200) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans?limit=${limit}`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * บันทึกข้อมูลสแกนใหม่ 1 รายการลง MySQL โดยตรง
+   */
+  public async addRawScanToDb(scan: any) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scan)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ลบข้อมูลสแกน 1 รายการจาก MySQL
+   */
+  public async deleteRawScanFromDb(id: number) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/${id}`, {
+        method: 'DELETE'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ล้างข้อมูลสแกนทั้งหมดใน MySQL
+   */
+  public async clearAllRawScansFromDb() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/clear-all`, {
+        method: 'POST'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * เติมข้อมูลสแกนตัวอย่างจำลองลง MySQL
+   */
+  public async seedSampleRawScansToDb() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/seed-sample`, {
+        method: 'POST'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ดึงข้อมูลบุคลากรจาก hosoffice.hr_person โดยตรง
+   */
+  public async getPersonnelFromHosoffice(limit: number = 500) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/hosoffice/personnel?limit=${limit}`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ทดสอบบันทึกข้อมูลสแกนเวลาเข้า hosoffice.fingle_scan
+   */
+  public async testPushToHosoffice(payload?: { fingleId?: number; scanDateTime?: string; machineNo?: number }) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/hosoffice/test-push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {})
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * Probe ตรวจสอบพอร์ต 3306 บนหลาย IP พร้อมกัน
+   */
+  public async probeDatabasePorts() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/db/probe`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ปรับเปลี่ยนและบันทึกการตั้งค่า MySQL
+   */
+  public async configureDatabase(params: { host: string; port?: number; user?: string; password?: string; database?: string; hosofficeDb?: string }) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/db/configure`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
       });
       return await res.json();
     } catch (err: unknown) {

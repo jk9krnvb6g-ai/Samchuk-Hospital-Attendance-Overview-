@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { PersonnelSyncResult, ShiftResolution } from '../types/attendance';
+import { apiClient } from '../services/apiClient';
 
 interface PersonnelPageProps {
   state: StoreState;
@@ -95,47 +96,65 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
   };
 
   // Perform Sync from HOSOffice
-  const handleExecuteSync = (simulateChanges = false) => {
+  const handleExecuteSync = async (simulateChanges = false) => {
     setIsSyncing(true);
-    setTimeout(() => {
-      let customData = undefined;
-      if (simulateChanges) {
-        // Create an on-the-fly change to test dynamic update
-        customData = [
-          ...attendanceStore.getState().personnel.map(p => ({
-            ID: p.personId,
-            HR_CID: p.hrCid,
-            FULLNAME: p.hrFullname,
-            HR_POSITION_NAME: p.personId === 1 ? 'นายแพทย์ทรงคุณวุฒิ' : p.hrPositionName,
-            HR_LEVEL_NAME: p.personId === 1 ? 'ทรงคุณวุฒิ' : p.hrLevelName,
-            HR_DEPARTMENT_NAME: p.hrDepName,
-            HR_DEPARTMENT_SUB: p.personId === 2 ? 'งานห้องคลอดและทารกแรกเกิด' : p.hrDepSubName,
-            HR_PERSON_TYPE_NAME: p.personId === 7 ? 'พนักงานกระทรวงสาธารณสุข' : p.hrPersonTypeName,
-            FINGLE_ID: p.fingleId
-          })),
-          {
-            ID: 99,
-            HR_CID: '3-7204-99999-99-9',
-            FULLNAME: 'นพ. วรปรัชญ์ ศรีสวัสดิ์',
-            HR_POSITION_NAME: 'นายแพทย์ปฏิบัติการ',
-            HR_LEVEL_NAME: 'ปฏิบัติการ',
-            HR_DEPARTMENT_NAME: 'กลุ่มงานการแพทย์',
-            HR_DEPARTMENT_SUB: 'งานศัลยกรรม',
-            HR_PERSON_TYPE_NAME: 'ข้าราชการ',
-            FINGLE_ID: 155
-          }
-        ];
-      }
+    let customData: any = undefined;
 
-      const result = attendanceStore.syncPersonnelFromHosoffice(state.currentUser, customData);
-      setSyncResult(result);
-      setIsSyncing(false);
-      setIsSyncModalOpen(true);
-      // Automatically switch to UPDATED tab if updates found, else INSERTED or SKIPPED
-      if (result.updatedCount > 0) setSyncActiveTab('UPDATED');
-      else if (result.insertedCount > 0) setSyncActiveTab('INSERTED');
-      else setSyncActiveTab('SKIPPED');
-    }, 600);
+    if (!simulateChanges) {
+      // พยายามดึงข้อมูลบุคลากรจริงจาก MySQL hosoffice.hr_person
+      try {
+        const liveRes = await apiClient.getPersonnelFromHosoffice(500);
+        if (liveRes.success && Array.isArray(liveRes.data) && liveRes.data.length > 0) {
+          customData = liveRes.data.map((r: any) => ({
+            ID: r.id,
+            HR_CID: r.hr_cid || '',
+            FULLNAME: r.hr_fullname || '',
+            HR_POSITION_NAME: r.hr_position_name || '',
+            HR_LEVEL_NAME: r.hr_level_name || '',
+            HR_DEPARTMENT_NAME: r.hr_dep_name || '',
+            HR_DEPARTMENT_SUB: r.hr_dep_sub_name || '',
+            HR_PERSON_TYPE_NAME: r.hr_person_type_name || '',
+            FINGLE_ID: r.fingle_id || r.id
+          }));
+        }
+      } catch {
+        // fallback
+      }
+    } else {
+      // Create an on-the-fly change to test dynamic update
+      customData = [
+        ...attendanceStore.getState().personnel.map(p => ({
+          ID: p.personId,
+          HR_CID: p.hrCid,
+          FULLNAME: p.hrFullname,
+          HR_POSITION_NAME: p.personId === 1 ? 'นายแพทย์ทรงคุณวุฒิ' : p.hrPositionName,
+          HR_LEVEL_NAME: p.personId === 1 ? 'ทรงคุณวุฒิ' : p.hrLevelName,
+          HR_DEPARTMENT_NAME: p.hrDepName,
+          HR_DEPARTMENT_SUB: p.personId === 2 ? 'งานห้องคลอดและทารกแรกเกิด' : p.hrDepSubName,
+          HR_PERSON_TYPE_NAME: p.personId === 7 ? 'พนักงานกระทรวงสาธารณสุข' : p.hrPersonTypeName,
+          FINGLE_ID: p.fingleId
+        })),
+        {
+          ID: 99,
+          HR_CID: '3-7204-99999-99-9',
+          FULLNAME: 'นพ. วรปรัชญ์ ศรีสวัสดิ์',
+          HR_POSITION_NAME: 'นายแพทย์ปฏิบัติการ',
+          HR_LEVEL_NAME: 'ปฏิบัติการ',
+          HR_DEPARTMENT_NAME: 'กลุ่มงานการแพทย์',
+          HR_DEPARTMENT_SUB: 'งานศัลยกรรม',
+          HR_PERSON_TYPE_NAME: 'ข้าราชการ',
+          FINGLE_ID: 155
+        }
+      ];
+    }
+
+    const result = attendanceStore.syncPersonnelFromHosoffice(state.currentUser, customData);
+    setSyncResult(result);
+    setIsSyncing(false);
+    setIsSyncModalOpen(true);
+    if (result.updatedCount > 0) setSyncActiveTab('UPDATED');
+    else if (result.insertedCount > 0) setSyncActiveTab('INSERTED');
+    else setSyncActiveTab('SKIPPED');
   };
 
   // Add a shift for a person today

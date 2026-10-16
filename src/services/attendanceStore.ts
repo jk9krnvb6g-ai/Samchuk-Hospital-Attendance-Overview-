@@ -33,6 +33,7 @@ import {
   INITIAL_USERS,
   HOSOFFICE_MOCK_PERSONNEL_DATA
 } from './mockData';
+import { apiClient } from './apiClient';
 
 const STORAGE_KEY = 'samchuk_attendance_v2_state';
 
@@ -865,6 +866,10 @@ class AttendanceStore {
       };
       this.logAudit(user.username, 'SHIFT', `แก้ไขกะ [${this.state.shifts[idx].shiftCode}] ${this.state.shifts[idx].shiftName} (เวลา ${this.state.shifts[idx].startTime} - ${this.state.shifts[idx].endTime})`);
       this.saveState();
+      // อัปเดตตรงเข้า MySQL ทันที (Background Sync)
+      try {
+        apiClient.updateShiftInDb(id, this.state.shifts[idx]).catch(() => {});
+      } catch {}
     }
   }
 
@@ -879,17 +884,115 @@ class AttendanceStore {
     this.state.shifts.push(newShift);
     this.logAudit(user.username, 'SHIFT', `เพิ่มกะใหม่ [${newShift.shiftCode}] ${newShift.shiftName}`);
     this.saveState();
+    // บันทึกตรงเข้า MySQL ทันที (Background Sync)
+    try {
+      apiClient.createShiftInDb(newShift).catch(() => {});
+    } catch {}
   }
 
   public deactivateShift(id: number, user: User) {
     if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    // Section 16.1: Soft delete only!
+    // Section 16.1: Soft delete
     const idx = this.state.shifts.findIndex(s => s.id === id);
     if (idx >= 0) {
       this.state.shifts[idx].isActive = false;
       this.state.shifts[idx].updatedAt = formatDateTime();
       this.logAudit(user.username, 'SHIFT', `ปิดการใช้งานกะ [${this.state.shifts[idx].shiftCode}] (Soft Delete)`);
       this.saveState();
+      try {
+        apiClient.updateShiftInDb(id, this.state.shifts[idx]).catch(() => {});
+      } catch {}
+    }
+  }
+
+  public deleteShiftHard(id: number, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const idx = this.state.shifts.findIndex(s => s.id === id);
+    if (idx >= 0) {
+      const code = this.state.shifts[idx].shiftCode;
+      this.state.shifts.splice(idx, 1);
+      this.logAudit(user.username, 'SHIFT', `ลบกะ [${code}] ออกจากฐานข้อมูลถาวร`);
+      this.saveState();
+      try {
+        apiClient.deleteShiftFromDb(id).catch(() => {});
+      } catch {}
+    }
+  }
+
+  /**
+   * ดึงข้อมูลสดจากฐานข้อมูล MySQL (10.2.0.201) เข้าสู่ Store โดยตรง
+   */
+  public async loadFromMySqlDb(): Promise<{ success: boolean; shiftsCount: number; scansCount: number; message: string }> {
+    try {
+      let shiftsCount = 0;
+      let scansCount = 0;
+
+      // 1. ดึงกะจาก MySQL attendance_shift
+      const shiftsRes = await apiClient.getShiftsFromDb();
+      if (shiftsRes.success && Array.isArray(shiftsRes.data) && shiftsRes.data.length > 0) {
+        this.state.shifts = shiftsRes.data.map((r: any) => ({
+          id: r.id,
+          shiftCode: r.code || r.shift_code || 'M',
+          shiftName: r.name || r.shift_name || '',
+          startTime: r.startTime || '08:15',
+          endTime: r.endTime || '16:00',
+          crossesMidnight: Boolean(r.crossesMidnight),
+          workDateBasis: r.workDateBasis || 'START_DATE',
+          lateGraceMinutes: r.lateGraceMinutes || 0,
+          inWindowBeforeMin: r.inWindowBeforeMin || 120,
+          outWindowAfterMin: r.outWindowAfterMin || 120,
+          earlyLeaveMin: r.earlyLeaveMin || 0,
+          duplicateScanMin: r.duplicateScanMin || 5,
+          color: r.color || '#0ea5e9',
+          isActive: r.isActive !== false,
+          createdAt: formatDateTime(),
+          updatedAt: formatDateTime()
+        }));
+        shiftsCount = this.state.shifts.length;
+      }
+
+      // 2. ดึงข้อมูลสแกนจาก MySQL attendance_raw_scan
+      const scansRes = await apiClient.getRawScansFromDb(200);
+      if (scansRes.success && Array.isArray(scansRes.data)) {
+        this.state.rawScans = scansRes.data;
+        scansCount = this.state.rawScans.length;
+      }
+
+      this.saveState();
+      this.notify();
+
+      return {
+        success: true,
+        shiftsCount,
+        scansCount,
+        message: `โหลดข้อมูลจาก MySQL สำเร็จ: พบกะ ${shiftsCount} กะ, ข้อมูลสแกน ${scansCount} รายการ`
+      };
+    } catch (err) {
+      return {
+        success: false,
+        shiftsCount: 0,
+        scansCount: 0,
+        message: `โหลดจาก MySQL ไม่สำเร็จ: ${err instanceof Error ? err.message : 'Failed'}`
+      };
+    }
+  }
+
+  /**
+   * ล้างแคชใน LocalStorage เพื่อให้ระบบทำงานกับ MySQL 100%
+   */
+  public async purgeLocalStorageAndReloadFromMySql(): Promise<{ success: boolean; message: string }> {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      const res = await this.loadFromMySqlDb();
+      return {
+        success: res.success,
+        message: `ล้างแคชเรียบร้อย! ${res.message}`
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: `เกิดข้อผิดพลาด: ${err instanceof Error ? err.message : 'Failed'}`
+      };
     }
   }
 
