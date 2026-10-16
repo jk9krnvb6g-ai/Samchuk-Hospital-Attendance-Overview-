@@ -101,61 +101,43 @@ class AttendanceStore {
   private autoSyncTimer: number | null = null;
 
   constructor() {
+    this.purgeLocalStorageCacheOnly();
     this.state = this.loadState();
-    // Compact any existing oversized legacy state in localStorage
-    this.saveState();
+    // โหลดข้อมูลสดจาก MySQL ทันทีที่เปิดแอปพลิเคชัน
+    if (typeof window !== 'undefined') {
+      setTimeout(() => {
+        this.loadFromMySqlDb().catch(() => {});
+      }, 300);
+    }
+  }
+
+  private purgeLocalStorageCacheOnly() {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem('samchuk_attendance_state');
+        localStorage.removeItem('samchuk_attendance_v2_state');
+      }
+    } catch {}
   }
 
   private loadState(): StoreState {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        const dedupe = <T extends { id?: number }>(arr?: T[]): T[] => {
-          if (!arr) return [];
-          const seen = new Set<number>();
-          return arr.map(item => {
-            let id = item.id;
-            if (!id || seen.has(id)) {
-              id = generateUniqueId();
-            }
-            seen.add(id);
-            return { ...item, id };
-          });
-        };
-
-        return {
-          ...parsed,
-          currentUser: parsed.currentUser || INITIAL_USERS[0],
-          rawScans: (dedupe(parsed.rawScans) || INITIAL_RAW_SCANS).slice(0, 150),
-          syncLogs: (dedupe(parsed.syncLogs) || INITIAL_SYNC_LOGS).slice(0, 40),
-          auditLogs: (dedupe(parsed.auditLogs) || INITIAL_AUDIT_LOGS).slice(0, 40),
-          pushBatches: (dedupe(parsed.pushBatches) || INITIAL_PUSH_BATCHES).slice(0, 25),
-          shifts: dedupe(parsed.shifts) || INITIAL_SHIFTS,
-          groups: dedupe(parsed.groups) || INITIAL_GROUPS,
-          personOverrides: dedupe(parsed.personOverrides) || INITIAL_PERSON_OVERRIDES,
-          cachedDailyResults: {}, // Keep calculation cache strictly in-memory to prevent quota exhaustion
-          lastAutoCalculatedAt: parsed.lastAutoCalculatedAt || formatDateTime()
-        };
-      }
-    } catch {
-      // fallback
-    }
+    this.purgeLocalStorageCacheOnly();
 
     return {
       currentUser: INITIAL_USERS[0], // Default ADMIN
       users: INITIAL_USERS,
       scanners: INITIAL_SCANNERS,
-      shifts: INITIAL_SHIFTS,
-      personnel: INITIAL_PERSONNEL,
-      groups: INITIAL_GROUPS,
-      personOverrides: INITIAL_PERSON_OVERRIDES,
-      roster: INITIAL_ROSTER,
-      rawScans: INITIAL_RAW_SCANS,
-      hosofficeScans: INITIAL_HOSOFFICE_FINGLE_SCANS,
-      pushBatches: INITIAL_PUSH_BATCHES,
-      syncLogs: INITIAL_SYNC_LOGS,
-      auditLogs: INITIAL_AUDIT_LOGS,
+      shifts: [], // เริ่มต้นว่างเปล่า โหลดสดจาก MySQL attendance_shift เท่านั้น
+      personnel: [], // เริ่มต้นว่างเปล่า โหลดสดจาก MySQL hosoffice.hr_person
+      groups: [],
+      personOverrides: [],
+      roster: [],
+      rawScans: [], // เริ่มต้นว่างเปล่า โหลดสดจาก MySQL attendance_raw_scan
+      hosofficeScans: [],
+      pushBatches: [],
+      syncLogs: [],
+      auditLogs: [],
       autoSyncEnabled: true,
       lastAutoCalculatedAt: formatDateTime(),
       cachedDailyResults: {}
@@ -163,57 +145,8 @@ class AttendanceStore {
   }
 
   private saveState() {
-    // 1. In-memory trims to prevent memory leakage and unbound array growth
-    if (this.state.rawScans && this.state.rawScans.length > 150) {
-      this.state.rawScans = this.state.rawScans.slice(0, 150);
-    }
-    if (this.state.syncLogs && this.state.syncLogs.length > 40) {
-      this.state.syncLogs = this.state.syncLogs.slice(0, 40);
-    }
-    if (this.state.auditLogs && this.state.auditLogs.length > 40) {
-      this.state.auditLogs = this.state.auditLogs.slice(0, 40);
-    }
-    if (this.state.pushBatches && this.state.pushBatches.length > 25) {
-      this.state.pushBatches = this.state.pushBatches.slice(0, 25);
-    }
-    if (this.state.hosofficeScans && this.state.hosofficeScans.length > 150) {
-      this.state.hosofficeScans = this.state.hosofficeScans.slice(0, 150);
-    }
-
-    try {
-      // Exclude large calculation cache from persistent storage to keep payload small (< 100KB)
-      const stateToPersist = {
-        ...this.state,
-        cachedDailyResults: {}
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToPersist));
-    } catch {
-      // If quota exceeded or writing fails, prune aggressively and retry safely
-      try {
-        const compactState = {
-          currentUser: this.state.currentUser,
-          users: this.state.users,
-          scanners: this.state.scanners,
-          shifts: this.state.shifts,
-          personnel: this.state.personnel,
-          groups: this.state.groups,
-          personOverrides: this.state.personOverrides,
-          roster: this.state.roster,
-          rawScans: this.state.rawScans.slice(0, 30),
-          hosofficeScans: this.state.hosofficeScans.slice(0, 30),
-          pushBatches: this.state.pushBatches.slice(0, 5),
-          syncLogs: this.state.syncLogs.slice(0, 5),
-          auditLogs: this.state.auditLogs.slice(0, 5),
-          autoSyncEnabled: this.state.autoSyncEnabled,
-          lastAutoCalculatedAt: this.state.lastAutoCalculatedAt,
-          cachedDailyResults: {}
-        };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(compactState));
-      } catch {
-        // Degrade safely to in-memory state without crashing or logging fatal console.error
-        console.warn('LocalStorage quota limit reached; continuing with in-memory store.');
-      }
-    }
+    // ปิดการบันทึกลง LocalStorage ถาวรตามที่ผู้ใช้สั่ง ให้ใช้ฐานข้อมูล MySQL เท่านั้น
+    this.purgeLocalStorageCacheOnly();
     this.notify();
   }
 
@@ -929,25 +862,29 @@ class AttendanceStore {
 
       // 1. ดึงกะจาก MySQL attendance_shift
       const shiftsRes = await apiClient.getShiftsFromDb();
-      if (shiftsRes.success && Array.isArray(shiftsRes.data) && shiftsRes.data.length > 0) {
-        this.state.shifts = shiftsRes.data.map((r: any) => ({
-          id: r.id,
-          shiftCode: r.code || r.shift_code || 'M',
-          shiftName: r.name || r.shift_name || '',
-          startTime: r.startTime || '08:15',
-          endTime: r.endTime || '16:00',
-          crossesMidnight: Boolean(r.crossesMidnight),
-          workDateBasis: r.workDateBasis || 'START_DATE',
-          lateGraceMinutes: r.lateGraceMinutes || 0,
-          inWindowBeforeMin: r.inWindowBeforeMin || 120,
-          outWindowAfterMin: r.outWindowAfterMin || 120,
-          earlyLeaveMin: r.earlyLeaveMin || 0,
-          duplicateScanMin: r.duplicateScanMin || 5,
-          color: r.color || '#0ea5e9',
-          isActive: r.isActive !== false,
-          createdAt: formatDateTime(),
-          updatedAt: formatDateTime()
-        }));
+      if (shiftsRes.success && Array.isArray(shiftsRes.data)) {
+        if (shiftsRes.data.length > 0) {
+          this.state.shifts = shiftsRes.data.map((r: any) => ({
+            id: r.id,
+            shiftCode: r.code || r.shift_code || 'M',
+            shiftName: r.name || r.shift_name || '',
+            startTime: r.startTime || '08:15',
+            endTime: r.endTime || '16:00',
+            crossesMidnight: Boolean(r.crossesMidnight),
+            workDateBasis: r.workDateBasis || 'START_DATE',
+            lateGraceMinutes: r.lateGraceMinutes || 0,
+            inWindowBeforeMin: r.inWindowBeforeMin || 120,
+            outWindowAfterMin: r.outWindowAfterMin || 120,
+            earlyLeaveMin: r.earlyLeaveMin || 0,
+            duplicateScanMin: r.duplicateScanMin || 5,
+            color: r.color || '#0ea5e9',
+            isActive: r.isActive !== false,
+            createdAt: formatDateTime(),
+            updatedAt: formatDateTime()
+          }));
+        } else {
+          this.state.shifts = [];
+        }
         shiftsCount = this.state.shifts.length;
       }
 
@@ -958,6 +895,28 @@ class AttendanceStore {
         scansCount = this.state.rawScans.length;
       }
 
+      // 3. ดึงบุคลากรจาก MySQL hosoffice.hr_person
+      try {
+        const pRes = await apiClient.getPersonnelFromHosoffice(200);
+        if (pRes.success && Array.isArray(pRes.data) && pRes.data.length > 0) {
+          this.state.personnel = pRes.data.map((p: any) => ({
+            id: p.id,
+            fingleId: p.fingleId || p.id,
+            hrFullname: p.hrFullname || '',
+            hrPositionName: p.hrPositionName || '',
+            hrLeavelName: p.hrLeavelName || '',
+            hrDepName: p.hrDepName || '',
+            hrDepSubName: p.hrDepSubName || '',
+            hrPersonTypeName: p.hrPersonTypeName || 'ข้าราชการ',
+            hrPersonTypeId: p.hrPersonTypeId || 1,
+            hrDepartmentId: p.hrDepartmentId || 1,
+            hrDepartmentSubId: p.hrDepartmentSubId || 1,
+            hrStatusId: p.hrStatusId || 1,
+            active: true
+          }));
+        }
+      } catch {}
+
       this.saveState();
       this.notify();
 
@@ -965,7 +924,7 @@ class AttendanceStore {
         success: true,
         shiftsCount,
         scansCount,
-        message: `โหลดข้อมูลจาก MySQL สำเร็จ: พบกะ ${shiftsCount} กะ, ข้อมูลสแกน ${scansCount} รายการ`
+        message: `โหลดข้อมูลสดจาก MySQL 10.2.0.201 สำเร็จ: พบกะ ${shiftsCount} กะ, บันทึกสแกน ${scansCount} รายการ, บุคลากร ${this.state.personnel.length} คน`
       };
     } catch (err) {
       return {
@@ -978,20 +937,49 @@ class AttendanceStore {
   }
 
   /**
-   * ล้างแคชใน LocalStorage เพื่อให้ระบบทำงานกับ MySQL 100%
+   * ล้างข้อมูลทั้งหมดใน LocalStorage ถาวร 100% ตามคำขอ และดึงข้อมูลตรงจาก MySQL
    */
   public async purgeLocalStorageAndReloadFromMySql(): Promise<{ success: boolean; message: string }> {
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.clear();
+      }
+      this.state.shifts = [];
+      this.state.rawScans = [];
+      this.state.personnel = [];
+      this.notify();
       const res = await this.loadFromMySqlDb();
       return {
         success: res.success,
-        message: `ล้างแคชเรียบร้อย! ${res.message}`
+        message: `ลบ LocalStorage สำเร็จ 100%! ไม่มีการเก็บแคชในเบราว์เซอร์แล้ว เชื่อมต่อฐานข้อมูลตรงเท่านั้น (${res.message})`
       };
     } catch (err) {
       return {
         success: false,
         message: `เกิดข้อผิดพลาด: ${err instanceof Error ? err.message : 'Failed'}`
+      };
+    }
+  }
+
+  /**
+   * นำเข้ากะมาตรฐานโรงพยาบาลสามชุก 4 กะหลัก (M, A, N, MA) ลงใน MySQL attendance_shift โดยตรง
+   */
+  public async seedHospitalShiftsToMySql(): Promise<{ success: boolean; message: string }> {
+    const defaultShifts: Partial<Shift>[] = [
+      { shiftCode: 'M', shiftName: 'เช้า (ปกติ)', startTime: '08:15', endTime: '16:00', crossesMidnight: false, workDateBasis: 'START_DATE', lateGraceMinutes: 0, inWindowBeforeMin: 120, outWindowAfterMin: 120, earlyLeaveMin: 0, duplicateScanMin: 5, color: '#0ea5e9', isActive: true },
+      { shiftCode: 'A', shiftName: 'บ่าย', startTime: '16:00', endTime: '24:00', crossesMidnight: false, workDateBasis: 'START_DATE', lateGraceMinutes: 0, inWindowBeforeMin: 120, outWindowAfterMin: 120, earlyLeaveMin: 0, duplicateScanMin: 5, color: '#f59e0b', isActive: true },
+      { shiftCode: 'N', shiftName: 'ดึก', startTime: '00:00', endTime: '08:00', crossesMidnight: false, workDateBasis: 'START_DATE', lateGraceMinutes: 0, inWindowBeforeMin: 120, outWindowAfterMin: 120, earlyLeaveMin: 0, duplicateScanMin: 5, color: '#8b5cf6', isActive: true },
+      { shiftCode: 'MA', shiftName: 'เช้าควบบ่าย (16 ชม.)', startTime: '08:15', endTime: '24:00', crossesMidnight: false, workDateBasis: 'START_DATE', lateGraceMinutes: 0, inWindowBeforeMin: 120, outWindowAfterMin: 120, earlyLeaveMin: 0, duplicateScanMin: 5, color: '#10b981', isActive: true }
+    ];
+
+    try {
+      const res = await apiClient.syncShiftsToDb(defaultShifts as any);
+      await this.loadFromMySqlDb();
+      return res;
+    } catch (err) {
+      return {
+        success: false,
+        message: `นำเข้ากะไม่สำเร็จ: ${err instanceof Error ? err.message : 'Failed'}`
       };
     }
   }

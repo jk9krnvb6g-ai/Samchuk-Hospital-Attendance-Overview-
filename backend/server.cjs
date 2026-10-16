@@ -125,10 +125,29 @@ function resetDbPool(newConfig) {
   return getDbPool();
 }
 
+// ฟังก์ชันสร้างฐานข้อมูลอัตโนมัติหากยังไม่มีใน MySQL
+async function autoCreateDatabaseIfNotExist(dbName = activeDbConfig.database) {
+  try {
+    const tempConn = await mysql.createConnection({
+      host: activeDbConfig.host,
+      port: activeDbConfig.port,
+      user: activeDbConfig.user,
+      password: activeDbConfig.password,
+      connectTimeout: 3500
+    });
+    await tempConn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    await tempConn.end();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message, code: err.code };
+  }
+}
+
 // --------------------------------------------------------------------------
 // 2. ฟังก์ชันตรวจสอบและสร้างตารางเริ่มต้นอัตโนมัติ (Auto-Migration)
 // --------------------------------------------------------------------------
 async function ensureTablesExist() {
+  await autoCreateDatabaseIfNotExist(activeDbConfig.database);
   const pool = getDbPool();
   try {
     // 2.1 ตารางกะ attendance_shift
@@ -342,8 +361,20 @@ app.get('/api/health', (req, res) => {
 app.get('/api/db/test', async (req, res) => {
   const start = Date.now();
   try {
-    const pool = getDbPool();
-    const [dbTest] = await pool.query('SELECT DATABASE() as db, VERSION() as version, NOW() as server_time');
+    let pool = getDbPool();
+    let dbTest;
+    try {
+      [dbTest] = await pool.query('SELECT DATABASE() as db, VERSION() as version, NOW() as server_time');
+    } catch (err) {
+      if (err.code === 'ER_BAD_DB_ERROR') {
+        await autoCreateDatabaseIfNotExist(activeDbConfig.database);
+        resetDbPool();
+        pool = getDbPool();
+        [dbTest] = await pool.query('SELECT DATABASE() as db, VERSION() as version, NOW() as server_time');
+      } else {
+        throw err;
+      }
+    }
     const latencyMs = Date.now() - start;
     
     // ตรวจสอบตารางใน samchuk_attendance
@@ -351,22 +382,22 @@ app.get('/api/db/test', async (req, res) => {
     try {
       const [shiftRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_shift');
       tableStats.shifts = shiftRows[0].count;
-    } catch { tableStats.shifts = 'ยังไม่มีตาราง'; }
+    } catch { tableStats.shifts = 0; }
 
     try {
       const [scanRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_raw_scan');
       tableStats.rawScans = scanRows[0].count;
-    } catch { tableStats.rawScans = 'ยังไม่มีตาราง'; }
+    } catch { tableStats.rawScans = 0; }
 
     try {
       const [rosterRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_person_roster');
       tableStats.roster = rosterRows[0].count;
-    } catch { tableStats.roster = 'ยังไม่มีตาราง'; }
+    } catch { tableStats.roster = 0; }
 
     try {
       const [grpRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_personnel_group');
       tableStats.groups = grpRows[0].count;
-    } catch { tableStats.groups = 'ยังไม่มีตาราง'; }
+    } catch { tableStats.groups = 0; }
 
     res.json({
       success: true,
@@ -390,9 +421,11 @@ app.get('/api/db/test', async (req, res) => {
       code: err.code,
       message: `ไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host}:${activeDbConfig.port} ได้: ${err.message}`,
       help: err.code === 'ETIMEDOUT'
-        ? `เกิดข้อผิดพลาด ETIMEDOUT (ติดต่อ IP ${activeDbConfig.host} พอร์ต ${activeDbConfig.port} ไม่ได้)`
+        ? `เกิดข้อผิดพลาด ETIMEDOUT (ติดต่อ IP ${activeDbConfig.host} พอร์ต ${activeDbConfig.port} ไม่ได้ ตรวจสอบ Firewall หรือใช้ localhost หากรันบนเครื่องเดียวกัน)`
+        : err.code === 'ECONNREFUSED'
+        ? `ถูกปฏิเสธการเชื่อมต่อ (ECONNREFUSED) ตรวจสอบว่าเปิด MySQL Service บน ${activeDbConfig.host} แล้วหรือไม่`
         : err.code === 'ER_ACCESS_DENIED_ERROR'
-        ? `รหัสผ่านหรือ User '${activeDbConfig.user}' ไม่ถูกต้อง`
+        ? `รหัสผ่านหรือ User '${activeDbConfig.user}' ไม่ถูกต้องบน MySQL 10.2.0.201`
         : err.message
     });
   }
@@ -442,7 +475,12 @@ app.get('/api/db/test-hosoffice', async (req, res) => {
       port: activeDbConfig.port,
       user: activeDbConfig.user,
       code: err.code,
-      message: `ไม่สามารถเชื่อมต่อฐานข้อมูล ${hosofficeDbName} ได้: ${err.message}`
+      message: `ไม่สามารถเชื่อมต่อฐานข้อมูล ${hosofficeDbName} ได้: ${err.message}`,
+      help: err.code === 'ER_BAD_DB_ERROR'
+        ? `ไม่พบฐานข้อมูลชื่อ '${hosofficeDbName}' บน MySQL (ตรวจสอบชื่อฐานข้อมูล เช่น hos, hosxp, หรือ samchuk_attendance)`
+        : err.code === 'ER_ACCESS_DENIED_ERROR'
+        ? `User '${activeDbConfig.user}' ไม่มีสิทธิ์เข้าถึงฐานข้อมูล ${hosofficeDbName}`
+        : err.message
     });
   }
 });
@@ -455,9 +493,21 @@ app.get('/api/db/test-both', async (req, res) => {
 
   // Test 1: samchuk_attendance
   try {
-    const poolAtt = getDbPool();
+    let poolAtt = getDbPool();
+    let rowAtt;
     const t0 = Date.now();
-    const [rowAtt] = await poolAtt.query('SELECT DATABASE() as db, VERSION() as ver, NOW() as now');
+    try {
+      [rowAtt] = await poolAtt.query('SELECT DATABASE() as db, VERSION() as ver, NOW() as now');
+    } catch (err) {
+      if (err.code === 'ER_BAD_DB_ERROR') {
+        await autoCreateDatabaseIfNotExist(activeDbConfig.database);
+        resetDbPool();
+        poolAtt = getDbPool();
+        [rowAtt] = await poolAtt.query('SELECT DATABASE() as db, VERSION() as ver, NOW() as now');
+      } else {
+        throw err;
+      }
+    }
     const latAtt = Date.now() - t0;
     
     let tableStats = {};
@@ -489,6 +539,7 @@ app.get('/api/db/test-both', async (req, res) => {
       success: false,
       database: activeDbConfig.database,
       error: err.message,
+      code: err.code,
       message: `เชื่อมต่อล้มเหลว: ${err.message}`
     };
   }
@@ -524,6 +575,7 @@ app.get('/api/db/test-both', async (req, res) => {
       success: false,
       database: hosofficeDbName,
       error: err.message,
+      code: err.code,
       message: `เชื่อมต่อล้มเหลว: ${err.message}`
     };
   }
@@ -533,6 +585,7 @@ app.get('/api/db/test-both', async (req, res) => {
     durationMs: Date.now() - start,
     serverHost: activeDbConfig.host,
     serverPort: activeDbConfig.port,
+    activeUser: activeDbConfig.user,
     attendance: attResult,
     hosoffice: hosResult
   });
@@ -566,7 +619,77 @@ app.get('/api/db/probe', async (req, res) => {
   });
 });
 
-// 4.2.4 ปรับเปลี่ยนการตั้งค่าเชื่อมต่อ MySQL และบันทึกลง .env ทันที
+// 4.2.4 Probe บัญชีผู้ใช้ MySQL ทั่วไปอัตโนมัติ (Credentials Diagnostic)
+app.get('/api/db/probe-auth', async (req, res) => {
+  const host = req.query.host || activeDbConfig.host;
+  const port = parseInt(req.query.port || activeDbConfig.port, 10);
+  const candidates = [
+    { label: 'ค่าปัจจุบันที่ตั้งไว้', user: activeDbConfig.user, password: activeDbConfig.password },
+    { label: 'sa / sa (มาตรฐาน HOSxP)', user: 'sa', password: 'sa' },
+    { label: 'sa / (รหัสว่าง)', user: 'sa', password: '' },
+    { label: 'root / (รหัสว่าง)', user: 'root', password: '' },
+    { label: 'root / root', user: 'root', password: 'root' },
+    { label: 'root / admin', user: 'root', password: 'admin' },
+    { label: 'attendance_app / (รหัสว่าง)', user: 'attendance_app', password: '' },
+    { label: 'samchuk_sync / (รหัสว่าง)', user: 'samchuk_sync', password: '' }
+  ];
+
+  const results = [];
+  let workingConfig = null;
+
+  for (const c of candidates) {
+    try {
+      const conn = await mysql.createConnection({
+        host,
+        port,
+        user: c.user,
+        password: c.password,
+        connectTimeout: 2000
+      });
+      const [v] = await conn.query('SELECT VERSION() as ver');
+      let dbs = [];
+      try {
+        const [d] = await conn.query('SHOW DATABASES');
+        dbs = d.map(item => Object.values(item)[0]);
+      } catch {}
+      await conn.end();
+
+      const itemResult = {
+        label: c.label,
+        user: c.user,
+        password: c.password ? '******' : '(ว่าง)',
+        rawPassword: c.password,
+        success: true,
+        version: v[0]?.ver,
+        databases: dbs,
+        message: 'เชื่อมต่อสำเร็จ!'
+      };
+      results.push(itemResult);
+      if (!workingConfig) {
+        workingConfig = { host, port, user: c.user, password: c.password, databases: dbs };
+      }
+    } catch (err) {
+      results.push({
+        label: c.label,
+        user: c.user,
+        password: c.password ? '******' : '(ว่าง)',
+        success: false,
+        code: err.code,
+        message: err.message
+      });
+    }
+  }
+
+  res.json({
+    success: results.some(r => r.success),
+    host,
+    port,
+    workingConfig,
+    results
+  });
+});
+
+// 4.2.5 ปรับเปลี่ยนการตั้งค่าเชื่อมต่อ MySQL และบันทึกลง .env ทันที
 app.post('/api/db/configure', async (req, res) => {
   const { host, port, user, password, database, hosofficeDb } = req.body;
   if (!host) {
@@ -586,17 +709,30 @@ app.post('/api/db/configure', async (req, res) => {
   }
 
   try {
+    // 1. เชื่อมต่อเซิร์ฟเวอร์ MySQL โดยตรง (ไม่ต้องระบุ database ก่อนเพื่อป้องกัน ER_BAD_DB_ERROR)
     const testConn = await mysql.createConnection({
-      ...testConfig,
+      host: testConfig.host,
+      port: testConfig.port,
+      user: testConfig.user,
+      password: testConfig.password,
       connectTimeout: 3500
     });
-    await testConn.query('SELECT 1');
+    
+    // 2. สร้างฐานข้อมูล samchuk_attendance ทันทีหากยังไม่มี
+    await testConn.query(`CREATE DATABASE IF NOT EXISTS \`${testConfig.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    
+    // 3. ดูรายชื่อฐานข้อมูลทั้งหมดบน MySQL
+    let dbList = [];
+    try {
+      const [dbs] = await testConn.query('SHOW DATABASES');
+      dbList = dbs.map(d => Object.values(d)[0]);
+    } catch {}
     await testConn.end();
 
-    // บันทึกและรีเซ็ต pool
+    // 4. บันทึกและรีเซ็ต pool
     resetDbPool(testConfig);
 
-    // บันทึกลง .env เพื่อให้ค่าคงอยู่ข้ามการรีสตาร์ท
+    // 5. บันทึกลง .env เพื่อให้ค่าคงอยู่ข้ามการรีสตาร์ท
     const envPath = path.join(process.cwd(), '.env');
     let envData = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
     const updateKey = (key, val) => {
@@ -612,19 +748,25 @@ app.post('/api/db/configure', async (req, res) => {
     if (hosofficeDb) updateKey('HOSOFFICE_DB', hosofficeDbName);
     fs.writeFileSync(envPath, envData.trim() + '\n', 'utf8');
 
-    // พยายามสร้างตารางอัตโนมัติ
+    // 6. สร้างตารางเริ่มต้นอัตโนมัติ
     await ensureTablesExist();
 
     res.json({
       success: true,
       config: { ...testConfig, password: testConfig.password ? '******' : '(ว่าง)' },
+      databases: dbList,
       message: `เชื่อมต่อและบันทึกการตั้งค่า MySQL ${testConfig.host}:${testConfig.port} สำเร็จเรียบร้อยแล้ว!`
     });
   } catch (err) {
     res.status(500).json({
       success: false,
       code: err.code,
-      message: `ทดสอบเชื่อมต่อ ${testConfig.host}:${testConfig.port} ล้มเหลว: ${err.message}`
+      message: `ทดสอบเชื่อมต่อ ${testConfig.host}:${testConfig.port} ล้มเหลว: ${err.message}`,
+      help: err.code === 'ER_ACCESS_DENIED_ERROR'
+        ? `รหัสผ่านหรือ User '${testConfig.user}' ไม่ถูกต้อง กรุณาลองใช้ 'sa' หรือ 'root'`
+        : err.code === 'ETIMEDOUT'
+        ? `ติดต่อ ${testConfig.host}:${testConfig.port} ไม่ได้ (Timeout) กรุณาตรวจสอบ Firewall`
+        : err.message
     });
   }
 });

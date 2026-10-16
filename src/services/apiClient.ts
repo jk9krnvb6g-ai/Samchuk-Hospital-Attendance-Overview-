@@ -46,10 +46,10 @@ export const resolveDefaultApiUrl = (): string => {
     return import.meta.env.VITE_API_URL;
   }
   if (typeof window !== 'undefined') {
-    const host = window.location.hostname && window.location.hostname !== 'localhost' ? window.location.hostname : '10.2.0.13';
+    const host = window.location.hostname || 'localhost';
     return `http://${host}:3002`;
   }
-  return 'http://10.2.0.13:3002';
+  return 'http://localhost:3002';
 };
 
 export const DEFAULT_API_URL = resolveDefaultApiUrl();
@@ -348,6 +348,43 @@ class ApiClientService {
   }
 
   /**
+   * สแกนทดสอบบัญชีผู้ใช้ MySQL ทั่วไปอัตโนมัติ (Credentials Diagnostic)
+   */
+  public async quickProbeAuth(host?: string, port?: number) {
+    try {
+      const q = new URLSearchParams();
+      if (host) q.append('host', host);
+      if (port) q.append('port', port.toString());
+      const res = await fetch(`${this.customBaseUrl}/api/db/probe-auth?${q.toString()}`);
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: `ไม่สามารถติดต่อ Backend API เพื่อสแกนบัญชีผู้ใช้ได้ (${err instanceof Error ? err.message : 'Failed'})`
+      };
+    }
+  }
+
+  /**
+   * ปรับแต่งการตั้งค่าการเชื่อมต่อ MySQL บนเซิร์ฟเวอร์ Backend และบันทึก
+   */
+  public async configureDatabase(payload: { host: string; port?: number; user?: string; password?: string; database?: string; hosofficeDb?: string }) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/db/configure`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: `ส่งการตั้งค่าไปยัง Backend ไม่สำเร็จ (${err instanceof Error ? err.message : 'Failed'})`
+      };
+    }
+  }
+
+  /**
    * สั่งให้ Backend สร้างโครงสร้างตาราง samchuk_attendance ลงใน MySQL อัตโนมัติ
    */
   public async initDatabaseTables() {
@@ -546,21 +583,6 @@ class ApiClientService {
     }
   }
 
-  /**
-   * ปรับเปลี่ยนและบันทึกการตั้งค่า MySQL
-   */
-  public async configureDatabase(params: { host: string; port?: number; user?: string; password?: string; database?: string; hosofficeDb?: string }) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/db/configure`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
-  }
 }
 
 export const apiClient = new ApiClientService();

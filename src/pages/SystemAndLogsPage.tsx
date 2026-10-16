@@ -26,7 +26,12 @@ import {
   Layers,
   Sparkles,
   Send,
-  AlertCircle
+  AlertCircle,
+  Key,
+  Settings,
+  Search,
+  Wrench,
+  Shield
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { apiClient, ApiHealthResponse, HOSPITAL_WEB_URL, DEFAULT_API_URL } from '../services/apiClient';
@@ -102,9 +107,127 @@ export const SystemAndLogsPage: React.FC<SystemAndLogsPageProps> = ({ state }) =
     return d.toISOString().replace('T', ' ').substring(0, 19);
   });
 
-  // Test Push to hosoffice.fingle_scan
+  // DB Configuration & Diagnostic States
+  const [customDbHost, setCustomDbHost] = useState('10.2.0.201');
+  const [customDbPort, setCustomDbPort] = useState('3306');
+  const [customDbUser, setCustomDbUser] = useState('root');
+  const [customDbPass, setCustomDbPass] = useState('');
+  const [customDbName, setCustomDbName] = useState('samchuk_attendance');
+  const [customHosDb, setCustomHosDb] = useState('hosoffice');
+  const [isSavingDbConfig, setIsSavingDbConfig] = useState(false);
+  const [isProbingAuth, setIsProbingAuth] = useState(false);
+  const [probeAuthResults, setProbeAuthResults] = useState<any>(null);
+  const [discoveredDatabases, setDiscoveredDatabases] = useState<string[]>([]);
+  const [showConfigPanel, setShowConfigPanel] = useState(true);
+  const [customApiUrlInput, setCustomApiUrlInput] = useState(() => apiClient.getBaseUrl());
+  const [isPingingApi, setIsPingingApi] = useState(false);
+  const [apiPingResult, setApiPingResult] = useState<string | null>(null);
   const [isPushingHosTest, setIsPushingHosTest] = useState(false);
   const [hosTestPushResult, setHosTestPushResult] = useState<any>(null);
+
+  const handlePingApi = async (urlToTest?: string) => {
+    setIsPingingApi(true);
+    setApiPingResult(null);
+    const targetUrl = urlToTest || customApiUrlInput;
+    try {
+      const res = await fetch(`${targetUrl.replace(/\/+$/, '')}/api/health`, { signal: AbortSignal.timeout(3000) });
+      const data = await res.json();
+      setApiPingResult(`✅ ติดต่อ Backend API สำเร็จ (${data.service} v${data.version})`);
+      apiClient.setBaseUrl(targetUrl);
+    } catch (err) {
+      setApiPingResult(`❌ ติดต่อไม่สำเร็จ: ${err instanceof Error ? err.message : 'Timeout / Failed'}`);
+    } finally {
+      setIsPingingApi(false);
+    }
+  };
+
+  const handleSelectApiUrl = (url: string) => {
+    setCustomApiUrlInput(url);
+    apiClient.setBaseUrl(url);
+    handlePingApi(url);
+  };
+
+  const handleProbeAuth = async () => {
+    setIsProbingAuth(true);
+    setDbActionMsg(null);
+    try {
+      const res = await apiClient.quickProbeAuth(customDbHost, parseInt(customDbPort || '3306', 10));
+      setProbeAuthResults(res);
+      if (res.success && res.workingConfig) {
+        setDbActionMsg({
+          type: 'success',
+          text: `พบการเชื่อมต่อ MySQL ที่ใช้ได้! User: '${res.workingConfig.user}' (พบบนเซิร์ฟเวอร์ ${res.workingConfig.databases?.length || 0} ฐานข้อมูล)`
+        });
+        setCustomDbUser(res.workingConfig.user);
+        setCustomDbPass(res.workingConfig.password);
+        if (Array.isArray(res.workingConfig.databases)) {
+          setDiscoveredDatabases(res.workingConfig.databases);
+        }
+      } else {
+        setDbActionMsg({
+          type: 'error',
+          text: `ทดสอบบัญชีทั่วไปไม่สำเร็จ กรุณาระบุรหัสผ่าน MySQL 10.2.0.201 ในแบบฟอร์มด้านล่าง`
+        });
+      }
+    } catch (err) {
+      setDbActionMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err instanceof Error ? err.message : 'Failed'}` });
+    } finally {
+      setIsProbingAuth(false);
+    }
+  };
+
+  const handleSaveDbConfig = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setIsSavingDbConfig(true);
+    setDbActionMsg(null);
+    try {
+      const res = await apiClient.configureDatabase({
+        host: customDbHost,
+        port: parseInt(customDbPort, 10),
+        user: customDbUser,
+        password: customDbPass,
+        database: customDbName,
+        hosofficeDb: customHosDb
+      });
+      if (res.success) {
+        setDbActionMsg({ type: 'success', text: res.message });
+        if (Array.isArray(res.databases)) {
+          setDiscoveredDatabases(res.databases);
+        }
+        handleTestBothDatabases();
+        handleLoadLiveShifts();
+      } else {
+        setDbActionMsg({ type: 'error', text: `บันทึกไม่สำเร็จ: ${res.message} ${res.help ? `(${res.help})` : ''}` });
+      }
+    } catch (err) {
+      setDbActionMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err instanceof Error ? err.message : 'Failed'}` });
+    } finally {
+      setIsSavingDbConfig(false);
+    }
+  };
+
+  const applyPreset = (host: string, user: string, pass: string, name = 'samchuk_attendance', hos = 'hosoffice') => {
+    setCustomDbHost(host);
+    setCustomDbUser(user);
+    setCustomDbPass(pass);
+    setCustomDbName(name);
+    setCustomHosDb(hos);
+  };
+
+  const handleSeedHospitalShifts = async () => {
+    setDbActionMsg(null);
+    try {
+      const res = await attendanceStore.seedHospitalShiftsToMySql();
+      if (res.success) {
+        setDbActionMsg({ type: 'success', text: 'นำเข้า 4 กะหลักของ รพ.สามชุก (M, A, N, MA) ลงใน MySQL 10.2.0.201 เรียบร้อยแล้ว!' });
+        handleLoadLiveShifts();
+      } else {
+        setDbActionMsg({ type: 'error', text: `นำเข้ากะไม่สำเร็จ: ${res.message}` });
+      }
+    } catch (err) {
+      setDbActionMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err instanceof Error ? err.message : 'Failed'}` });
+    }
+  };
 
   // -------------------------------------------------------------------------
   // Handlers for Dual Database Testing
@@ -715,6 +838,18 @@ CREATE TABLE IF NOT EXISTS attendance_shift (
                     <span className="text-slate-400">กดปุ่มทดสอบด้านล่าง</span>
                   )}
                 </div>
+
+                {/* Error diagnostics */}
+                {attDbResult && !attDbResult.success && (
+                  <div className="mt-2 p-2 rounded bg-red-50 border border-red-200 text-red-800 text-[11px] font-sans space-y-1">
+                    <div className="font-bold flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                      <span>{attDbResult.message}</span>
+                    </div>
+                    {attDbResult.help && <div className="text-slate-600 pl-4">{attDbResult.help}</div>}
+                  </div>
+                )}
+
                 {attDbResult && attDbResult.tables && (
                   <div className="pt-2 border-t border-slate-200 space-y-1 text-[11px]">
                     <div className="flex justify-between">
@@ -797,6 +932,18 @@ CREATE TABLE IF NOT EXISTS attendance_shift (
                     <span className="text-slate-400">กดปุ่มทดสอบด้านล่าง</span>
                   )}
                 </div>
+
+                {/* Error diagnostics */}
+                {hosDbResult && !hosDbResult.success && (
+                  <div className="mt-2 p-2 rounded bg-red-50 border border-red-200 text-red-800 text-[11px] font-sans space-y-1">
+                    <div className="font-bold flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                      <span>{hosDbResult.message}</span>
+                    </div>
+                    {hosDbResult.help && <div className="text-slate-600 pl-4">{hosDbResult.help}</div>}
+                  </div>
+                )}
+
                 {hosDbResult && hosDbResult.tables && (
                   <div className="pt-2 border-t border-slate-200 space-y-1 text-[11px]">
                     <div className="flex justify-between">
@@ -836,6 +983,280 @@ CREATE TABLE IF NOT EXISTS attendance_shift (
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Connection Troubleshooter & MySQL Settings Panel */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <Wrench className="w-4 h-4 text-amber-600" />
+                  <span>ตัวช่วยแก้ไขและกำหนดค่าการเชื่อมต่อ MySQL (Connection Troubleshooter)</span>
+                </h4>
+                <p className="text-xs text-slate-500">
+                  หากเชื่อมต่อ 10.2.0.201 ไม่ได้ ให้ตรวจสอบพอร์ต Backend, ทดสอบบัญชีผู้ใช้อัตโนมัติ หรือระบุรหัสผ่านที่ถูกต้อง
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowConfigPanel(!showConfigPanel)}
+                className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg cursor-pointer flex items-center gap-1.5 border border-slate-300"
+              >
+                <Settings className="w-3.5 h-3.5 text-slate-600" />
+                <span>{showConfigPanel ? 'ซ่อนการตั้งค่า' : 'แสดงการตั้งค่าเชื่อมต่อ'}</span>
+              </button>
+            </div>
+
+            {showConfigPanel && (
+              <div className="space-y-5">
+                {/* Step 1: Backend API Endpoint Selector */}
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Radio className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>1. เลือก URL ปลายทางของ Backend API (พอร์ต 3002):</span>
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-mono">
+                      ปัจจุบัน: <code className="bg-white px-1.5 py-0.5 border rounded text-indigo-700 font-bold">{apiClient.getBaseUrl()}</code>
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectApiUrl('http://localhost:3002')}
+                      className={`px-3 py-1.5 text-xs rounded-md border font-semibold cursor-pointer transition-colors ${
+                        apiClient.getBaseUrl().includes('localhost') ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      💻 http://localhost:3002 (รันบนเครื่องเดียวกัน)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectApiUrl('http://10.2.0.13:3002')}
+                      className={`px-3 py-1.5 text-xs rounded-md border font-semibold cursor-pointer transition-colors ${
+                        apiClient.getBaseUrl().includes('10.2.0.13') ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      🏥 http://10.2.0.13:3002 (เซิร์ฟเวอร์ รพ.สามชุก)
+                    </button>
+                    <div className="flex items-center gap-1.5 ml-auto">
+                      <input
+                        type="text"
+                        value={customApiUrlInput}
+                        onChange={(e) => setCustomApiUrlInput(e.target.value)}
+                        placeholder="ระบุ URL เช่น http://10.2.0.x:3002"
+                        className="bg-white border border-slate-300 rounded px-2.5 py-1 text-xs font-mono w-52"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handlePingApi()}
+                        disabled={isPingingApi}
+                        className="px-3 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded text-xs font-semibold cursor-pointer disabled:opacity-50"
+                      >
+                        {isPingingApi ? 'กำลังทดสอบ...' : 'ทดสอบ Ping'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {apiPingResult && (
+                    <div className="text-xs font-semibold text-slate-700 bg-white border border-slate-200 p-2 rounded">
+                      {apiPingResult}
+                    </div>
+                  )}
+                </div>
+
+                {/* Step 2: Auto Credentials Diagnostic (Probe Auth) */}
+                <div className="bg-amber-50/60 border border-amber-200 rounded-lg p-4 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                        <Key className="w-3.5 h-3.5 text-amber-700" />
+                        <span>2. ตรวจสอบบัญชีผู้ใช้ MySQL ทั่วไปอัตโนมัติ (Credentials Diagnostic)</span>
+                      </span>
+                      <p className="text-[11px] text-amber-800 mt-0.5">
+                        ระบบจะทดสอบลองเชื่อมต่อด้วยบัญชีมาตรฐานโรงพยาบาล เช่น sa / sa, root, attendance_app เพื่อหาบัญชีที่เชื่อมต่อได้
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleProbeAuth}
+                      disabled={isProbingAuth}
+                      className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-bold rounded-lg text-xs cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                    >
+                      <Search className={`w-3.5 h-3.5 ${isProbingAuth ? 'animate-spin' : ''}`} />
+                      <span>{isProbingAuth ? 'กำลังสแกนบัญชี...' : 'สแกนหาบัญชี MySQL ที่ใช้ได้'}</span>
+                    </button>
+                  </div>
+
+                  {probeAuthResults && Array.isArray(probeAuthResults.results) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 pt-1 text-xs">
+                      {probeAuthResults.results.map((r: any, idx: number) => (
+                        <div key={idx} className={`p-2.5 rounded border ${
+                          r.success ? 'bg-emerald-50 border-emerald-300 text-emerald-900' : 'bg-white border-slate-200 text-slate-600 opacity-70'
+                        }`}>
+                          <div className="font-bold flex items-center justify-between">
+                            <span>{r.label}</span>
+                            {r.success ? (
+                              <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.2 rounded font-bold">ใช้ได้!</span>
+                            ) : (
+                              <span className="text-[10px] text-red-500 font-semibold">{r.code || 'ไม่ได้'}</span>
+                            )}
+                          </div>
+                          <div className="text-[11px] font-mono mt-1">User: {r.user} | Pass: {r.password}</div>
+                          {r.success && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                applyPreset(customDbHost, r.user, r.rawPassword);
+                                setCustomDbUser(r.user);
+                                setCustomDbPass(r.rawPassword);
+                              }}
+                              className="mt-2 w-full py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-[11px] cursor-pointer"
+                            >
+                              ✓ นำบัญชีนี้ไปใช้งาน
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Step 3: MySQL Connection Parameters Form & Presets */}
+                <form onSubmit={handleSaveDbConfig} className="bg-slate-50 border border-slate-200 rounded-lg p-4 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5 text-teal-700" />
+                      <span>3. กำหนดค่าการเชื่อมต่อ MySQL (บันทึกและสร้างฐานข้อมูล samchuk_attendance อัตโนมัติ):</span>
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="text-slate-500">เลือกค่าด่วน:</span>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('10.2.0.201', 'sa', 'sa')}
+                        className="px-2 py-0.5 bg-white border border-slate-300 rounded hover:bg-slate-100 font-semibold text-slate-700 cursor-pointer"
+                      >
+                        10.2.0.201 (sa / sa)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('10.2.0.201', 'root', '')}
+                        className="px-2 py-0.5 bg-white border border-slate-300 rounded hover:bg-slate-100 font-semibold text-slate-700 cursor-pointer"
+                      >
+                        10.2.0.201 (root / ว่าง)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('10.2.0.201', 'attendance_app', '')}
+                        className="px-2 py-0.5 bg-white border border-slate-300 rounded hover:bg-slate-100 font-semibold text-slate-700 cursor-pointer"
+                      >
+                        10.2.0.201 (attendance_app)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('localhost', 'root', '')}
+                        className="px-2 py-0.5 bg-white border border-slate-300 rounded hover:bg-slate-100 font-semibold text-slate-700 cursor-pointer"
+                      >
+                        localhost (root / ว่าง)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3 text-xs">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Host / IP:</label>
+                      <input
+                        type="text"
+                        value={customDbHost}
+                        onChange={(e) => setCustomDbHost(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 font-mono"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Port:</label>
+                      <input
+                        type="number"
+                        value={customDbPort}
+                        onChange={(e) => setCustomDbPort(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 font-mono"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">User MySQL:</label>
+                      <input
+                        type="text"
+                        value={customDbUser}
+                        onChange={(e) => setCustomDbUser(e.target.value)}
+                        placeholder="เช่น sa หรือ root"
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 font-mono"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Password:</label>
+                      <input
+                        type="password"
+                        value={customDbPass}
+                        onChange={(e) => setCustomDbPass(e.target.value)}
+                        placeholder="เว้นว่างถ้าไม่มีรหัส"
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">ฐาน 1 (Attendance):</label>
+                      <input
+                        type="text"
+                        value={customDbName}
+                        onChange={(e) => setCustomDbName(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 font-mono"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">ฐาน 2 (HosOffice):</label>
+                      <input
+                        type="text"
+                        value={customHosDb}
+                        onChange={(e) => setCustomHosDb(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 font-mono"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  {discoveredDatabases.length > 0 && (
+                    <div className="text-[11px] bg-slate-100 p-2 rounded border border-slate-200 text-slate-700 flex flex-wrap items-center gap-1">
+                      <span className="font-bold text-slate-800">ฐานข้อมูลที่พบบนเซิร์ฟเวอร์ MySQL นี้:</span>
+                      {discoveredDatabases.map((db, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setCustomHosDb(db)}
+                          className="px-1.5 py-0.5 bg-white border border-slate-300 rounded hover:bg-slate-200 font-mono text-[10px] cursor-pointer"
+                          title="คลิกเพื่อเลือกเป็นฐาน HosOffice"
+                        >
+                          {db}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="submit"
+                      disabled={isSavingDbConfig}
+                      className="px-5 py-2 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-lg text-xs cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{isSavingDbConfig ? 'กำลังบันทึกและเชื่อมต่อ...' : 'บันทึกการตั้งค่าและเชื่อมต่อ MySQL ทันที'}</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
           </div>
 
           {/* Interactive Direct Table Management Section */}
@@ -969,8 +1390,31 @@ CREATE TABLE IF NOT EXISTS attendance_shift (
                     <tbody className="divide-y divide-slate-100 font-sans">
                       {liveShifts.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="py-6 text-center text-slate-400">
-                            {isLoadingLiveShifts ? 'กำลังดึงข้อมูลกะจาก MySQL 10.2.0.201...' : 'ยังไม่พบข้อมูลกะในตาราง attendance_shift (สามารถกดปุ่ม "สร้างตาราง & กะ" ด้านบนได้ครับ)'}
+                          <td colSpan={7} className="py-8 text-center text-slate-500">
+                            {isLoadingLiveShifts ? (
+                              <div className="flex items-center justify-center gap-2 text-teal-700">
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                <span>กำลังดึงข้อมูลกะสดจาก MySQL 10.2.0.201...</span>
+                              </div>
+                            ) : (
+                              <div className="space-y-3 py-2 max-w-md mx-auto">
+                                <div className="text-amber-800 font-bold text-xs flex items-center justify-center gap-1.5">
+                                  <AlertCircle className="w-4 h-4 text-amber-600" />
+                                  <span>ยังไม่มีข้อมูลกะในตาราง attendance_shift บน MySQL 10.2.0.201</span>
+                                </div>
+                                <p className="text-[11px] text-slate-500">
+                                  เนื่องจากระบบเชื่อมต่อฐานข้อมูลตรง 100% โดยไม่ใช้ LocalStorage หากเป็นฐานข้อมูลใหม่ที่ยังไม่มีกะ คุณสามารถคลิกปุ่มด้านล่างเพื่อนำเข้า 4 กะหลักเข้าสู่ตาราง MySQL ทันที
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={handleSeedHospitalShifts}
+                                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-xs cursor-pointer inline-flex items-center gap-2 text-xs"
+                                >
+                                  <Sparkles className="w-4 h-4" />
+                                  <span>นำเข้า 4 กะหลัก รพ.สามชุก (M, A, N, MA) ลง MySQL ทันที</span>
+                                </button>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       ) : (
@@ -1287,13 +1731,13 @@ CREATE TABLE IF NOT EXISTS attendance_shift (
                 {state.auditLogs.map((a, idx) => (
                   <tr key={`${a.id}-${idx}`} className="hover:bg-slate-50">
                     <td className="py-2 px-3 font-mono text-slate-600 whitespace-nowrap">{a.timestamp}</td>
-                    <td className="py-2 px-3 font-bold text-slate-800">{a.username}</td>
+                    <td className="py-2 px-3 font-bold text-slate-800">{a.user}</td>
                     <td className="py-2 px-3">
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                        {a.actionType}
+                        {a.action}
                       </span>
                     </td>
-                    <td className="py-2 px-3 text-slate-700">{a.details}</td>
+                    <td className="py-2 px-3 text-slate-700">{a.detail}</td>
                   </tr>
                 ))}
               </tbody>

@@ -22,7 +22,8 @@ import {
   Settings,
   Search,
   Wifi,
-  Key
+  Key,
+  Sparkles
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { Shift, PersonnelGroup, HrPerson } from '../types/attendance';
@@ -619,8 +620,34 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {state.shifts.map((shift) => (
+          {state.shifts.length === 0 ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 text-center space-y-3">
+              <div className="font-bold text-amber-900 text-sm flex items-center justify-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-600" />
+                <span>ยังไม่มีข้อมูลกะในฐานข้อมูล MySQL 10.2.0.201</span>
+              </div>
+              <p className="text-xs text-slate-600 max-w-md mx-auto">
+                ระบบทำงานในโหมดเชื่อมต่อตรง MySQL (ปิด LocalStorage ถาวรแล้ว) หากเพิ่งเริ่มต้นใช้งาน คุณสามารถกดปุ่มด้านล่างเพื่อนำเข้า 4 กะหลักของ รพ.สามชุก เข้าสู่ MySQL ได้ทันที
+              </p>
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await attendanceStore.seedHospitalShiftsToMySql();
+                  if (res.success) {
+                    setDbSyncMsg({ type: 'success', text: 'นำเข้า 4 กะหลัก รพ.สามชุก ลง MySQL เรียบร้อยแล้ว!' });
+                  } else {
+                    setDbSyncMsg({ type: 'error', text: res.message });
+                  }
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-xs cursor-pointer inline-flex items-center gap-2 text-xs"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>นำเข้า 4 กะหลัก (M, A, N, MA) ลง MySQL ทันที</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {state.shifts.map((shift) => (
               <div
                 key={shift.id}
                 className={`bg-white border rounded-xl p-4 shadow-xs flex flex-col justify-between transition-all ${
@@ -703,6 +730,7 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
               </div>
             ))}
           </div>
+          )}
         </div>
       )}
 
