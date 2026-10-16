@@ -477,7 +477,58 @@ class AttendanceStore {
     };
   }
 
-  // ดึงผลการประมวลผลเวลาประจำวัน (ใช้แคช Real-time หรือสั่งคำนวณใหม่)
+  // --------------------------------------------------------------------------
+  // Scanner Management (CRUD)
+  // --------------------------------------------------------------------------
+  public addScanner(data: Omit<Scanner, 'id' | 'totalLoadedRecords' | 'status'>): Scanner {
+    const newId = this.state.scanners.length > 0 
+      ? Math.max(...this.state.scanners.map(s => s.id)) + 1 
+      : 1;
+    
+    const newScanner: Scanner = {
+      ...data,
+      id: newId,
+      status: 'ONLINE',
+      totalLoadedRecords: 0,
+      lastSync: undefined
+    };
+
+    this.state.scanners.push(newScanner);
+    this.logAudit(this.state.currentUser.username, 'SYNC', `เพิ่มเครื่องสแกนใหม่: ${newScanner.name} (IP: ${newScanner.ip}:${newScanner.port}, MachineNo: ${newScanner.machineNo})`, 'CREATE');
+    this.saveState();
+    return newScanner;
+  }
+
+  public updateScanner(id: number, data: Partial<Scanner>): Scanner | undefined {
+    const scanner = this.state.scanners.find(s => s.id === id);
+    if (!scanner) return undefined;
+
+    Object.assign(scanner, data);
+    this.logAudit(this.state.currentUser.username, 'SYNC', `แก้ไขการตั้งค่าเครื่องสแกน: ${scanner.name} (IP: ${scanner.ip}:${scanner.port})`, 'UPDATE');
+    this.saveState();
+    return scanner;
+  }
+
+  public deleteScanner(id: number): boolean {
+    const scanner = this.state.scanners.find(s => s.id === id);
+    if (!scanner) return false;
+
+    this.state.scanners = this.state.scanners.filter(s => s.id !== id);
+    this.logAudit(this.state.currentUser.username, 'SYNC', `ลบเครื่องสแกน: ${scanner.name} (MachineNo: ${scanner.machineNo}, IP: ${scanner.ip})`, 'DELETE');
+    this.saveState();
+    return true;
+  }
+
+  public toggleScanner(id: number): boolean {
+    const scanner = this.state.scanners.find(s => s.id === id);
+    if (!scanner) return false;
+
+    scanner.enabled = !scanner.enabled;
+    this.logAudit(this.state.currentUser.username, 'SYNC', `${scanner.enabled ? 'เปิดใช้งาน' : 'ปิดการใช้งาน'} เครื่องสแกน: ${scanner.name}`, 'UPDATE');
+    this.saveState();
+    return scanner.enabled;
+  }
+
   public getDailyAttendance(date: string = '2026-10-14', forceRecalculate = false): DailyResult[] {
     if (!forceRecalculate && this.state.cachedDailyResults && this.state.cachedDailyResults[date]) {
       return this.state.cachedDailyResults[date];

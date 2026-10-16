@@ -1,7 +1,7 @@
 # ระบบจัดการเวลาปฏิบัติงานและเครื่องสแกนนิ้ว โรงพยาบาลสามชุก (v2)
 **Samchuk Hospital Attendance & Biometric Fingerprint Management System**
 
-ระบบจัดการเวลาปฏิบัติงานและเครื่องสแกนนิ้วสำหรับโรงพยาบาลสามชุก ออกแบบเพื่อรองรับงานบริการสุขภาพที่มีความซับซ้อน รองรับการขึ้นเวรหลายกะในวันเดียว (Multi-Shift), การเชื่อมต่อเครื่องสแกนนิ้ว HIP CMiF68S ผ่าน TCP Socket ด้วย `FK623Attend.dll`, และการเชื่อมต่อสองฐานข้อมูล (Staging Database `samchuk_attendance` และระบบฐานข้อมูลกลาง `hosoffice` @ 10.1.0.201)
+ระบบจัดการเวลาปฏิบัติงานและเครื่องสแกนนิ้วสำหรับโรงพยาบาลสามชุก ออกแบบเพื่อรองรับงานบริการสุขภาพที่มีความซับซ้อน รองรับการขึ้นเวรหลายกะในวันเดียว (Multi-Shift), การเชื่อมต่อเครื่องสแกนนิ้ว HIP CMiF68S ผ่าน TCP Socket ด้วย `FK623Attend.dll`, และการเชื่อมต่อสองฐานข้อมูล (Staging Database `samchuk_attendance` และระบบฐานข้อมูลกลาง `hosoffice` @ 10.2.0.201)
 
 ---
 
@@ -43,7 +43,7 @@
 │  HIP CMiF68S #2: 10.1.0.102 (IPD)   │  │  - Database: samchuk_attendance        │
 │  HIP CMiF68S #3: 10.1.0.103 (Admin) │  │  - Raw Scans, Shifts, Rosters, Results │
 └─────────────────────────────────────┘  │                                        │
-                                         │ [Database 2: HOSOffice @ 10.1.0.201]   │
+                                         │ [Database 2: HOSOffice @ 10.2.0.201]   │
                                          │  - hr_person, hr_position (SELECT Only)│
                                          │  - fingle_scan (INSERT Only via Push)  │
                                          └────────────────────────────────────────┘

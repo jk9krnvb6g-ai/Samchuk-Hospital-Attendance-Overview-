@@ -9,6 +9,7 @@ namespace SamchukAttendance.Api.Services
         public long BatchId { get; set; }
         public int TotalSelected { get; set; }
         public int TotalInserted { get; set; }
+        public int InsertedCount => TotalInserted;
         public int TotalSkippedExists { get; set; }
         public int TotalFailed { get; set; }
         public string Status { get; set; } = "SUCCESS";

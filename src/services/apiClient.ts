@@ -209,6 +209,52 @@ class ApiClientService {
       };
     }
   }
+
+  /**
+   * ทดสอบเชื่อมต่อเครื่องสแกนผ่าน POST /api/scanners/test-connection
+   */
+  public async testScannerConnection(req: { machineNo: number; ipAddress: string; port?: number; license?: number }) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/scanners/test-connection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          machineNo: req.machineNo,
+          ipAddress: req.ipAddress,
+          port: req.port || 5005,
+          license: req.license || 1261,
+          timeoutMs: 3000
+        })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        ipAddress: req.ipAddress,
+        port: req.port || 5005,
+        message: err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อไปยัง Backend API (พอร์ต 3002) ได้'
+      };
+    }
+  }
+
+  /**
+   * ทดสอบทุกเครื่องพร้อมกันผ่าน POST /api/scanners/test-all
+   */
+  public async testAllScanners(scanners: Array<{ machineNo: number; ipAddress: string; port?: number; license?: number }>) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/scanners/test-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scanners)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : 'Connection failed'
+      };
+    }
+  }
 }
 
 export const apiClient = new ApiClientService();

@@ -168,7 +168,7 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
             </p>
           </div>
           <div className="text-xs text-slate-500">
-            ปลายทาง: <span className="font-mono font-semibold text-slate-700">10.1.0.201 / hosoffice.fingle_scan</span>
+            ปลายทาง: <span className="font-mono font-semibold text-slate-700">10.2.0.201 / hosoffice.fingle_scan</span>
           </div>
         </div>
 

@@ -313,7 +313,7 @@ export const Navigation: React.FC<NavigationProps> = ({
               <span className="text-emerald-400 font-mono">Staging OK</span>
             </div>
             <div className="flex items-center justify-between">
-              <span>hosoffice (10.1.0.201):</span>
+              <span>hosoffice (10.2.0.201):</span>
               <span className="text-amber-400 font-mono">Manual Push</span>
             </div>
           </div>

@@ -27,7 +27,7 @@
 4. **[4. DATABASE.md (ฐานข้อมูล)](DATABASE.md)**
    - สถาปัตยกรรมแยก 2 ฐานข้อมูล (Two-Database Architecture):
      - `samchuk_attendance` (Local Staging DB)
-     - `hosoffice` @ 10.1.0.201 (Hospital Core DB)
+     - `hosoffice` @ 10.2.0.201 (Hospital Core DB)
    - มาตรฐานการรองรับภาษาไทย 100% (UTF8MB4, utf8mb4_unicode_ci, utf8mb4_thai_520_w2 ป้องกันสระลอย/ตัวอักษรต่างดาว)
    - Data Dictionary และโครงสร้าง Schema รายตาราง
    - คำสั่ง DDL SQL ฉบับเต็มสำหรับสร้างฐานข้อมูลและตารางทั้งหมด

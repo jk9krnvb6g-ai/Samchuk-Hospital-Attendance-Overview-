@@ -771,7 +771,7 @@ export const INITIAL_AUDIT_LOGS: AuditLog[] = [
   }
 ];
 
-// Mock database query results from hosoffice (10.1.0.201)
+// Mock database query results from hosoffice (10.2.0.201)
 // Query:
 // SELECT HP.HR_CID, CONCAT(HF.HR_PREFIX_NAME, HP.HR_FNAME, ' ', HP.HR_LNAME) AS FULLNAME,
 //   HT.HR_POSITION_NAME, HD.HR_DEPARTMENT_NAME, HDS.HR_DEPARTMENT_SUB_NAME AS HR_DEPARTMENT_SUB,

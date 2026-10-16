@@ -309,12 +309,12 @@ export const Navigation: React.FC<NavigationProps> = ({
           </div>
           <div className="space-y-1 text-[10px] text-slate-400 leading-tight">
             <div className="flex items-center justify-between">
-              <span>Attendance DB:</span>
-              <span className="text-emerald-400 font-mono">Staging OK</span>
+              <span>samchuk_attendance:</span>
+              <span className="text-emerald-400 font-mono">10.2.0.201 (Auto)</span>
             </div>
             <div className="flex items-center justify-between">
-              <span>hosoffice (10.1.0.201):</span>
-              <span className="text-amber-400 font-mono">Manual Push</span>
+              <span>hosoffice:</span>
+              <span className="text-amber-400 font-mono">10.2.0.201 (กดส่ง)</span>
             </div>
           </div>
         </div>

@@ -12,7 +12,7 @@
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 1. Attendance Database: samchuk_attendance (Staging & Rules DB)       │
-│    - ติดตั้งบน: เซิร์ฟเวอร์ระบบลงเวลา (Local App Server)              │
+│    - ติดตั้งบน: เซิร์ฟเวอร์ฐานข้อมูล 10.2.0.201 (MySQL Port 3306)        │
 │    - สิทธิ์: Full Control (CREATE, ALTER, SELECT, INSERT, UPDATE)      │
 │    - หน้าที่: พักข้อมูลสแกนดิบ, ตารางกะ, ตารางเวร, ผลการคำนวณเวลา, Log   │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -21,7 +21,7 @@
                                     │ (อ่าน HR / ส่ง fingle_scan)
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 2. Hospital Production Database: hosoffice @ 10.1.0.201                │
+│ 2. Hospital Production Database: hosoffice @ 10.2.0.201                │
 │    - ติดตั้งบน: เซิร์ฟเวอร์ฐานข้อมูลกลางโรงพยาบาลสามชุก (Port 3306)    │
 │    - สิทธิ์: จำกัดเฉพาะทาง (Least Privilege):                          │
 │        • hr_person และ Lookups: สิทธิ์อ่านอย่างเดียว (SELECT Only)     │
@@ -142,7 +142,7 @@
 
 ---
 
-## 3. โครงสร้างตารางในฐานข้อมูล HOSOffice (`hosoffice` @ 10.1.0.201)
+## 3. โครงสร้างตารางในฐานข้อมูล HOSOffice (`hosoffice` @ 10.2.0.201)
 
 ### 3.1 ตาราง `fingle_scan` (ตารางรับข้อมูลสแกนนิ้วกลางของโรงพยาบาล)
 ตารางนี้คือตารางเป้าหมายที่ระบบจะส่งข้อมูลเข้าไป โดยมีสเปกฟิลด์สำคัญดังนี้:
@@ -319,8 +319,8 @@ CREATE TABLE IF NOT EXISTS attendance_push_batch (
 ```json
 {
   "ConnectionStrings": {
-    "AttendanceDb": "Server=localhost;Port=3306;Database=samchuk_attendance;User ID=attendance_app;Password=YOUR_ATTENDANCE_DB_PASSWORD;CharSet=utf8mb4;TreatTinyAsBoolean=false;SslMode=Preferred;",
-    "HosOffice": "Server=10.1.0.201;Port=3306;Database=hosoffice;User ID=samchuk_sync;Password=YOUR_HOSOFFICE_PASSWORD;CharSet=utf8mb4;TreatTinyAsBoolean=false;AllowUserVariables=True;"
+    "AttendanceDb": "Server=10.2.0.201;Port=3306;Database=samchuk_attendance;User ID=attendance_app;Password=YOUR_ATTENDANCE_DB_PASSWORD;CharSet=utf8mb4;TreatTinyAsBoolean=false;SslMode=Preferred;",
+    "HosOffice": "Server=10.2.0.201;Port=3306;Database=hosoffice;User ID=samchuk_sync;Password=YOUR_HOSOFFICE_PASSWORD;CharSet=utf8mb4;TreatTinyAsBoolean=false;AllowUserVariables=True;"
   }
 }
 ```

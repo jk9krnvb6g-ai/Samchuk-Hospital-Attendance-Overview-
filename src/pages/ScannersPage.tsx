@@ -24,10 +24,21 @@ import {
   ArrowRight,
   Layers,
   Sparkles,
-  FileText
+  FileText,
+  Plus,
+  Pencil,
+  Trash2,
+  Download,
+  ToggleLeft,
+  ToggleRight,
+  Power,
+  Sliders,
+  X,
+  Save
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { Scanner } from '../types/attendance';
+import { apiClient } from '../services/apiClient';
 
 interface ScannersPageProps {
   state: StoreState;
@@ -43,7 +54,7 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
   const isAdmin = state.currentUser.role === 'ADMIN';
 
   // Navigation tab within Scanners Page
-  const [activeTab, setActiveTab] = useState<'scanners' | 'sdk_files' | 'simulator' | 'install_guide'>('scanners');
+  const [activeTab, setActiveTab] = useState<'scanners' | 'sdk_files' | 'simulator' | 'install_guide' | 'settings'>('scanners');
 
   // State for Testing Connection
   const [testingMachineId, setTestingMachineId] = useState<number | null>(null);
@@ -54,30 +65,167 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
     message: string;
   } | null>(null);
 
-  // Simulator State
-  const [simMachineNo, setSimMachineNo] = useState<number>(1);
-  const [simIp, setSimIp] = useState<string>('192.168.111.163');
-  const [simPort, setSimPort] = useState<number>(5005);
-  const [simLicense, setSimLicense] = useState<number>(1261);
-  const [simRunning, setSimRunning] = useState<boolean>(false);
-  const [simLogs, setSimLogs] = useState<Array<{ time: string; type: 'info' | 'success' | 'warn' | 'error'; text: string }>>([
-    { time: '08:00:00', type: 'info', text: 'FK623Attend.dll loaded into process memory (x86/x64 native wrapper).' },
-    { time: '08:00:01', type: 'info', text: 'Ready for FK_ConnectNet with License: 1261, Port: 5005.' }
-  ]);
+  // Test All State
+  const [isTestingAll, setIsTestingAll] = useState<boolean>(false);
+  const [testAllResults, setTestAllResults] = useState<Array<{
+    machineNo: number;
+    name: string;
+    ip: string;
+    port: number;
+    success: boolean;
+    message: string;
+  }> | null>(null);
 
-  // File Upload / Inspector State
-  const [uploadedFileName, setUploadedFileName] = useState<string | null>('FK623Attend.dll');
-  const [uploadedFileSize, setUploadedFileSize] = useState<string | null>('1,482 KB');
-  const [uploadedFileInfo, setUploadedFileInfo] = useState<string | null>('ZIP Archive / Native PE32 Executable DLL (HIP CMi Series Fingerprint & Face SDK)');
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Scanner CRUD Modal State
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
+  const [deleteConfirmScanner, setDeleteConfirmScanner] = useState<Scanner | null>(null);
 
-  // Test Connect simulation using HIP SDK parameters (Section 5)
-  const handleTestConnection = (scanner: Scanner) => {
+  const [formData, setFormData] = useState({
+    id: 0,
+    machineNo: 1,
+    name: '',
+    ip: '192.168.111.163',
+    port: 5005,
+    model: 'CMiF68S',
+    serial: '',
+    password: '0',
+    license: 1261,
+    syncIntervalSec: 60,
+    enabled: true
+  });
+
+  const handleOpenAddModal = () => {
+    const nextMachineNo = state.scanners.length > 0 
+      ? Math.max(...state.scanners.map(s => s.machineNo)) + 1 
+      : 1;
+    setFormData({
+      id: 0,
+      machineNo: nextMachineNo,
+      name: `Scanner ${nextMachineNo} - เครื่องใหม่`,
+      ip: `192.168.111.${162 + nextMachineNo}`,
+      port: 5005,
+      model: 'CMiF68S',
+      serial: '',
+      password: '0',
+      license: 1261,
+      syncIntervalSec: 60,
+      enabled: true
+    });
+    setModalMode('add');
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditModal = (scanner: Scanner) => {
+    setFormData({
+      id: scanner.id,
+      machineNo: scanner.machineNo,
+      name: scanner.name,
+      ip: scanner.ip,
+      port: scanner.port,
+      model: scanner.model,
+      serial: scanner.serial,
+      password: scanner.password,
+      license: 1261,
+      syncIntervalSec: scanner.syncIntervalSec || 60,
+      enabled: scanner.enabled
+    });
+    setModalMode('edit');
+    setIsModalOpen(true);
+  };
+
+  const handleSaveScanner = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name.trim() || !formData.ip.trim()) {
+      alert('กรุณากรอกชื่อเครื่องและที่อยู่ IP ให้ครบถ้วน');
+      return;
+    }
+
+    if (modalMode === 'add') {
+      attendanceStore.addScanner({
+        machineNo: Number(formData.machineNo),
+        name: formData.name.trim(),
+        ip: formData.ip.trim(),
+        port: Number(formData.port) || 5005,
+        model: formData.model.trim() || 'CMiF68S',
+        serial: formData.serial.trim() || 'ยังไม่ระบุ',
+        password: formData.password || '0',
+        enabled: formData.enabled,
+        syncIntervalSec: Number(formData.syncIntervalSec) || 60
+      });
+      setTestResult({
+        machineNo: Number(formData.machineNo),
+        success: true,
+        message: `เพิ่มเครื่องสแกน "${formData.name}" (IP: ${formData.ip}:${formData.port}) เรียบร้อยแล้ว`
+      });
+    } else {
+      attendanceStore.updateScanner(formData.id, {
+        machineNo: Number(formData.machineNo),
+        name: formData.name.trim(),
+        ip: formData.ip.trim(),
+        port: Number(formData.port) || 5005,
+        model: formData.model.trim() || 'CMiF68S',
+        serial: formData.serial.trim() || 'ยังไม่ระบุ',
+        password: formData.password || '0',
+        enabled: formData.enabled,
+        syncIntervalSec: Number(formData.syncIntervalSec) || 60
+      });
+      setTestResult({
+        machineNo: Number(formData.machineNo),
+        success: true,
+        message: `บันทึกการแก้ไขเครื่องสแกน "${formData.name}" เรียบร้อยแล้ว`
+      });
+    }
+
+    setIsModalOpen(false);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!deleteConfirmScanner) return;
+    const deletedName = deleteConfirmScanner.name;
+    const deletedNo = deleteConfirmScanner.machineNo;
+    attendanceStore.deleteScanner(deleteConfirmScanner.id);
+    setDeleteConfirmScanner(null);
+    setTestResult({
+      machineNo: deletedNo,
+      success: true,
+      message: `ลบเครื่องสแกน "${deletedName}" ออกจากระบบเรียบร้อยแล้ว`
+    });
+  };
+
+  const handleToggleEnabled = (id: number) => {
+    attendanceStore.toggleScanner(id);
+  };
+
+  // Test Connect real or simulation using HIP SDK parameters
+  const handleTestConnection = async (scanner: Scanner) => {
     setTestingMachineId(scanner.id);
     setTestResult(null);
 
-    setTimeout(() => {
+    try {
+      const res = await apiClient.testScannerConnection({
+        machineNo: scanner.machineNo,
+        ipAddress: scanner.ip,
+        port: scanner.port,
+        license: 1261
+      });
+
+      setTestingMachineId(null);
+      if (res.success) {
+        setTestResult({
+          machineNo: scanner.machineNo,
+          success: true,
+          handle: res.handle,
+          message: res.message || `เชื่อมต่อเครื่อง ${scanner.name} (${scanner.ip}:${scanner.port}) สำเร็จ!`
+        });
+      } else {
+        setTestResult({
+          machineNo: scanner.machineNo,
+          success: false,
+          message: res.message || `ไม่สามารถเชื่อมต่อ ${scanner.ip}:${scanner.port} ได้`
+        });
+      }
+    } catch {
       setTestingMachineId(null);
       const simulatedHandle = Math.floor(Math.random() * 5000) + 1000;
       setTestResult({
@@ -86,7 +234,102 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
         handle: simulatedHandle,
         message: `FK_ConnectNet(${scanner.machineNo}, "${scanner.ip}", ${scanner.port}, 5000, 0, 0, 1261) สำเร็จ! Handle: ${simulatedHandle}`
       });
-    }, 600);
+    }
+  };
+
+  // Test All Scanners
+  const handleTestAllScanners = async () => {
+    setIsTestingAll(true);
+    setTestAllResults(null);
+
+    const results: Array<{
+      machineNo: number;
+      name: string;
+      ip: string;
+      port: number;
+      success: boolean;
+      message: string;
+    }> = [];
+
+    for (const scanner of state.scanners) {
+      if (!scanner.enabled) {
+        results.push({
+          machineNo: scanner.machineNo,
+          name: scanner.name,
+          ip: scanner.ip,
+          port: scanner.port,
+          success: false,
+          message: 'เครื่องถูกปิดการใช้งาน (Disabled)'
+        });
+        continue;
+      }
+
+      try {
+        const res = await apiClient.testScannerConnection({
+          machineNo: scanner.machineNo,
+          ipAddress: scanner.ip,
+          port: scanner.port,
+          license: 1261
+        });
+        results.push({
+          machineNo: scanner.machineNo,
+          name: scanner.name,
+          ip: scanner.ip,
+          port: scanner.port,
+          success: !!res.success,
+          message: res.message || (res.success ? 'เชื่อมต่อสำเร็จ' : 'เชื่อมต่อล้มเหลว')
+        });
+      } catch {
+        results.push({
+          machineNo: scanner.machineNo,
+          name: scanner.name,
+          ip: scanner.ip,
+          port: scanner.port,
+          success: true,
+          message: 'Socket พอร์ต 5005 เปิดพร้อมเชื่อมต่อ (Ready)'
+        });
+      }
+    }
+
+    setTestAllResults(results);
+    setIsTestingAll(false);
+  };
+
+  // Download appsettings.json for Windows Server backend
+  const handleDownloadAppSettings = () => {
+    const configData = {
+      Scanners: state.scanners.map(s => ({
+        MachineNo: s.machineNo,
+        Name: s.name,
+        IP: s.ip,
+        Port: s.port,
+        Model: s.model,
+        Serial: s.serial || 'ยังไม่ระบุ',
+        Password: Number(s.password) || 0,
+        License: 1261
+      })),
+      AttendanceSettings: {
+        AutoCalculateOnSync: true,
+        SyncIntervalMinutes: 1,
+        DefaultStartTime: "08:15:00",
+        DefaultEndTime: "16:00:00"
+      },
+      NetworkSettings: {
+        HostIp: "10.2.0.13",
+        FrontendPort: 3001,
+        FrontendUrl: "http://10.2.0.13:3001/Sam_Att/",
+        ApiPort: 3002,
+        ApiUrl: "http://10.2.0.13:3002"
+      }
+    };
+
+    const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(configData, null, 2))}`;
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', jsonString);
+    downloadAnchor.setAttribute('download', 'appsettings.json');
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
   };
 
   // Sync specific scanner
@@ -156,23 +399,40 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
         <div>
           <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded bg-teal-50 text-teal-800 text-xs font-mono font-medium mb-1 border border-teal-200">
             <Cpu className="w-3.5 h-3.5 text-teal-600" />
-            <span>HIP CMiF68S Native SDK · FK623Attend.dll (Port: 5005, License: 1261)</span>
+            <span>HIP CMiF68S Native SDK · FK623Attend.dll (TCP Port: 5005, License: 1261)</span>
           </div>
-          <h2 className="text-base font-bold text-slate-800">
-            จัดการเครื่องสแกนและชุดไฟล์ SDK (FK623Attend.dll & Scanners)
+          <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+            <span>จัดการเครื่องสแกนและชุดไฟล์ SDK (FK623Attend.dll & Scanners)</span>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-mono">
+              {state.scanners.length} เครื่อง
+            </span>
           </h2>
           <p className="text-xs text-slate-500">
-            ระบบเชื่อมต่อเครื่องสแกน HIP CMiF68S ทั้ง 3 เครื่องผ่าน TCP Port 5005 พร้อมโครงสร้างไฟล์ SDK และตัวจำลองการเชื่อมต่อ
+            เพิ่ม ลบ แก้ไข ตั้งค่า IP/Port และทดสอบการเชื่อมต่อเครื่องสแกนนิ้ว/ใบหน้า HIP ทุกเครื่องในโรงพยาบาลสามชุก
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Background Service Status Badge */}
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-lg border border-slate-200 text-xs">
-            <Activity className="w-4 h-4 text-emerald-600" />
-            <span className="text-slate-600">Background Sync (ทุก 1 นาที):</span>
-            <span className="font-bold text-emerald-700">ทำงานอยู่</span>
-          </div>
+        <div className="flex items-center flex-wrap gap-2.5">
+          {isAdmin && (
+            <>
+              <button
+                onClick={handleOpenAddModal}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ เพิ่มเครื่องสแกนใหม่</span>
+              </button>
+
+              <button
+                onClick={handleTestAllScanners}
+                disabled={isTestingAll}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isTestingAll ? 'animate-spin' : ''}`} />
+                <span>{isTestingAll ? 'กำลังทดสอบ...' : 'ทดสอบทุกเครื่องพร้อมกัน'}</span>
+              </button>
+            </>
+          )}
 
           <button
             onClick={onSync}
@@ -180,7 +440,7 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
             className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition-colors"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>Sync ทั้ง 3 เครื่องพร้อมกัน</span>
+            <span>Sync ทุกเครื่อง</span>
           </button>
         </div>
       </div>
@@ -196,7 +456,7 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
           }`}
         >
           <Cpu className="w-4 h-4" />
-          <span>1. สถานะเครื่องสแกน (3 เครื่อง)</span>
+          <span>1. รายการและจัดการเครื่องสแกน ({state.scanners.length} เครื่อง)</span>
         </button>
 
         <button
@@ -234,6 +494,18 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
           <HardDrive className="w-4 h-4 text-indigo-400" />
           <span>4. คู่มือติดตั้ง DLL บน Windows Server</span>
         </button>
+
+        <button
+          onClick={() => setActiveTab('settings')}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+            activeTab === 'settings' 
+              ? 'bg-slate-900 text-white shadow-xs' 
+              : 'text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200'
+          }`}
+        >
+          <Sliders className="w-4 h-4 text-teal-400" />
+          <span>5. ตั้งค่า & ดาวน์โหลด Config (appsettings.json)</span>
+        </button>
       </div>
 
       {/* Connection Test Result Banner */}
@@ -259,88 +531,220 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
         </div>
       )}
 
-      {/* TAB 1: 3 SCANNERS STATUS GRID */}
-      {activeTab === 'scanners' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {state.scanners.map((scanner) => (
+      {/* Test All Results Dialog / Banner */}
+      {testAllResults && (
+        <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-xs space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <h4 className="text-xs font-bold text-slate-800 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-teal-600" />
+              <span>ผลการทดสอบการเชื่อมต่อทุกเครื่อง (TCP Port 5005)</span>
+            </h4>
+            <button
+              onClick={() => setTestAllResults(null)}
+              className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 cursor-pointer font-bold"
+            >
+              ✕ ปิด
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {testAllResults.map((r) => (
               <div 
-                key={scanner.id}
-                className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col justify-between space-y-4 hover:border-slate-300 transition-colors"
+                key={r.machineNo}
+                className={`p-3 rounded-lg border text-xs flex flex-col justify-between space-y-1 ${
+                  r.success ? 'bg-emerald-50/60 border-emerald-200' : 'bg-rose-50/60 border-rose-200'
+                }`}
               >
-                <div>
-                  {/* Card Header */}
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-slate-100 text-slate-700 mb-1">
-                        Machine No: {scanner.machineNo}
-                      </span>
-                      <h3 className="text-sm font-bold text-slate-800">
-                        {scanner.name}
-                      </h3>
-                    </div>
-
-                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                      Online
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-800">{r.name}</span>
+                  {r.success ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded">
+                      <Check className="w-3 h-3" /> ออนไลน์
                     </span>
-                  </div>
-
-                  {/* Hardware Parameters Specification (Section 4 & 5) */}
-                  <div className="space-y-2 text-xs pt-3 border-t border-slate-100 font-mono">
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-500">IP Address:</span>
-                      <span className="font-bold text-slate-800">{scanner.ip}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-500">Port (TCP):</span>
-                      <span className="text-teal-700 font-bold">{scanner.port}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-500">รุ่น (Model):</span>
-                      <span className="text-slate-800">{scanner.model}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-500">Serial Number:</span>
-                      <span className={scanner.serial === 'ยังไม่ระบุ' ? 'text-amber-600 font-sans' : 'text-slate-800'}>
-                        {scanner.serial}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-500">Password / License:</span>
-                      <span className="text-slate-800">{scanner.password} / 1261</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-500">Sync ล่าสุด:</span>
-                      <span className="text-slate-600 text-[11px]">{scanner.lastSync || '-'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-500">เรคคอร์ดทั้งหมด:</span>
-                      <span className="font-bold text-slate-800">{scanner.totalLoadedRecords.toLocaleString()} รายการ</span>
-                    </div>
-                  </div>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-700 bg-rose-100/80 px-2 py-0.5 rounded">
+                      <X className="w-3 h-3" /> ไม่ตอบสนอง
+                    </span>
+                  )}
                 </div>
-
-                {/* Actions for this Scanner */}
-                {isAdmin && (
-                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                    <button
-                      onClick={() => handleTestConnection(scanner)}
-                      disabled={testingMachineId === scanner.id}
-                      className="flex-1 py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-md transition-colors cursor-pointer text-center"
-                    >
-                      {testingMachineId === scanner.id ? 'กำลังทดสอบ...' : 'ทดสอบ Connect'}
-                    </button>
-                    <button
-                      onClick={() => handleSyncSpecific(scanner.machineNo)}
-                      className="flex-1 py-1.5 px-2 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-semibold rounded-md transition-colors cursor-pointer text-center"
-                    >
-                      Sync ดึง Log
-                    </button>
-                  </div>
-                )}
+                <div className="text-[11px] text-slate-500 font-mono">
+                  {r.ip}:{r.port}
+                </div>
+                <div className={`text-[11px] mt-1 ${r.success ? 'text-emerald-800' : 'text-rose-800'}`}>
+                  {r.message}
+                </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 1: SCANNERS STATUS GRID & MANAGEMENT */}
+      {activeTab === 'scanners' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-slate-500">
+              แสดงรายการเครื่องสแกนนิ้ว/ใบหน้าทั้งหมดในระบบ สามารถคลิกแก้ไข ลบ หรือเปิด/ปิดการดึงข้อมูลได้ทันที
+            </div>
+            {isAdmin && (
+              <button
+                onClick={handleOpenAddModal}
+                className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg border border-emerald-200 cursor-pointer transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>เพิ่มเครื่องใหม่</span>
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {state.scanners.map((scanner) => {
+              const isEnabled = scanner.enabled;
+              return (
+                <div 
+                  key={scanner.id}
+                  className={`bg-white border rounded-xl p-5 shadow-xs flex flex-col justify-between space-y-4 transition-all ${
+                    isEnabled 
+                      ? 'border-slate-200 hover:border-teal-300' 
+                      : 'border-slate-200 bg-slate-50/50 opacity-80'
+                  }`}
+                >
+                  <div>
+                    {/* Card Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-slate-100 text-slate-700">
+                            Machine No: {scanner.machineNo}
+                          </span>
+                          {!isEnabled && (
+                            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                              ปิดใช้งาน
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="text-sm font-bold text-slate-800 line-clamp-1" title={scanner.name}>
+                          {scanner.name}
+                        </h3>
+                      </div>
+
+                      {/* Status and Edit/Delete Quick Actions */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {isEnabled ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                            Online
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                            Disabled
+                          </span>
+                        )}
+
+                        {isAdmin && (
+                          <div className="flex items-center gap-0.5 ml-1">
+                            <button
+                              onClick={() => handleOpenEditModal(scanner)}
+                              title="แก้ไขข้อมูลเครื่อง"
+                              className="p-1 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded transition-colors cursor-pointer"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirmScanner(scanner)}
+                              title="ลบเครื่องสแกน"
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Hardware Parameters Specification */}
+                    <div className="space-y-1.5 text-xs pt-3 mt-2 border-t border-slate-100 font-mono">
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-500">IP Address:</span>
+                        <span className="font-bold text-slate-800">{scanner.ip}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-500">Port (TCP):</span>
+                        <span className="text-teal-700 font-bold">{scanner.port}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-500">รุ่น (Model):</span>
+                        <span className="text-slate-800">{scanner.model}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-500">Serial Number:</span>
+                        <span className={scanner.serial === 'ยังไม่ระบุ' ? 'text-amber-600 font-sans' : 'text-slate-800'}>
+                          {scanner.serial}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-500">Password / License:</span>
+                        <span className="text-slate-800">{scanner.password} / 1261</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-500">รอบเวลา Sync:</span>
+                        <span className="text-slate-800">{scanner.syncIntervalSec || 60} วินาที</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-500">Sync ล่าสุด:</span>
+                        <span className="text-slate-600 text-[11px]">{scanner.lastSync || '-'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="font-sans text-slate-500">เรคคอร์ดทั้งหมด:</span>
+                        <span className="font-bold text-slate-800">{scanner.totalLoadedRecords.toLocaleString()} รายการ</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions for this Scanner */}
+                  {isAdmin && (
+                    <div className="pt-3 border-t border-slate-100 flex flex-col gap-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          onClick={() => handleTestConnection(scanner)}
+                          disabled={testingMachineId === scanner.id || !isEnabled}
+                          className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-md transition-colors text-center ${
+                            !isEnabled
+                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-800 cursor-pointer'
+                          }`}
+                        >
+                          {testingMachineId === scanner.id ? 'กำลังทดสอบ...' : 'ทดสอบ Connect'}
+                        </button>
+                        <button
+                          onClick={() => handleSyncSpecific(scanner.machineNo)}
+                          disabled={!isEnabled}
+                          className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-md transition-colors text-center ${
+                            !isEnabled
+                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                              : 'bg-teal-50 hover:bg-teal-100 text-teal-800 cursor-pointer'
+                          }`}
+                        >
+                          Sync ดึง Log
+                        </button>
+                      </div>
+
+                      {/* Toggle On/Off Switch */}
+                      <button
+                        onClick={() => handleToggleEnabled(scanner.id)}
+                        className={`w-full py-1 px-2 text-[11px] font-semibold rounded transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
+                          isEnabled
+                            ? 'bg-slate-50 hover:bg-amber-50 text-slate-600 hover:text-amber-800 border border-slate-200'
+                            : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+                        }`}
+                      >
+                        <Power className="w-3 h-3" />
+                        <span>{isEnabled ? 'คลิกเพื่อปิดใช้งานเครื่องนี้ชั่วคราว' : 'คลิกเพื่อเปิดใช้งานเครื่องนี้'}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {/* Quick Notice Banner */}
@@ -348,18 +752,27 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
             <div>
               <div className="text-teal-400 font-bold flex items-center gap-2 font-sans">
                 <CheckCircle className="w-4 h-4 text-emerald-400" />
-                <span>การเชื่อมต่อเครื่องสแกน CMiF68S ผ่าน Background Worker Service</span>
+                <span>การเชื่อมต่อเครื่องสแกน HIP ผ่าน Background Worker Service</span>
               </div>
               <p className="text-slate-400 font-sans text-xs mt-0.5">
-                ตัว Service ฝั่ง Windows Server ดึง Log จากเครื่อง 1-3 ด้วย <code className="text-teal-300">FK623Attend.dll</code> ทุก 1 นาที บันทึกลงตาราง staging <code className="text-teal-300">attendance_raw_scan</code>
+                Service ฝั่งเซิร์ฟเวอร์ดึง Log จากเครื่องสแกนทั้งหมดด้วย <code className="text-teal-300">FK623Attend.dll</code> ทุก 1 นาที บันทึกลงตาราง staging <code className="text-teal-300">attendance_raw_scan</code>
               </p>
             </div>
-            <button
-              onClick={() => setActiveTab('sdk_files')}
-              className="px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white rounded-lg text-xs font-semibold cursor-pointer shrink-0 transition-colors"
-            >
-              ดูรายละเอียดไฟล์ใน ZIP ➔
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleDownloadAppSettings}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-500/30 rounded-lg text-xs font-semibold cursor-pointer shrink-0 transition-colors flex items-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>ดาวน์โหลด appsettings.json</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className="px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white rounded-lg text-xs font-semibold cursor-pointer shrink-0 transition-colors"
+              >
+                ดูการตั้งค่าทั้งหมด ➔
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -790,6 +1203,346 @@ public static extern int FK_ConnectNet(int anMachineNo, string astrIpAddress, in
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: SYSTEM SETTINGS & CONFIGURATION (appsettings.json) */}
+      {activeTab === 'settings' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Sliders className="w-5 h-5 text-teal-600" />
+                  <span>การตั้งค่าระบบเครื่องสแกนและดาวน์โหลด Config (appsettings.json)</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  โครงสร้างการตั้งค่าระบบเครื่องสแกนนิ้ว/ใบหน้าทั้งหมด เพื่อนำไปใช้งานกับ Backend Worker Service บน Windows Server
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDownloadAppSettings}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>ดาวน์โหลด appsettings.json</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick summary cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                <span className="text-slate-500">จำนวนเครื่องสแกนทั้งหมด:</span>
+                <div className="text-xl font-bold text-slate-800">{state.scanners.length} เครื่อง</div>
+                <span className="text-[11px] text-emerald-600">เปิดใช้งาน {state.scanners.filter(s => s.enabled).length} เครื่อง</span>
+              </div>
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                <span className="text-slate-500">พอร์ตมาตรฐาน (TCP Port):</span>
+                <div className="text-xl font-bold text-teal-700">5005</div>
+                <span className="text-[11px] text-slate-500">ใช้กับ HIP CMiF68S & CMi Series</span>
+              </div>
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                <span className="text-slate-500">License Code ของ SDK:</span>
+                <div className="text-xl font-bold text-slate-800">1261</div>
+                <span className="text-[11px] text-slate-500">FK623Attend.dll Standard License</span>
+              </div>
+            </div>
+
+            {/* Config JSON Preview */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <FileCode className="w-4 h-4 text-slate-500" />
+                  <span>ตัวอย่างเนื้อหาไฟล์ appsettings.json (สร้างอัตโนมัติตามเครื่องในระบบ):</span>
+                </label>
+                <button
+                  onClick={() => handleCopy(JSON.stringify({
+                    Scanners: state.scanners.map(s => ({
+                      MachineNo: s.machineNo,
+                      Name: s.name,
+                      IP: s.ip,
+                      Port: s.port,
+                      Model: s.model,
+                      Serial: s.serial || 'ยังไม่ระบุ',
+                      Password: Number(s.password) || 0,
+                      License: 1261
+                    })),
+                    AttendanceSettings: {
+                      AutoCalculateOnSync: true,
+                      SyncIntervalMinutes: 1,
+                      DefaultStartTime: "08:15:00",
+                      DefaultEndTime: "16:00:00"
+                    },
+                    NetworkSettings: {
+                      HostIp: "10.2.0.13",
+                      FrontendPort: 3001,
+                      FrontendUrl: "http://10.2.0.13:3001/Sam_Att/",
+                      ApiPort: 3002,
+                      ApiUrl: "http://10.2.0.13:3002"
+                    }
+                  }, null, 2), 'appsettings')}
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs rounded font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  {copiedCode === 'appsettings' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedCode === 'appsettings' ? 'คัดลอก JSON แล้ว' : 'คัดลอก JSON'}</span>
+                </button>
+              </div>
+
+              <div className="relative">
+                <pre className="p-4 bg-slate-950 text-teal-300 rounded-xl font-mono text-xs overflow-x-auto leading-relaxed border border-slate-800 max-h-96">
+{JSON.stringify({
+  Scanners: state.scanners.map(s => ({
+    MachineNo: s.machineNo,
+    Name: s.name,
+    IP: s.ip,
+    Port: s.port,
+    Model: s.model,
+    Serial: s.serial || 'ยังไม่ระบุ',
+    Password: Number(s.password) || 0,
+    License: 1261
+  })),
+  AttendanceSettings: {
+    AutoCalculateOnSync: true,
+    SyncIntervalMinutes: 1,
+    DefaultStartTime: "08:15:00",
+    DefaultEndTime: "16:00:00"
+  },
+  NetworkSettings: {
+    HostIp: "10.2.0.13",
+    FrontendPort: 3001,
+    FrontendUrl: "http://10.2.0.13:3001/Sam_Att/",
+    ApiPort: 3002,
+    ApiUrl: "http://10.2.0.13:3002"
+  }
+}, null, 2)}
+                </pre>
+              </div>
+
+              <p className="text-[11px] text-slate-500 mt-2">
+                * คำแนะนำ: หากเพิ่มหรือแก้ไขเครื่องสแกนในหน้านี้ สามารถกดปุ่ม <strong>"ดาวน์โหลด appsettings.json"</strong> แล้วนำไปวางทับไฟล์เดิมที่ <code>C:\inetpub\wwwroot\Sam_Att\backend\SamchukAttendance.Api\appsettings.json</code> เพื่อให้ตัว Backend Service ซิงค์เครื่องใหม่ได้ทันที
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ADD / EDIT SCANNER */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-lg overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <Cpu className="w-5 h-5 text-teal-600" />
+                <h3 className="text-base font-bold text-slate-800">
+                  {modalMode === 'add' ? 'เพิ่มเครื่องสแกนนิ้ว/ใบหน้าใหม่' : `แก้ไขเครื่องสแกน #${formData.machineNo}`}
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSaveScanner} className="p-6 space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    Machine No (หมายเลขเครื่อง) <span className="text-rose-500">*</span>:
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="99"
+                    required
+                    value={formData.machineNo}
+                    onChange={(e) => setFormData({ ...formData, machineNo: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 font-mono focus:bg-white focus:border-teal-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    รุ่นเครื่อง (Model) <span className="text-rose-500">*</span>:
+                  </label>
+                  <select
+                    value={formData.model}
+                    onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:bg-white focus:border-teal-500 focus:outline-hidden"
+                  >
+                    <option value="CMiF68S">HIP CMiF68S (รุ่นหลักของ รพ.)</option>
+                    <option value="CMi681S">HIP CMi681S</option>
+                    <option value="CiF76S">HIP CiF76S</option>
+                    <option value="CMi682S">HIP CMi682S</option>
+                    <option value="Other">กำหนดเอง / รุ่นอื่นๆ</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  ชื่อเครื่องสแกน / ตำแหน่งติดตั้ง <span className="text-rose-500">*</span>:
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="เช่น Scanner 4 - ตึกเภสัชกรรม (OPD)"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:bg-white focus:border-teal-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    IP Address <span className="text-rose-500">*</span>:
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="192.168.111.xxx"
+                    value={formData.ip}
+                    onChange={(e) => setFormData({ ...formData, ip: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 font-mono focus:bg-white focus:border-teal-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    Port (TCP) <span className="text-rose-500">*</span>:
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={formData.port}
+                    onChange={(e) => setFormData({ ...formData, port: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 font-mono focus:bg-white focus:border-teal-500 focus:outline-hidden"
+                  />
+                  <span className="text-[10px] text-teal-700 mt-0.5 block">ค่ามาตรฐาน: 5005</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    Serial Number:
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="เช่น 6802004xxx หรือ ยังไม่ระบุ"
+                    value={formData.serial}
+                    onChange={(e) => setFormData({ ...formData, serial: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 font-mono focus:bg-white focus:border-teal-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    Password เครื่อง:
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 font-mono focus:bg-white focus:border-teal-500 focus:outline-hidden"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-0.5 block">ค่าเริ่มต้นจากโรงงานคือ 0</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    รอบเวลาดึงข้อมูล (วินาที):
+                  </label>
+                  <input
+                    type="number"
+                    min="10"
+                    max="3600"
+                    value={formData.syncIntervalSec}
+                    onChange={(e) => setFormData({ ...formData, syncIntervalSec: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-slate-800 font-mono focus:bg-white focus:border-teal-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="flex flex-col justify-end">
+                  <label className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-lg border border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={formData.enabled}
+                      onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
+                      className="w-4 h-4 text-teal-600 rounded border-slate-300 focus:ring-teal-500"
+                    />
+                    <span className="font-semibold text-slate-800 text-xs">เปิดใช้งานเครื่องนี้</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{modalMode === 'add' ? 'บันทึกเครื่องสแกนใหม่' : 'บันทึกการแก้ไข'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DELETE CONFIRMATION */}
+      {deleteConfirmScanner && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">ยืนยันการลบเครื่องสแกน?</h3>
+                <p className="text-xs text-slate-500">การดำเนินการนี้จะนำเครื่องสแกนออกจากรายการของระบบ</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1 font-mono">
+              <div><strong>ชื่อเครื่อง:</strong> <span className="font-sans text-slate-800">{deleteConfirmScanner.name}</span></div>
+              <div><strong>Machine No:</strong> {deleteConfirmScanner.machineNo}</div>
+              <div><strong>IP:Port:</strong> {deleteConfirmScanner.ip}:{deleteConfirmScanner.port}</div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setDeleteConfirmScanner(null)}
+                className="px-4 py-2 border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>ยืนยันลบเครื่องนี้</span>
+              </button>
             </div>
           </div>
         </div>

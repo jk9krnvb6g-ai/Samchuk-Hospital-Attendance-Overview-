@@ -123,7 +123,7 @@ mysql -u root -p --default-character-set=utf8mb4 < backend/SamchukAttendance.Dat
 ```
 คำสั่งนี้จะสร้าง Database `samchuk_attendance` ด้วย Character Set `utf8mb4` และ Collation `utf8mb4_unicode_ci` พร้อมตารางที่เกี่ยวข้องครบถ้วน
 
-### 4.2 การกำหนดสิทธิ์บนฐานข้อมูล HOSOffice (`hosoffice` @ 10.1.0.201)
+### 4.2 การกำหนดสิทธิ์บนฐานข้อมูล HOSOffice (`hosoffice` @ 10.2.0.201)
 เข้าสู่เซิร์ฟเวอร์ฐานข้อมูล HOSOffice แล้วรันคำสั่งกำหนดสิทธิ์ตามหลักความปลอดภัย:
 ```sql
 -- 1. สร้างผู้ใช้สำหรับระบบสแกนเวลา (หากยังไม่มี)
@@ -155,7 +155,7 @@ FLUSH PRIVILEGES;
 {
   "ConnectionStrings": {
     "AttendanceDb": "Server=localhost;Port=3306;Database=samchuk_attendance;User ID=attendance_app;Password=YOUR_ATTENDANCE_DB_PASSWORD;CharSet=utf8mb4;TreatTinyAsBoolean=false;SslMode=Preferred;",
-    "HosOffice": "Server=10.1.0.201;Port=3306;Database=hosoffice;User ID=samchuk_sync;Password=YOUR_HOSOFFICE_PASSWORD;CharSet=utf8mb4;TreatTinyAsBoolean=false;AllowUserVariables=True;"
+    "HosOffice": "Server=10.2.0.201;Port=3306;Database=hosoffice;User ID=samchuk_sync;Password=YOUR_HOSOFFICE_PASSWORD;CharSet=utf8mb4;TreatTinyAsBoolean=false;AllowUserVariables=True;"
   },
   "ScannerSettings": {
     "Port": 5005,
@@ -249,7 +249,7 @@ New-NetFirewallRule -DisplayName "Samchuk Attendance API Gateway Port 3002" -Dir
 # 3. อนุญาตให้ Backend Service ติดต่อเครื่องสแกนนิ้ว HIP CMiF68S (TCP Port 5005 Outbound)
 New-NetFirewallRule -DisplayName "HIP Scanner Outbound Port 5005" -Direction Outbound -LocalPort Any -Protocol TCP -RemotePort 5005 -Action Allow
 
-# 4. อนุญาตให้เชื่อมต่อไปยัง MySQL HOSOffice (TCP Port 3306 Outbound ไปยัง 10.1.0.201)
+# 4. อนุญาตให้เชื่อมต่อไปยัง MySQL HOSOffice (TCP Port 3306 Outbound ไปยัง 10.2.0.201)
 New-NetFirewallRule -DisplayName "MySQL HosOffice Outbound Port 3306" -Direction Outbound -LocalPort Any -Protocol TCP -RemotePort 3306 -Action Allow
 ```
 

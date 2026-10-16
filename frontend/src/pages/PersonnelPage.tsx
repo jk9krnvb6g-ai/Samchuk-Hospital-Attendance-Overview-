@@ -163,7 +163,7 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
           <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-mono font-medium mb-1">
-            <span>ฐานข้อมูล: 10.1.0.201 / hosoffice (Read-Only via MySQL)</span>
+            <span>ฐานข้อมูล: 10.2.0.201 / hosoffice (Read-Only via MySQL)</span>
           </div>
           <h2 className="text-base font-bold text-slate-800">
             ข้อมูลบุคลากรและรหัสสแกนนิ้ว (Personnel Directory)
@@ -209,7 +209,7 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <div className="flex items-center gap-2 text-teal-400 font-sans font-bold text-xs">
               <Database className="w-4 h-4" />
-              <span>SQL Query สำหรับดึงข้อมูลบุคลากรจาก hosoffice @ 10.1.0.201:</span>
+              <span>SQL Query สำหรับดึงข้อมูลบุคลากรจาก hosoffice @ 10.2.0.201:</span>
             </div>
             <button
               onClick={handleCopyQuery}
@@ -421,7 +421,7 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
                 </div>
                 <div>
                   <h3 className="text-base font-bold">
-                    ผลการดึงข้อมูลบุคลากรจาก HOSOffice (hr_person @ 10.1.0.201)
+                    ผลการดึงข้อมูลบุคลากรจาก HOSOffice (hr_person @ 10.2.0.201)
                   </h3>
                   <p className="text-xs text-teal-200">
                     เวลาที่ดึงข้อมูล: {syncResult.syncedAt} · แหล่งข้อมูล: MySQL hosoffice
