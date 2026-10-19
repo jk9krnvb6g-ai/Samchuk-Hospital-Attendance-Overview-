@@ -3,12 +3,8 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 chcp 65001 >nul
 
-:: กำหนดหมายเลขพอร์ต (หากพอร์ต 3001 ติด EACCES หรือถูกจอง ให้เปลี่ยนเป็น 3000 หรือ 8080 ได้)
-if "%FRONTEND_PORT%"=="" set FRONTEND_PORT=3001
-if "%API_PORT%"=="" set API_PORT=3002
-
 echo =========================================================================
-echo    โรงพยาบาลสามชุก - รันระบบ Sam_Att (Web :%FRONTEND_PORT% and API :%API_PORT%)
+echo    โรงพยาบาลสามชุก - รันระบบ Sam_Att (Web :3001 and API :3002)
 echo =========================================================================
 echo [ไดเรกทอรีทำงาน]: %CD%
 echo.
@@ -16,15 +12,15 @@ echo.
 :: 1. ตรวจสอบ Node.js
 where node >nul 2>&1
 if %errorLevel% neq 0 (
-    echo [ข้อผิดพลาด] ไม่พบโปรแกรม Node.js ในเครื่อง
-    echo กรุณาติดตั้ง Node.js จาก https://nodejs.org/ แล้วลองใหม่อีกครั้ง
+    echo [ข้อผิดพลาด] ไม่พบโปรแกรม Node.js ในเครื่องเซิร์ฟเวอร์
+    echo กรุณาติดตั้ง Node.js หรือตรวจสอบ System PATH แล้วลองใหม่อีกครั้ง
     echo.
     pause
     exit /b 1
 )
 
 :: 2. ตรวจสอบ node_modules
-if not exist node_modules (
+if not exist "node_modules" (
     echo [ตรวจพบ] ยังไม่ได้ติดตั้งแพ็กเกจ (node_modules) กำลังติดตั้ง...
     call npm install --legacy-peer-deps
     if %errorLevel% neq 0 (
@@ -36,50 +32,59 @@ if not exist node_modules (
     echo.
 )
 
-:: 3. ตรวจสอบโฟลเดอร์ dist สำหรับ Production Web
-if not exist dist (
-    echo [ตรวจพบ] ยังไม่มีโฟลเดอร์ dist กำลังคอมไพล์ระบบ (npm run build)...
-    call npm run build
-    if %errorLevel% neq 0 (
-        echo [ข้อผิดพลาด] การคอมไพล์ไม่สำเร็จ
-        pause
-        exit /b 1
-    )
-    echo [OK] คอมไพล์หน้าเว็บเรียบร้อยแล้ว
+:: 3. สตาร์ท Backend API Service (พอร์ต 3002 - จัดการฐานข้อมูลและเครื่องสแกน)
+echo [1/2] กำลังตรวจสอบและเริ่มต้น Backend API Gateway (พอร์ต 3002)...
+:: เคลียร์โปรเซสค้างที่พอร์ต 3002 (ถ้ามี)
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3002 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
+
+:: สตาร์ท Node.js Backend API
+start "Samchuk Attendance API (:3002)" cmd /k "chcp 65001 >nul && node backend\server.cjs"
+echo       [OK] Backend API Service สตาร์ทเรียบร้อยแล้ว (พอร์ต 3002)
+
+:: 4. ตรวจสอบ Web Frontend (พอร์ต 3001)
+echo.
+echo [2/2] กำลังตรวจสอบสถานะ Web Frontend (พอร์ต 3001)...
+
+set IIS_ACTIVE=0
+for /f "tokens=*" %%i in ('netstat -ano ^| findstr /r ":3001.*LISTENING"') do (
+    set IIS_ACTIVE=1
+)
+
+if "!IIS_ACTIVE!"=="1" (
+    echo       [ตรวจพบ] เซิร์ฟเวอร์ IIS กำลังเปิดใช้งานบนพอร์ต 3001 อยู่แล้ว!
+    echo       กำลังคอมไพล์โค้ดล่าสุดเข้าสู่ IIS (build-hospital.bat)...
     echo.
-)
-
-:: 4. สตาร์ท API Service (พอร์ต 3002)
-echo กำลังเริ่มต้นบริการ...
-where dotnet >nul 2>&1
-if %errorLevel% equ 0 (
-    echo [1/2] กำลังเปิด Backend API Service (พอร์ต %API_PORT%)...
-    start "Samchuk Attendance API (:%API_PORT%)" cmd /k "cd backend\SamchukAttendance.Api && dotnet run --urls http://0.0.0.0:%API_PORT%"
+    call "%~dp0build-hospital.bat"
+    echo.
+    echo =========================================================================
+    echo    ระบบ Sam_Att พร้อมใช้งานอย่างสมบูรณ์!
+    echo =========================================================================
+    echo  - Web Frontend (IIS HTTPS) : https://10.2.0.13:3001/Sam_Att/
+    echo  - Backend API Gateway     : http://10.2.0.13:3002
+    echo =========================================================================
+    echo.
+    echo กำลังเปิดหน้าเว็บในเบราว์เซอร์ใน 3 วินาที...
+    timeout /t 3 >nul
+    start https://10.2.0.13:3001/Sam_Att/
 ) else (
-    echo [1/2] [คำเตือน] ไม่พบ .NET SDK ในเครื่อง (ข้าม Backend API)
-    echo       หน้าเว็บ Frontend จะยังใช้งานได้ตามปกติ
-    echo       หากต้องการให้ระบบซิงค์เครื่องสแกน ให้ติดตั้ง .NET 8 SDK
-    echo       ดาวน์โหลด: https://dotnet.microsoft.com/download/dotnet/8.0
+    echo       [ตรวจพบ] พอร์ต 3001 ว่างอยู่ (ไม่ได้รันผ่าน IIS)
+    echo       กำลังคอมไพล์และเปิด Web Frontend ผ่าน Vite Preview...
+    if not exist "dist" (
+        call npm run build
+    )
+    start "Samchuk Attendance Web (:3001)" cmd /k "chcp 65001 >nul && npx vite preview --port=3001 --host=0.0.0.0"
+    echo.
+    echo =========================================================================
+    echo    ระบบ Sam_Att พร้อมใช้งาน!
+    echo =========================================================================
+    echo  - Web Frontend (HTTP)     : http://10.2.0.13:3001/Sam_Att/
+    echo  - Backend API Gateway     : http://10.2.0.13:3002
+    echo =========================================================================
+    echo.
+    echo กำลังเปิดหน้าเว็บในเบราว์เซอร์ใน 3 วินาที...
+    timeout /t 3 >nul
+    start http://localhost:3001/Sam_Att/
 )
-
-:: 5. สตาร์ท Web Frontend
-echo.
-echo [2/2] กำลังเปิด Web Frontend (พอร์ต %FRONTEND_PORT%)...
-start "Samchuk Attendance Web (:%FRONTEND_PORT%)" cmd /k npx vite preview --port=%FRONTEND_PORT% --host=0.0.0.0
-
-echo.
-echo =========================================================================
-echo    ระบบ Sam_Att เริ่มต้นทำงานแล้ว!
-echo =========================================================================
-echo [ลิงก์เปิดใช้งาน]:
-echo  - เปิดใช้งานบนเครื่องนี้  : http://localhost:%FRONTEND_PORT%/Sam_Att/
-echo  - เครื่องอื่นในวง LAN รพ. : http://10.2.0.13:%FRONTEND_PORT%/Sam_Att/
-echo  - Backend API Gateway    : http://10.2.0.13:%API_PORT%
-echo =========================================================================
-echo.
-echo กำลังเปิดหน้าเว็บในบราวเซอร์อัตโนมัติใน 3 วินาที...
-timeout /t 3 >nul
-start http://localhost:%FRONTEND_PORT%/Sam_Att/
 
 echo กดปุ่มใดก็ได้เพื่อปิดหน้าต่างนี้ (บริการเว็บและ API ยังคงทำงานอยู่ในหน้าต่างแยก)
 pause >nul
