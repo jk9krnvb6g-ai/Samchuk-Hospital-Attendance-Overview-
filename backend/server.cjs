@@ -1665,15 +1665,21 @@ app.post('/api/raw-scans/seed-sample', async (req, res) => {
 app.get('/api/hosoffice/personnel', async (req, res) => {
   try {
     const pool = getHosofficePool();
-    const limit = parseInt(req.query.limit, 10) || 500;
+    const limit = parseInt(req.query.limit, 10) || 1000;
     
-    // พยายาม Query จากตาราง hr_person ของ hosoffice
+    // พยายาม Query จากตาราง hr_person ของ hosoffice พร้อมป้องกัน CONCAT NULL
     const [rows] = await pool.query(`
       SELECT 
         hp.ID as id,
         hp.FINGLE_ID as fingle_id,
         hp.HR_CID as hr_cid,
-        CONCAT(COALESCE(hf.HR_PREFIX_NAME, ''), hp.HR_FNAME, ' ', hp.HR_LNAME) as hr_fullname,
+        TRIM(CONCAT(
+          COALESCE(hf.HR_PREFIX_NAME, ''),
+          COALESCE(hp.HR_FNAME, ''),
+          CASE WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' THEN CONCAT(' ', TRIM(hp.HR_LNAME)) ELSE '' END
+        )) as hr_fullname,
+        hp.HR_FNAME as hr_fname,
+        hp.HR_LNAME as hr_lname,
         COALESCE(ht.HR_POSITION_NAME, '') as hr_position_name,
         COALESCE(hd.HR_DEPARTMENT_NAME, '') as hr_dep_name,
         COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') as hr_dep_sub_name,
@@ -1690,11 +1696,41 @@ app.get('/api/hosoffice/personnel', async (req, res) => {
       LIMIT ?
     `, [limit]);
 
+    const mapped = rows.map(r => {
+      let fullname = (r.hr_fullname || '').trim();
+      if (!fullname && r.hr_fname) {
+        fullname = `${r.hr_fname} ${r.hr_lname || ''}`.trim();
+      }
+      if (!fullname) {
+        fullname = `เจ้าหน้าที่ รหัส ${r.id}`;
+      }
+      return {
+        id: r.id,
+        personId: r.id,
+        fingleId: r.fingle_id || r.id,
+        fingle_id: r.fingle_id || r.id,
+        hrCid: r.hr_cid || '',
+        hr_cid: r.hr_cid || '',
+        hrFullname: fullname,
+        hr_fullname: fullname,
+        hrPositionName: r.hr_position_name || 'เจ้าหน้าที่',
+        hr_position_name: r.hr_position_name || 'เจ้าหน้าที่',
+        hrLevelName: r.hr_level_name || '',
+        hr_level_name: r.hr_level_name || '',
+        hrDepName: r.hr_dep_name || 'โรงพยาบาลสามชุก',
+        hr_dep_name: r.hr_dep_name || 'โรงพยาบาลสามชุก',
+        hrDepSubName: r.hr_dep_sub_name || '',
+        hr_dep_sub_name: r.hr_dep_sub_name || '',
+        hrPersonTypeName: r.hr_person_type_name || 'ข้าราชการ',
+        hr_person_type_name: r.hr_person_type_name || 'ข้าราชการ'
+      };
+    });
+
     res.json({
       success: true,
       database: hosofficeDbName,
-      total: rows.length,
-      data: rows
+      total: mapped.length,
+      data: mapped
     });
   } catch (err) {
     res.status(500).json({

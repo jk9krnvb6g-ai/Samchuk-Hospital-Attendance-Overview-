@@ -1150,22 +1150,24 @@ class AttendanceStore {
 
       // 3. ดึงบุคลากรจาก MySQL hosoffice.hr_person
       try {
-        const pRes = await apiClient.getPersonnelFromHosoffice(200);
+        const pRes = await apiClient.getPersonnelFromHosoffice(1000);
         if (pRes.success && Array.isArray(pRes.data) && pRes.data.length > 0) {
           this.state.personnel = pRes.data.map((p: any) => ({
-            id: p.id,
-            fingleId: p.fingleId || p.id,
-            hrFullname: p.hrFullname || '',
-            hrPositionName: p.hrPositionName || '',
-            hrLeavelName: p.hrLeavelName || '',
-            hrDepName: p.hrDepName || '',
-            hrDepSubName: p.hrDepSubName || '',
-            hrPersonTypeName: p.hrPersonTypeName || 'ข้าราชการ',
+            personId: p.personId || p.id,
+            id: p.id || p.personId,
+            fingleId: p.fingleId || p.fingle_id || p.id,
+            hrCid: p.hrCid || p.hr_cid || '',
+            hrFullname: (p.hrFullname || p.hr_fullname || '').trim() || `เจ้าหน้าที่ รหัส ${p.id || p.personId}`,
+            hrPositionName: p.hrPositionName || p.hr_position_name || 'เจ้าหน้าที่',
+            hrLevelName: p.hrLevelName || p.hr_level_name || '',
+            hrDepName: p.hrDepName || p.hr_dep_name || 'โรงพยาบาลสามชุก',
+            hrDepSubName: p.hrDepSubName || p.hr_dep_sub_name || '',
+            hrPersonTypeName: p.hrPersonTypeName || p.hr_person_type_name || 'ข้าราชการ',
             hrPersonTypeId: p.hrPersonTypeId || 1,
             hrDepartmentId: p.hrDepartmentId || 1,
             hrDepartmentSubId: p.hrDepartmentSubId || 1,
             hrStatusId: p.hrStatusId || 1,
-            active: true
+            status: 'ACTIVE'
           }));
         }
       } catch {}
@@ -1381,7 +1383,11 @@ class AttendanceStore {
       // 2. ตำแหน่ง (HR_POSITION_NAME)
       // 3. ระดับ (HR_LEVEL_NAME)
       // 4. กลุ่มงานหลัก / หน่วยงานย่อย (HR_DEPARTMENT_SUB)
-      // 5. ประเภทบุคลากร (HR_PERSON_TYPE_NAME)
+      // ซ่อมแซม personId, hrCid, fingleId ให้ตรงกับ HOSOffice เสมอ
+      if ((!existing.personId || existing.personId === 0) && row.ID) existing.personId = row.ID;
+      if (!existing.hrCid && row.HR_CID) existing.hrCid = row.HR_CID;
+      if (!existing.fingleId && row.FINGLE_ID) existing.fingleId = row.FINGLE_ID;
+
       const changes: PersonnelFieldChange[] = [];
 
       // 1. ชื่อ - สกุล (FULLNAME)

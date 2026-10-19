@@ -94,18 +94,18 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
     if (!simulateChanges) {
       // พยายามดึงข้อมูลบุคลากรจริงจาก MySQL hosoffice.hr_person
       try {
-        const liveRes = await apiClient.getPersonnelFromHosoffice(500);
+        const liveRes = await apiClient.getPersonnelFromHosoffice(1000);
         if (liveRes.success && Array.isArray(liveRes.data) && liveRes.data.length > 0) {
           customData = liveRes.data.map((r: any) => ({
-            ID: r.id,
-            HR_CID: r.hr_cid || '',
-            FULLNAME: r.hr_fullname || '',
-            HR_POSITION_NAME: r.hr_position_name || '',
-            HR_LEVEL_NAME: r.hr_level_name || '',
-            HR_DEPARTMENT_NAME: r.hr_dep_name || '',
-            HR_DEPARTMENT_SUB: r.hr_dep_sub_name || '',
-            HR_PERSON_TYPE_NAME: r.hr_person_type_name || '',
-            FINGLE_ID: r.fingle_id || r.id
+            ID: r.personId || r.id,
+            HR_CID: r.hrCid || r.hr_cid || '',
+            FULLNAME: (r.hrFullname || r.hr_fullname || '').trim() || `เจ้าหน้าที่ รหัส ${r.personId || r.id}`,
+            HR_POSITION_NAME: r.hrPositionName || r.hr_position_name || 'เจ้าหน้าที่',
+            HR_LEVEL_NAME: r.hrLevelName || r.hr_level_name || '',
+            HR_DEPARTMENT_NAME: r.hrDepName || r.hr_dep_name || 'โรงพยาบาลสามชุก',
+            HR_DEPARTMENT_SUB: r.hrDepSubName || r.hr_dep_sub_name || '',
+            HR_PERSON_TYPE_NAME: r.hrPersonTypeName || r.hr_person_type_name || 'ข้าราชการ',
+            FINGLE_ID: r.fingleId || r.fingle_id || r.id
           }));
         }
       } catch {
