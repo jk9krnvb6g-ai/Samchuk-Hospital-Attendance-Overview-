@@ -15,8 +15,11 @@ if exist "backend\SamchukAttendance.Api\appsettings.json" (
     copy /y "backend\SamchukAttendance.Api\appsettings.json" "backend\SamchukAttendance.Api\appsettings.json.bak" >nul
 )
 
-:: เคลียร์การเปลี่ยนแปลงชั่วคราวเพื่อป้องกัน merge conflict
+:: เคลียร์การเปลี่ยนแปลงชั่วคราวและไฟล์ untracked เพื่อป้องกัน merge conflict
+if exist "index.src.html" del /f /q "index.src.html" >nul 2>&1
 git checkout -- backend/SamchukAttendance.Api/appsettings.json >nul 2>&1
+git checkout -- index.html >nul 2>&1
+git clean -f -d >nul 2>&1
 
 :: ดึงโค้ดล่าสุด
 git pull origin main

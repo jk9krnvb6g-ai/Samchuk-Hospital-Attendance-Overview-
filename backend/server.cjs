@@ -86,6 +86,11 @@ function getDbPool() {
       queueLimit: 0,
       connectTimeout: 4000
     });
+
+    dbPool.on('connection', (conn) => {
+      conn.query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+      conn.query("SET CHARACTER SET utf8mb4");
+    });
   }
   return dbPool;
 }
@@ -111,6 +116,11 @@ function getHosofficePool() {
       connectionLimit: 10,
       queueLimit: 0,
       connectTimeout: 4000
+    });
+
+    hosofficePool.on('connection', (conn) => {
+      conn.query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
+      conn.query("SET CHARACTER SET utf8mb4");
     });
   }
   return hosofficePool;
@@ -308,6 +318,37 @@ async function ensureTablesExist() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
+    // ตรวจสอบและเพิ่มคอลัมน์ในตาราง attendance_daily_result หากตารางเคยถูกสร้างไว้ในเวอร์ชันเก่า (แก้ Unknown column 'fingle_id')
+    const dailyCols = [
+      { name: 'fingle_id', def: 'INT NOT NULL DEFAULT 0' },
+      { name: 'fullname', def: 'VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL' },
+      { name: 'department', def: 'VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL' },
+      { name: 'position', def: 'VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL' },
+      { name: 'shift_name', def: 'VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL' },
+      { name: 'scheduled_in', def: 'VARCHAR(10) NULL' },
+      { name: 'scheduled_out', def: 'VARCHAR(10) NULL' },
+      { name: 'first_scan', def: 'VARCHAR(25) NULL' },
+      { name: 'last_scan', def: 'VARCHAR(25) NULL' },
+      { name: 'check_in', def: 'VARCHAR(10) NULL' },
+      { name: 'check_out', def: 'VARCHAR(10) NULL' },
+      { name: 'status_label', def: 'VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT "ไม่พบสแกน"' },
+      { name: 'early_minutes', def: 'INT NOT NULL DEFAULT 0' },
+      { name: 'total_scans', def: 'INT NOT NULL DEFAULT 0' },
+      { name: 'calculated_at', def: 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP' }
+    ];
+
+    for (const col of dailyCols) {
+      try {
+        const [existing] = await pool.query(`SHOW COLUMNS FROM attendance_daily_result LIKE ?`, [col.name]);
+        if (existing.length === 0) {
+          await pool.query(`ALTER TABLE attendance_daily_result ADD COLUMN \`${col.name}\` ${col.def}`);
+          console.log(`✅ [Auto-Migration] เพิ่มคอลัมน์ '${col.name}' ในตาราง attendance_daily_result สำเร็จ`);
+        }
+      } catch (colErr) {
+        // ignore
+      }
+    }
+
     // 2.7 Seed กะมาตรฐานโรงพยาบาลสามชุกถ้ายังไม่มี
     const [rows] = await pool.query('SELECT COUNT(*) as count FROM attendance_shift');
     if (rows[0].count === 0) {
@@ -346,7 +387,15 @@ async function ensureTablesExist() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
-    // Seed ประเภทบุคลากรเริ่มต้น 5 ประเภท
+    // แปลง Character Set ฐานข้อมูลและตารางเป็น utf8mb4 อย่างแน่นอน
+    try {
+      await pool.query(`ALTER DATABASE \`${activeDbConfig.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+      await pool.query(`ALTER TABLE attendance_personnel_type_shift CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+      await pool.query(`ALTER TABLE attendance_raw_scan CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+      await pool.query(`ALTER TABLE attendance_shift CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    } catch {}
+
+    // Seed หรือซ่อมแซมประเภทบุคลากรเริ่มต้น 5 ประเภท
     const [typeRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_personnel_type_shift');
     if (typeRows[0].count === 0) {
       await pool.query(`
@@ -360,6 +409,35 @@ async function ensureTablesExist() {
         ('ลูกจ้างรายวัน', 'DAILY', 'ลูกจ้างจ้างเหมาบริการ / รายวัน', '08:00', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1)
       `);
       console.log('✅ Seed ข้อมูลประเภทบุคลากรและเวลากะเริ่มต้น 5 ประเภท สำเร็จ');
+    } else {
+      // ตรวจสอบและซ่อมแซมภาษาไทยหากพบตัวอักษรผิดเพี้ยน (Mojibake Auto-Fix)
+      try {
+        await pool.query(`
+          UPDATE attendance_personnel_type_shift 
+          SET name = 'ข้าราชการ', description = 'ข้าราชการพลเรือนสามัญ กระทรวงสาธารณสุข'
+          WHERE code = 'GOV';
+        `);
+        await pool.query(`
+          UPDATE attendance_personnel_type_shift 
+          SET name = 'พนักงานกระทรวงสาธารณสุข', description = 'พนักงานกระทรวงสาธารณสุข (พกส.)'
+          WHERE code = 'MOPH';
+        `);
+        await pool.query(`
+          UPDATE attendance_personnel_type_shift 
+          SET name = 'พนักงานราชการ', description = 'พนักงานราชการทั่วไป'
+          WHERE code = 'GOV_EMP';
+        `);
+        await pool.query(`
+          UPDATE attendance_personnel_type_shift 
+          SET name = 'ลูกจ้างประจำ/ลูกจ้างชั่วคราว', description = 'ลูกจ้างประจำและลูกจ้างชั่วคราวเงินบำรุง'
+          WHERE code = 'TEMP';
+        `);
+        await pool.query(`
+          UPDATE attendance_personnel_type_shift 
+          SET name = 'ลูกจ้างรายวัน', description = 'ลูกจ้างจ้างเหมาบริการ / รายวัน'
+          WHERE code = 'DAILY';
+        `);
+      } catch {}
     }
 
     return { success: true };

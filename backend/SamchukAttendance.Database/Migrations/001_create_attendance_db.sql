@@ -137,15 +137,26 @@ CREATE TABLE IF NOT EXISTS attendance_person_roster (
 -- ผลประมวลผลรายวัน
 CREATE TABLE IF NOT EXISTS attendance_daily_result (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    person_id INT NOT NULL,
     work_date DATE NOT NULL,
+    person_id INT NOT NULL,
+    fingle_id INT NOT NULL DEFAULT 0,
+    fullname VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+    department VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+    position VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
     shift_id INT NULL,
-    in_time DATETIME NULL,
-    out_time DATETIME NULL,
-    status VARCHAR(30) NULL,                   -- ON_TIME | LATE | EARLY_LEAVE | NO_SCAN | NO_SHIFT ...
-    late_minutes INT NULL,
-    ot_minutes INT NULL,
-    calculated_at DATETIME NOT NULL,
+    shift_name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+    scheduled_in VARCHAR(10) NULL,
+    scheduled_out VARCHAR(10) NULL,
+    first_scan VARCHAR(25) NULL,
+    last_scan VARCHAR(25) NULL,
+    check_in VARCHAR(10) NULL,
+    check_out VARCHAR(10) NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'NO_SCAN',
+    status_label VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'ไม่พบสแกน',
+    late_minutes INT NOT NULL DEFAULT 0,
+    early_minutes INT NOT NULL DEFAULT 0,
+    total_scans INT NOT NULL DEFAULT 0,
+    calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_day (person_id, work_date, shift_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
