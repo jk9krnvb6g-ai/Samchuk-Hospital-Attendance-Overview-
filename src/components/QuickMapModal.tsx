@@ -6,10 +6,6 @@ import {
   X, 
   Check, 
   AlertTriangle, 
-  Hospital,
-  Building,
-  Briefcase,
-  IdCard,
   Sparkles
 } from 'lucide-react';
 import { HrPerson, User } from '../types/attendance';

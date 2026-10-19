@@ -2,19 +2,14 @@ import React, { useState } from 'react';
 import { 
   Fingerprint, 
   Search, 
-  Filter, 
   Calendar, 
   RefreshCw, 
   Download, 
   CheckCircle, 
-  AlertTriangle, 
-  Clock, 
-  Info,
-  Layers,
   Link2
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
-import { PushStatus, RawScan, HrPerson } from '../types/attendance';
+import { PushStatus, RawScan } from '../types/attendance';
 import { QuickMapModal } from '../components/QuickMapModal';
 
 interface RawScansPageProps {
@@ -117,18 +112,30 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
       {/* Page Title & Stats */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-mono font-medium mb-1">
-            <span>ตาราง: attendance_raw_scan (Staging Database)</span>
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>MySQL 10.2.0.201 : attendance_raw_scan ({state.rawScans.length} รายการ)</span>
+            </span>
           </div>
           <h2 className="text-base font-bold text-slate-800">
-            บันทึกการสแกนนิ้วดิบจากเครื่องสแกน (Raw Scan Staging)
+            บันทึกการสแกนนิ้วดิบจากเครื่องสแกน (Raw Scan Staging DB)
           </h2>
           <p className="text-xs text-slate-500">
-            ข้อมูลที่อ่านจากเครื่องสแกน 1-3 จะเก็บทุกรายการในตารางนี้ก่อน ไม่เดา IN/OUT และยังไม่ลง hosoffice
+            ข้อมูลที่อ่านจากเครื่องสแกน 1-3 จะเก็บทุกรายการในตาราง attendance_raw_scan ของ MySQL 10.2.0.201 โดยตรง
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => attendanceStore.loadFromMySqlDb()}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg shadow-xs cursor-pointer border border-slate-300"
+            title="ดึงข้อมูลสแกนสดจาก MySQL attendance_raw_scan"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>โหลดสดจาก MySQL</span>
+          </button>
+
           <button
             onClick={handleExportCsv}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
@@ -142,9 +149,10 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
               onClick={onSync}
               disabled={isSyncing}
               className="flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
+              title="ดึงข้อมูลจากเครื่องสแกนและบันทึกลง MySQL attendance_raw_scan ทันที"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'กำลังดึง...' : 'ดึง Log จากเครื่องสแกน'}</span>
+              <span>{isSyncing ? 'กำลังดึง...' : '⚡ ดึง Log เข้า MySQL'}</span>
             </button>
           )}
         </div>

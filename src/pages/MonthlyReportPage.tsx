@@ -1,14 +1,10 @@
 import React, { useState } from 'react';
 import { 
-  FileSpreadsheet, 
   Printer, 
   Download, 
   Calendar, 
   Search, 
-  Filter, 
-  Building, 
   Users, 
-  Clock, 
   AlertCircle, 
   Award,
   CheckCircle,

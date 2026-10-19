@@ -42,57 +42,29 @@ export interface Shift {
   outWindowAfterMin: number; // e.g. 120
   earlyLeaveMin: number;
   duplicateScanMin: number; // e.g. 5 min
-  color: string; // Hex color code or Tailwind identifier
+  color: string; // Hex color code
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
   isSystemDefault?: boolean;
 }
 
-export interface GroupShiftOverride {
-  id: number;
-  shiftId: number;
-  startTime: string;
-  endTime: string;
-  lateGraceMinutes?: number;
-  effectiveFrom: string;
-  effectiveTo?: string;
-  isActive: boolean;
+export interface ShiftTimeConfig {
+  startTime: string; // e.g. "08:15"
+  endTime: string;   // e.g. "16:00"
+  lateGraceMinutes: number; // e.g. 0
 }
 
-export interface PersonnelGroup {
+export interface PersonnelTypeConfig {
   id: number;
-  groupName: string;
-  groupKind: 'PERSON_TYPE' | 'CUSTOM';
-  priority: number; // Lower number = higher priority
+  name: string; // e.g. 'ข้าราชการ', 'พนักงานกระทรวงสาธารณสุข', 'ลูกจ้างรายวัน'
+  code?: string;
+  description?: string;
+  morningShift: ShiftTimeConfig;   // กะเช้า
+  afternoonShift: ShiftTimeConfig; // กะบ่าย
+  nightShift: ShiftTimeConfig;     // กะดึก
   isActive: boolean;
-  note?: string;
-  createdAt: string;
-  updatedAt: string;
-  personTypeIds: number[]; // If kind === 'PERSON_TYPE'
-  memberPersonIds: number[]; // If kind === 'CUSTOM'
-  shiftOverrides: Record<number, { startTime: string; endTime: string; lateGraceMinutes?: number }>; // shiftId -> custom times
-}
-
-export interface PersonShiftOverride {
-  id: number;
-  personId: number;
-  shiftId: number;
-  startTime: string;
-  endTime: string;
-  effectiveFrom: string;
-  effectiveTo?: string;
-  isActive: boolean;
-  note?: string;
-}
-
-export interface PersonRoster {
-  id: number;
-  personId: number;
-  workDate: string; // YYYY-MM-DD
-  shiftId: number;
-  note?: string;
-  createdBy?: number;
+  memberCount?: number;
 }
 
 export interface RawScan {
@@ -177,12 +149,13 @@ export interface DailyResult {
   department: string;
   position: string;
   workDate: string; // YYYY-MM-DD
+  personnelTypeName?: string;
   shiftId?: number;
   shiftCode?: string;
   shiftName?: string;
   plannedStartTime?: string;
   plannedEndTime?: string;
-  resolutionSource: 'ROSTER' | 'PERSON_OVERRIDE' | 'GROUP_OVERRIDE' | 'SYSTEM_DEFAULT' | 'NONE';
+  resolutionSource: 'PERSONNEL_TYPE' | 'SYSTEM_DEFAULT' | 'NONE';
   inTime?: string;
   outTime?: string;
   status: 'ON_TIME' | 'LATE' | 'EARLY_LEAVE' | 'LATE_AND_EARLY' | 'NO_SCAN' | 'NO_SHIFT' | 'IN_ONLY' | 'OUT_ONLY';
@@ -215,7 +188,7 @@ export interface AuditLog {
   timestamp: string;
   user: string;
   action: string;
-  module: 'AUTH' | 'PUSH' | 'SHIFT' | 'GROUP' | 'ROSTER' | 'SCANNER' | 'ATTENDANCE';
+  module: 'AUTH' | 'PUSH' | 'SHIFT' | 'SCANNER' | 'ATTENDANCE';
   detail: string;
   ipAddress?: string;
 }
@@ -279,7 +252,6 @@ export interface ShiftResolution {
   startTime: string;
   endTime: string;
   lateGraceMinutes: number;
-  source: 'ROSTER' | 'PERSON_OVERRIDE' | 'GROUP_OVERRIDE' | 'SYSTEM_DEFAULT' | 'NONE';
+  source: 'PERSONNEL_TYPE' | 'SYSTEM_DEFAULT' | 'NONE';
   note?: string;
-  rosterId?: number;
 }

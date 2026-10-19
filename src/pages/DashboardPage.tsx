@@ -9,7 +9,6 @@ import {
   Clock, 
   Send, 
   ArrowRight,
-  ShieldAlert,
   Server,
   Database
 } from 'lucide-react';
@@ -80,147 +79,157 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Hospital Hero Banner */}
-      <div className="bg-gradient-to-r from-teal-800 to-slate-900 rounded-xl p-5 text-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="p-6 space-y-5 max-w-7xl mx-auto">
+      {/* Enterprise Executive Command Bar */}
+      <div className="bg-white border border-slate-200/90 rounded-xl p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-teal-700/50 text-teal-200 text-xs font-medium mb-2">
-            <span>โรงพยาบาลสามชุก จ.สุพรรณบุรี</span>
-            <span>·</span>
-            <span>ระบบสแกนนิ้ว v2 (Staging + Push Architecture)</span>
+          <div className="flex items-center gap-2 mb-1 text-[11px] text-slate-500">
+            <span className="font-semibold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200/70">
+              LIVE SYSTEM
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="font-semibold text-slate-700">โรงพยาบาลสามชุก จ.สุพรรณบุรี</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono text-slate-400">HIP CMiF68S Telemetry</span>
           </div>
-          <h1 className="text-xl font-bold tracking-tight">
-            ระบบจัดการเวลาปฏิบัติงานและเครื่องสแกนนิ้ว
+          <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            แดชบอร์ดภาพรวมการลงเวลาและเครื่องสแกน
           </h1>
-          <p className="text-xs text-slate-300 mt-1">
-            เชื่อมต่อเครื่องสแกน CMiF68S อัตโนมัติ บันทึกลง Attendance DB ก่อนส่งเข้า MySQL hosoffice
+          <p className="text-xs text-slate-500 mt-0.5">
+            เชื่อมต่อเครื่องสแกนนิ้วมือ 3 จุด บันทึกลงระบบ และประมวลผลการเข้างานตามประเภทบุคลากรแบบเรียลไทม์
           </p>
         </div>
 
         {isAdmin ? (
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
             <button
               onClick={() => onNavigate('push')}
-              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-lg shadow-sm transition-colors cursor-pointer"
+              className="flex items-center gap-2 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 font-bold text-xs rounded-lg shadow-2xs transition-all duration-150 cursor-pointer"
             >
-              <Send className="w-4 h-4" />
+              <Send className="w-3.5 h-3.5" />
               <span>ส่งข้อมูลเข้า hosoffice ({pendingScans.length})</span>
             </button>
             <button
               onClick={onSync}
               disabled={isSyncing}
-              className="flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg border border-slate-700 transition-colors cursor-pointer"
+              className="flex items-center gap-2 px-3.5 py-2 bg-teal-800 hover:bg-teal-900 active:bg-teal-950 text-white text-xs font-semibold rounded-lg shadow-2xs transition-all duration-150 cursor-pointer disabled:opacity-50"
             >
-              <Fingerprint className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'กำลัง Sync...' : 'Sync สแกนเนอร์'}</span>
+              <Fingerprint className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'กำลังดึงเวลา...' : 'Sync สแกนเนอร์'}</span>
             </button>
           </div>
         ) : (
-          <div className="text-xs bg-slate-800/80 px-3 py-2 rounded-lg border border-slate-700">
-            <span className="text-slate-400">เข้าสู่ระบบด้วยสิทธิ์: </span>
-            <span className="font-semibold text-white">{state.currentUser.fullname} (USER)</span>
+          <div className="text-xs bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 text-slate-600">
+            <span>ผู้ใช้งาน: </span>
+            <strong className="text-slate-900">{state.currentUser.fullname}</strong>
           </div>
         )}
       </div>
 
-      {/* ⚡ 1-Step Pipeline Banner (ดึงข้อมูล + บันทึกดิบ + ประมวลผลเวลาพร้อมกันในขั้นตอนเดียว) */}
-      <div className="bg-white border border-teal-200 rounded-xl p-3.5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+      {/* ⚡ 1-Step Unified Telemetry Pipeline */}
+      <div className="bg-white border border-slate-200/90 rounded-xl p-3.5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-700 font-bold shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-teal-50 border border-teal-200/80 flex items-center justify-center text-teal-800 font-bold shrink-0">
             ⚡
           </div>
           <div>
-            <div className="font-bold text-slate-800 flex items-center gap-2">
-              <span>กระบวนการทำงานแบบขั้นตอนเดียว (Unified 1-Step Pipeline):</span>
-              <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
-                ทำงานอัตโนมัติแล้ว
+            <div className="font-bold text-slate-900 flex items-center gap-2">
+              <span>กระบวนการทำงานอัตโนมัติ (Unified 1-Step Telemetry):</span>
+              <span className="text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.2 rounded-full font-semibold">
+                เชื่อมต่อทำงานปกติ
               </span>
             </div>
             <p className="text-slate-500 text-[11px] mt-0.5">
-              ดึง Log จากเครื่องสแกน ➔ บันทึกลง <strong className="text-slate-700">attendance_raw_scan (Staging)</strong> ➔ <strong className="text-teal-700">ประมวลผลเวลากะทำงานทันที</strong> ในขั้นตอนเดียว โดยไม่ต้องรอกดคำนวณแยก
+              ดึง Log สแกนนิ้ว ➔ บันทึก <span className="font-mono text-slate-700">attendance_raw_scan</span> ➔ ประมวลผลเวลากะและสถานะสายตามประเภทบุคลากรทันที
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0 text-[11px] font-mono text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
-          <Clock className="w-3.5 h-3.5 text-teal-600" />
+          <Clock className="w-3.5 h-3.5 text-teal-700" />
           <span>ประมวลผลล่าสุด:</span>
-          <span className="font-bold text-slate-800">{state.lastAutoCalculatedAt?.split(' ')[1] || '08:00:00'}</span>
+          <span className="font-bold text-slate-900">{state.lastAutoCalculatedAt?.split(' ')[1] || '08:00:00'}</span>
         </div>
       </div>
 
-      {/* KPI Cards Strip - Section 26 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      {/* High-Precision SaaS KPI Metric Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* Total Personnel */}
-        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs hover:border-teal-400/50 transition-all duration-150">
           <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span>บุคลากรทั้งหมด</span>
-            <Users className="w-4 h-4 text-slate-400" />
+            <span className="font-medium">บุคลากรทั้งหมด</span>
+            <Users className="w-3.5 h-3.5 text-slate-400" />
           </div>
-          <div className="text-2xl font-bold text-slate-800 tabular-nums">
+          <div className="text-2xl font-bold font-mono tracking-tight text-slate-900 tabular-nums">
             {totalPersonnel}
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">ในฐานข้อมูล HR</div>
+          <div className="text-[11px] text-slate-400 mt-0.5">ในระบบ hosoffice.hr_person</div>
         </div>
 
         {/* Today's Scans */}
-        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs hover:border-teal-400/50 transition-all duration-150">
           <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span>Scan วันนี้</span>
-            <Fingerprint className="w-4 h-4 text-teal-600" />
+            <span className="font-medium">Scan วันนี้</span>
+            <Fingerprint className="w-3.5 h-3.5 text-teal-700" />
           </div>
-          <div className="text-2xl font-bold text-teal-700 tabular-nums">
+          <div className="text-2xl font-bold font-mono tracking-tight text-teal-800 tabular-nums">
             {todayScans.length}
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">ครั้ง (Raw Staging)</div>
+          <div className="text-[11px] text-slate-400 mt-0.5">รายการ (attendance_raw_scan)</div>
         </div>
 
         {/* Checked-in People */}
-        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs hover:border-teal-400/50 transition-all duration-150">
           <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span>คนเข้างานวันนี้</span>
-            <UserCheck className="w-4 h-4 text-emerald-600" />
+            <span className="font-medium">คนเข้างานวันนี้</span>
+            <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
           </div>
-          <div className="text-2xl font-bold text-emerald-700 tabular-nums">
+          <div className="text-2xl font-bold font-mono tracking-tight text-emerald-800 tabular-nums">
             {uniquePersonsToday}
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">จาก {totalPersonnel} คน</div>
+          <div className="text-[11px] text-slate-400 mt-0.5">จากทั้งหมด {totalPersonnel} คน</div>
         </div>
 
         {/* Late count */}
-        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span>คนสาย</span>
-            <AlertCircle className="w-4 h-4 text-amber-500" />
+        <div className="bg-white p-3.5 rounded-xl border border-amber-300/80 bg-amber-500/[0.02] shadow-xs hover:border-amber-400 transition-all duration-150">
+          <div className="flex items-center justify-between text-amber-900 text-xs font-bold mb-1">
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+              คนสาย (Late)
+            </span>
+            <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
           </div>
-          <div className="text-2xl font-bold text-amber-600 tabular-nums">
+          <div className="text-2xl font-bold font-mono tracking-tight text-amber-950 tabular-nums">
             {lateCount}
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">เกินเวลากะกำหนด</div>
+          <div className="text-[11px] text-amber-800/80 mt-0.5">เกินเวลากะตามประเภท</div>
         </div>
 
         {/* Duplicate Scans */}
-        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs hover:border-teal-400/50 transition-all duration-150">
           <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span>Scan ซ้ำ</span>
-            <Copy className="w-4 h-4 text-slate-400" />
+            <span className="font-medium">Scan ซ้ำ &le;5น.</span>
+            <Copy className="w-3.5 h-3.5 text-slate-400" />
           </div>
-          <div className="text-2xl font-bold text-slate-700 tabular-nums">
+          <div className="text-2xl font-bold font-mono tracking-tight text-slate-700 tabular-nums">
             {duplicateScanCount}
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">&le; 5 นาที (ไม่นับ)</div>
+          <div className="text-[11px] text-slate-400 mt-0.5">กรองออกอัตโนมัติ</div>
         </div>
 
         {/* Scanners Status */}
-        <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs hover:border-teal-400/50 transition-all duration-150">
           <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span>เครื่องสแกน</span>
-            <Cpu className="w-4 h-4 text-slate-400" />
+            <span className="font-medium">เครื่องสแกน</span>
+            <Cpu className="w-3.5 h-3.5 text-slate-400" />
           </div>
-          <div className="text-2xl font-bold text-slate-800 tabular-nums">
+          <div className="text-2xl font-bold font-mono tracking-tight text-slate-900 tabular-nums">
             {onlineScanners} / {totalScanners}
           </div>
-          <div className="text-[11px] text-emerald-600 font-medium mt-0.5">Online พร้อมใช้งาน</div>
+          <div className="text-[11px] text-emerald-700 font-semibold mt-0.5 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            Online พร้อมใช้งาน
+          </div>
         </div>
       </div>
 

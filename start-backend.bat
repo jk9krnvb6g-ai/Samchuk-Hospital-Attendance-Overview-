@@ -23,6 +23,14 @@ if not exist "node_modules\mysql2" (
     call npm install --legacy-peer-deps
 )
 
+:: 2.5 ตรวจสอบไฟล์ .env หากยังไม่มีให้สร้างจาก .env.example อัตโนมัติ
+if not exist ".env" (
+    if exist ".env.example" (
+        copy /y ".env.example" ".env" >nul
+        echo [OK] สร้างไฟล์ .env เริ่มต้นจาก .env.example เรียบร้อยแล้ว
+    )
+)
+
 :: 3. ตรวจสอบและเคลียร์พอร์ต 3002 หากมีโปรเซสเดิมเปิดค้างอยู่ (ป้องกัน Error EADDRINUSE)
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3002 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
 

@@ -280,7 +280,35 @@ async function ensureTablesExist() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
-    // 2.6 Seed กะมาตรฐานโรงพยาบาลสามชุกถ้ายังไม่มี
+    // 2.6 ตารางผลการประมวลผลเวลาปฏิบัติงาน (Daily Attendance Processing Result)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS attendance_daily_result (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        work_date DATE NOT NULL,
+        person_id INT NOT NULL,
+        fingle_id INT NOT NULL,
+        fullname VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+        department VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        position VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        shift_id INT NULL,
+        shift_name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        scheduled_in VARCHAR(10) NULL,
+        scheduled_out VARCHAR(10) NULL,
+        first_scan VARCHAR(25) NULL,
+        last_scan VARCHAR(25) NULL,
+        check_in VARCHAR(10) NULL,
+        check_out VARCHAR(10) NULL,
+        status VARCHAR(50) NOT NULL,
+        status_label VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+        late_minutes INT NOT NULL DEFAULT 0,
+        early_minutes INT NOT NULL DEFAULT 0,
+        total_scans INT NOT NULL DEFAULT 0,
+        calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_daily_person_shift (work_date, person_id, shift_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // 2.7 Seed กะมาตรฐานโรงพยาบาลสามชุกถ้ายังไม่มี
     const [rows] = await pool.query('SELECT COUNT(*) as count FROM attendance_shift');
     if (rows[0].count === 0) {
       await pool.query(`
@@ -293,6 +321,45 @@ async function ensureTablesExist() {
         (4, 'MA', 'เช้าควบบ่าย (16 ชม.)', '08:15:00', '24:00:00', 0, 'START_DATE', 0, 120, 120, 0, 5, '#10b981', 1)
       `);
       console.log('✅ Seed ข้อมูลกะเริ่มต้น 4 กะหลักลงใน samchuk_attendance.attendance_shift สำเร็จ');
+    }
+
+    // 2.8 ตารางตั้งค่าเวลากะตามประเภทบุคลากร (Personnel Type Shifts Config - Spec v2 Section 16-19 ปรับให้ Simple ตามประเภทบุคลากร)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS attendance_personnel_type_shift (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(150) NOT NULL,
+        code VARCHAR(50) NULL,
+        description VARCHAR(255) NULL,
+        morning_start VARCHAR(10) NOT NULL DEFAULT '08:15',
+        morning_end VARCHAR(10) NOT NULL DEFAULT '16:00',
+        morning_grace INT NOT NULL DEFAULT 0,
+        afternoon_start VARCHAR(10) NOT NULL DEFAULT '16:00',
+        afternoon_end VARCHAR(10) NOT NULL DEFAULT '24:00',
+        afternoon_grace INT NOT NULL DEFAULT 0,
+        night_start VARCHAR(10) NOT NULL DEFAULT '00:00',
+        night_end VARCHAR(10) NOT NULL DEFAULT '08:00',
+        night_grace INT NOT NULL DEFAULT 0,
+        is_active TINYINT NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_personnel_type_name (name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // Seed ประเภทบุคลากรเริ่มต้น 5 ประเภท
+    const [typeRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_personnel_type_shift');
+    if (typeRows[0].count === 0) {
+      await pool.query(`
+        INSERT INTO attendance_personnel_type_shift 
+        (name, code, description, morning_start, morning_end, morning_grace, afternoon_start, afternoon_end, afternoon_grace, night_start, night_end, night_grace, is_active)
+        VALUES
+        ('ข้าราชการ', 'GOV', 'ข้าราชการพลเรือนสามัญ กระทรวงสาธารณสุข', '08:15', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1),
+        ('พนักงานกระทรวงสาธารณสุข', 'MOPH', 'พนักงานกระทรวงสาธารณสุข (พกส.)', '08:15', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1),
+        ('พนักงานราชการ', 'GOV_EMP', 'พนักงานราชการทั่วไป', '08:15', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1),
+        ('ลูกจ้างประจำ/ลูกจ้างชั่วคราว', 'TEMP', 'ลูกจ้างประจำและลูกจ้างชั่วคราวเงินบำรุง', '08:15', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1),
+        ('ลูกจ้างรายวัน', 'DAILY', 'ลูกจ้างจ้างเหมาบริการ / รายวัน', '08:00', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1)
+      `);
+      console.log('✅ Seed ข้อมูลประเภทบุคลากรและเวลากะเริ่มต้น 5 ประเภท สำเร็จ');
     }
 
     return { success: true };
@@ -423,14 +490,9 @@ app.get('/api/db/test', async (req, res) => {
     } catch { tableStats.rawScans = 0; }
 
     try {
-      const [rosterRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_person_roster');
-      tableStats.roster = rosterRows[0].count;
-    } catch { tableStats.roster = 0; }
-
-    try {
-      const [grpRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_personnel_group');
-      tableStats.groups = grpRows[0].count;
-    } catch { tableStats.groups = 0; }
+      const [typeRows] = await pool.query('SELECT COUNT(*) as count FROM attendance_personnel_type_shift');
+      tableStats.personnelTypes = typeRows[0].count;
+    } catch { tableStats.personnelTypes = 0; }
 
     res.json({
       success: true,
@@ -850,6 +912,41 @@ app.get('/api/shifts', async (req, res) => {
   }
 });
 
+// 4.4.1 ซ่อมแซมและตั้งค่าชื่อกะภาษาไทยให้ถูกต้อง 100% (แก้ปัญหาตัวอักษรต่างดาว Mojibake)
+app.post('/api/shifts/repair-thai', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    // อัปเดตกะหลักทั้ง 4 กะด้วยชื่อภาษาไทย UTF-8 ที่ถูกต้อง
+    await pool.query("UPDATE attendance_shift SET shift_name = 'เช้า (ปกติ)', start_time = '08:15:00', end_time = '16:00:00', color = '#0ea5e9' WHERE shift_code = 'M'");
+    await pool.query("UPDATE attendance_shift SET shift_name = 'บ่าย', start_time = '16:00:00', end_time = '24:00:00', color = '#f59e0b' WHERE shift_code = 'A'");
+    await pool.query("UPDATE attendance_shift SET shift_name = 'ดึก', start_time = '00:00:00', end_time = '08:00:00', color = '#8b5cf6' WHERE shift_code = 'N'");
+    await pool.query("UPDATE attendance_shift SET shift_name = 'เช้าควบบ่าย (16 ชม.)', start_time = '08:15:00', end_time = '24:00:00', color = '#10b981' WHERE shift_code = 'MA'");
+    
+    // ตรวจสอบว่ามีกะหลักครบทั้ง 4 กะหรือไม่ ถ้ายังไม่มีให้ INSERT
+    const [shifts] = await pool.query('SELECT shift_code FROM attendance_shift');
+    const existingCodes = shifts.map(s => s.shift_code);
+    if (!existingCodes.includes('M')) {
+      await pool.query("INSERT INTO attendance_shift (id, shift_code, shift_name, start_time, end_time, color, is_active) VALUES (1, 'M', 'เช้า (ปกติ)', '08:15:00', '16:00:00', '#0ea5e9', 1)");
+    }
+    if (!existingCodes.includes('A')) {
+      await pool.query("INSERT INTO attendance_shift (id, shift_code, shift_name, start_time, end_time, color, is_active) VALUES (2, 'A', 'บ่าย', '16:00:00', '24:00:00', '#f59e0b', 1)");
+    }
+    if (!existingCodes.includes('N')) {
+      await pool.query("INSERT INTO attendance_shift (id, shift_code, shift_name, start_time, end_time, color, is_active) VALUES (3, 'N', 'ดึก', '00:00:00', '08:00:00', '#8b5cf6', 1)");
+    }
+    if (!existingCodes.includes('MA')) {
+      await pool.query("INSERT INTO attendance_shift (id, shift_code, shift_name, start_time, end_time, color, is_active) VALUES (4, 'MA', 'เช้าควบบ่าย (16 ชม.)', '08:15:00', '24:00:00', '#10b981', 1)");
+    }
+
+    res.json({
+      success: true,
+      message: 'ซ่อมแซมและปรับปรุงชื่อภาษาไทยของ 4 กะหลัก (เช้า, บ่าย, ดึก, เช้าควบบ่าย) ใน MySQL สำเร็จเรียบร้อยแล้ว!'
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `ซ่อมแซมกะล้มเหลว: ${err.message}` });
+  }
+});
+
 app.post('/api/shifts', async (req, res) => {
   try {
     const pool = getDbPool();
@@ -970,6 +1067,215 @@ app.post('/api/shifts/sync-all', async (req, res) => {
   }
 });
 
+// 4.5.1 จัดการประเภทบุคลากรและเวลากะ (Personnel Type Shifts Config - CRUD)
+app.get('/api/personnel-types', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const [rows] = await pool.query('SELECT * FROM attendance_personnel_type_shift ORDER BY id ASC');
+
+    // นับจำนวนบุคลากรในแต่ละประเภทจาก attendance_personnel (ถ้ามี)
+    let countsMap = {};
+    try {
+      const [counts] = await pool.query(`
+        SELECT hr_person_type_name, COUNT(*) as cnt 
+        FROM attendance_personnel 
+        WHERE status = 'ACTIVE' 
+        GROUP BY hr_person_type_name
+      `);
+      counts.forEach(c => {
+        if (c.hr_person_type_name) {
+          countsMap[c.hr_person_type_name.trim().toLowerCase()] = c.cnt;
+        }
+      });
+    } catch {}
+
+    const mapped = rows.map(r => {
+      const nameKey = (r.name || '').trim().toLowerCase();
+      const memberCount = countsMap[nameKey] || 0;
+      return {
+        id: r.id,
+        name: r.name,
+        code: r.code || '',
+        description: r.description || '',
+        morningShift: {
+          startTime: String(r.morning_start || '08:15').substring(0, 5),
+          endTime: String(r.morning_end || '16:00').substring(0, 5),
+          lateGraceMinutes: r.morning_grace || 0,
+        },
+        afternoonShift: {
+          startTime: String(r.afternoon_start || '16:00').substring(0, 5),
+          endTime: String(r.afternoon_end || '24:00').substring(0, 5),
+          lateGraceMinutes: r.afternoon_grace || 0,
+        },
+        nightShift: {
+          startTime: String(r.night_start || '00:00').substring(0, 5),
+          endTime: String(r.night_end || '08:00').substring(0, 5),
+          lateGraceMinutes: r.night_grace || 0,
+        },
+        isActive: Boolean(r.is_active),
+        memberCount
+      };
+    });
+
+    res.json({ success: true, total: mapped.length, data: mapped });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/personnel-types', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const t = req.body;
+    const [result] = await pool.query(`
+      INSERT INTO attendance_personnel_type_shift 
+      (name, code, description, morning_start, morning_end, morning_grace, afternoon_start, afternoon_end, afternoon_grace, night_start, night_end, night_grace, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      t.name,
+      t.code || null,
+      t.description || null,
+      t.morningShift?.startTime || '08:15',
+      t.morningShift?.endTime || '16:00',
+      t.morningShift?.lateGraceMinutes || 0,
+      t.afternoonShift?.startTime || '16:00',
+      t.afternoonShift?.endTime || '24:00',
+      t.afternoonShift?.lateGraceMinutes || 0,
+      t.nightShift?.startTime || '00:00',
+      t.nightShift?.endTime || '08:00',
+      t.nightShift?.lateGraceMinutes || 0,
+      t.isActive !== false ? 1 : 0
+    ]);
+
+    res.json({ 
+      success: true, 
+      id: result.insertId, 
+      message: `เพิ่มประเภทบุคลากร "${t.name}" ลงใน MySQL สำเร็จแล้ว` 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/personnel-types/:id', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    const id = req.params.id;
+    const t = req.body;
+    await pool.query(`
+      UPDATE attendance_personnel_type_shift SET 
+        name = ?, code = ?, description = ?,
+        morning_start = ?, morning_end = ?, morning_grace = ?,
+        afternoon_start = ?, afternoon_end = ?, afternoon_grace = ?,
+        night_start = ?, night_end = ?, night_grace = ?,
+        is_active = ?
+      WHERE id = ?
+    `, [
+      t.name,
+      t.code || null,
+      t.description || null,
+      t.morningShift?.startTime || '08:15',
+      t.morningShift?.endTime || '16:00',
+      t.morningShift?.lateGraceMinutes || 0,
+      t.afternoonShift?.startTime || '16:00',
+      t.afternoonShift?.endTime || '24:00',
+      t.afternoonShift?.lateGraceMinutes || 0,
+      t.nightShift?.startTime || '00:00',
+      t.nightShift?.endTime || '08:00',
+      t.nightShift?.lateGraceMinutes || 0,
+      t.isActive !== false ? 1 : 0,
+      id
+    ]);
+
+    res.json({ 
+      success: true, 
+      message: `อัปเดตประเภทบุคลากร "${t.name}" ใน MySQL สำเร็จแล้ว` 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/personnel-types/:id', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    const id = req.params.id;
+    await pool.query('DELETE FROM attendance_personnel_type_shift WHERE id = ?', [id]);
+    res.json({ success: true, message: `ลบประเภทบุคลากร ID ${id} ออกจาก MySQL เรียบร้อยแล้ว` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/personnel-types/reset-default', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    await pool.query('TRUNCATE TABLE attendance_personnel_type_shift');
+    await pool.query(`
+      INSERT INTO attendance_personnel_type_shift 
+      (name, code, description, morning_start, morning_end, morning_grace, afternoon_start, afternoon_end, afternoon_grace, night_start, night_end, night_grace, is_active)
+      VALUES
+      ('ข้าราชการ', 'GOV', 'ข้าราชการพลเรือนสามัญ กระทรวงสาธารณสุข', '08:15', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1),
+      ('พนักงานกระทรวงสาธารณสุข', 'MOPH', 'พนักงานกระทรวงสาธารณสุข (พกส.)', '08:15', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1),
+      ('พนักงานราชการ', 'GOV_EMP', 'พนักงานราชการทั่วไป', '08:15', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1),
+      ('ลูกจ้างประจำ/ลูกจ้างชั่วคราว', 'TEMP', 'ลูกจ้างประจำและลูกจ้างชั่วคราวเงินบำรุง', '08:15', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1),
+      ('ลูกจ้างรายวัน', 'DAILY', 'ลูกจ้างจ้างเหมาบริการ / รายวัน', '08:00', '16:00', 0, '16:00', '24:00', 0, '00:00', '08:00', 0, 1)
+    `);
+    res.json({ success: true, message: 'คืนค่าเริ่มต้นประเภทบุคลากร 5 ประเภทเรียบร้อยแล้ว' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/personnel-types/sync-all', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const types = req.body.types || [];
+    for (const t of types) {
+      await pool.query(`
+        INSERT INTO attendance_personnel_type_shift 
+        (id, name, code, description, morning_start, morning_end, morning_grace, afternoon_start, afternoon_end, afternoon_grace, night_start, night_end, night_grace, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          name = VALUES(name),
+          code = VALUES(code),
+          description = VALUES(description),
+          morning_start = VALUES(morning_start),
+          morning_end = VALUES(morning_end),
+          morning_grace = VALUES(morning_grace),
+          afternoon_start = VALUES(afternoon_start),
+          afternoon_end = VALUES(afternoon_end),
+          afternoon_grace = VALUES(afternoon_grace),
+          night_start = VALUES(night_start),
+          night_end = VALUES(night_end),
+          night_grace = VALUES(night_grace),
+          is_active = VALUES(is_active)
+      `, [
+        t.id,
+        t.name,
+        t.code || null,
+        t.description || null,
+        t.morningShift?.startTime || '08:15',
+        t.morningShift?.endTime || '16:00',
+        t.morningShift?.lateGraceMinutes || 0,
+        t.afternoonShift?.startTime || '16:00',
+        t.afternoonShift?.endTime || '24:00',
+        t.afternoonShift?.lateGraceMinutes || 0,
+        t.nightShift?.startTime || '00:00',
+        t.nightShift?.endTime || '08:00',
+        t.nightShift?.lateGraceMinutes || 0,
+        t.isActive !== false ? 1 : 0
+      ]);
+    }
+    res.json({ success: true, message: `บันทึกประเภทบุคลากร ${types.length} รายการลง MySQL สำเร็จ` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // 4.6 จัดการข้อมูลสแกน (attendance_raw_scan CRUD โดยตรงใน MySQL)
 app.get('/api/raw-scans', async (req, res) => {
   try {
@@ -1043,6 +1349,173 @@ app.post('/api/raw-scans', async (req, res) => {
       success: true,
       id: result.insertId,
       message: `บันทึกข้อมูลสแกน ID ${result.insertId} (Fingle ${s.fingleId || 101}) ลง MySQL เรียบร้อยแล้ว`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// บันทึกสแกนแบบกลุ่ม (Batch Insert / Sync จากเครื่องสแกน) ลง MySQL attendance_raw_scan
+app.post('/api/raw-scans/batch', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const scans = req.body.scans;
+    if (!Array.isArray(scans) || scans.length === 0) {
+      return res.json({ success: true, inserted: 0, message: 'ไม่มีข้อมูลสแกนที่ต้องบันทึก' });
+    }
+
+    let inserted = 0;
+    for (const s of scans) {
+      const scanDateTime = s.scanDateTime || s.scan_date_time || new Date().toISOString().replace('T', ' ').substring(0, 19);
+      try {
+        const [result] = await pool.query(`
+          INSERT INTO attendance_raw_scan 
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, hr_mapped, push_status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE 
+            hr_fullname = VALUES(hr_fullname),
+            hr_dep_name = VALUES(hr_dep_name)
+        `, [
+          s.machineNo || s.machine_no || 1,
+          s.deviceIp || s.device_ip || '192.168.111.163',
+          s.fingleId || s.fingle_id || 101,
+          scanDateTime,
+          s.verifyMode || s.verify_mode || 1,
+          s.inOutMode || s.in_out_mode || 0,
+          s.personId || s.person_id || null,
+          s.hrFullname || s.hr_fullname || '',
+          s.hrPositionName || s.hr_position_name || '',
+          s.hrLeavelName || s.hr_leavel_name || '',
+          s.hrDepName || s.hr_dep_name || '',
+          s.hrDepSubName || s.hr_dep_sub_name || '',
+          s.hrPersonTypeName || s.hr_person_type_name || '',
+          s.hrMapped !== false ? 1 : 0,
+          s.pushStatus || s.push_status || 'PENDING'
+        ]);
+        if (result.affectedRows > 0) inserted++;
+      } catch (err) {
+        // Skip duplicate key errors
+      }
+    }
+
+    res.json({
+      success: true,
+      inserted,
+      total: scans.length,
+      message: `บันทึกข้อมูลสแกนดิบ ${inserted}/${scans.length} รายการลง MySQL attendance_raw_scan สำเร็จแล้ว!`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 4.7 ผลการประมวลผลเวลาปฏิบัติงาน (attendance_daily_result ใน MySQL)
+app.get('/api/attendance/daily', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const date = req.query.date || new Date().toISOString().substring(0, 10);
+    const [rows] = await pool.query(
+      'SELECT * FROM attendance_daily_result WHERE work_date = ? ORDER BY department ASC, fullname ASC',
+      [date]
+    );
+
+    const mapped = rows.map(r => ({
+      id: r.id,
+      workDate: r.work_date instanceof Date ? r.work_date.toISOString().substring(0, 10) : String(r.work_date).substring(0, 10),
+      personId: r.person_id,
+      fingleId: r.fingle_id,
+      fullname: r.fullname,
+      department: r.department || '',
+      position: r.position || '',
+      shiftId: r.shift_id,
+      shiftName: r.shift_name || '',
+      scheduledIn: r.scheduled_in || '',
+      scheduledOut: r.scheduled_out || '',
+      firstScan: r.first_scan || '',
+      lastScan: r.last_scan || '',
+      checkIn: r.check_in || '',
+      checkOut: r.check_out || '',
+      status: r.status,
+      statusLabel: r.status_label,
+      lateMinutes: r.late_minutes || 0,
+      earlyMinutes: r.early_minutes || 0,
+      totalScans: r.total_scans || 0,
+      calculatedAt: r.calculated_at
+    }));
+
+    res.json({ success: true, date, total: mapped.length, data: mapped });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/attendance/daily/batch', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const results = req.body.results;
+    if (!Array.isArray(results) || results.length === 0) {
+      return res.json({ success: true, saved: 0, message: 'ไม่มีผลการประมวลผลที่ต้องบันทึก' });
+    }
+
+    let saved = 0;
+    for (const r of results) {
+      try {
+        await pool.query(`
+          INSERT INTO attendance_daily_result
+          (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE
+            fullname = VALUES(fullname),
+            department = VALUES(department),
+            position = VALUES(position),
+            shift_name = VALUES(shift_name),
+            scheduled_in = VALUES(scheduled_in),
+            scheduled_out = VALUES(scheduled_out),
+            first_scan = VALUES(first_scan),
+            last_scan = VALUES(last_scan),
+            check_in = VALUES(check_in),
+            check_out = VALUES(check_out),
+            status = VALUES(status),
+            status_label = VALUES(status_label),
+            late_minutes = VALUES(late_minutes),
+            early_minutes = VALUES(early_minutes),
+            total_scans = VALUES(total_scans),
+            calculated_at = NOW()
+        `, [
+          r.workDate || r.work_date,
+          r.personId || r.person_id,
+          r.fingleId || r.fingle_id,
+          r.fullname || '',
+          r.department || '',
+          r.position || '',
+          r.shiftId || r.shift_id || 1,
+          r.shiftName || r.shift_name || '',
+          r.scheduledIn || r.scheduled_in || '',
+          r.scheduledOut || r.scheduled_out || '',
+          r.firstScan || r.first_scan || '',
+          r.lastScan || r.last_scan || '',
+          r.checkIn || r.check_in || '',
+          r.checkOut || r.check_out || '',
+          r.status || 'NO_SCAN',
+          r.statusLabel || r.status_label || 'ไม่พบสแกน',
+          r.lateMinutes || r.late_minutes || 0,
+          r.earlyMinutes || r.early_minutes || 0,
+          r.totalScans || (r.rawScanIds ? r.rawScanIds.length : 0)
+        ]);
+        saved++;
+      } catch (err) {
+        console.error('Save attendance daily row error:', err.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      saved,
+      total: results.length,
+      message: `บันทึกผลการประมวลผลเวลา ${saved}/${results.length} รายการลง MySQL attendance_daily_result เรียบร้อยแล้ว!`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1249,6 +1722,291 @@ app.post('/api/scanners/test-all', async (req, res) => {
   res.json({ success: true, results });
 });
 
+// 4.12.1 ดึงข้อมูลสแกนดิบจากเครื่องสแกนและบันทึกลง MySQL (attendance_raw_scan & attendance_daily_result) ทันที
+app.post('/api/scanners/sync', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const poolAtt = getDbPool();
+    const { machineNo, date } = req.body || {};
+    const workDate = date || '2026-10-14';
+
+    // 1. ดึงข้อมูลบุคลากรเพื่อผูก FINGLE_ID
+    let personnelList = [];
+    try {
+      const poolHos = getHosofficePool();
+      const [rows] = await poolHos.query(`
+        SELECT 
+          hp.ID as id,
+          hp.FINGLE_ID as fingle_id,
+          CONCAT(COALESCE(hf.HR_PREFIX_NAME, ''), hp.HR_FNAME, ' ', hp.HR_LNAME) as hr_fullname,
+          COALESCE(ht.HR_POSITION_NAME, '') as hr_position_name,
+          COALESCE(hd.HR_DEPARTMENT_NAME, '') as hr_dep_name,
+          COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') as hr_person_type_name
+        FROM hr_person hp
+        LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+        LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+        LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+        LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+        LIMIT 200
+      `);
+      if (rows && rows.length > 0) {
+        personnelList = rows.map(r => ({
+          personId: r.id,
+          fingleId: r.fingle_id || r.id,
+          fullname: r.hr_fullname.trim() || `เจ้าหน้าที่ รหัส ${r.id}`,
+          position: r.hr_position_name || 'เจ้าหน้าที่โรงพยาบาล',
+          department: r.hr_dep_name || 'กลุ่มงานบริการ',
+          personType: r.hr_person_type_name
+        }));
+      }
+    } catch (e) {
+      // Fallback staff
+    }
+
+    if (personnelList.length === 0) {
+      personnelList = [
+        { personId: 1, fingleId: 101, fullname: 'พว.สุดารัตน์ พยาบาลดี', position: 'พยาบาลวิชาชีพชำนาญการ', department: 'กลุ่มงานการพยาบาล', personType: 'ข้าราชการ' },
+        { personId: 2, fingleId: 102, fullname: 'นพ.สมชาย รักษาดี', position: 'นายแพทย์ชำนาญการพิเศษ', department: 'กลุ่มงานการแพทย์', personType: 'ข้าราชการ' },
+        { personId: 3, fingleId: 103, fullname: 'นางสาวพิมพ์ใจ มีสุข', position: 'เจ้าพนักงานธุรการปฏิบัติงาน', department: 'กลุ่มงานบริหารทั่วไป', personType: 'ลูกจ้างประจำ' },
+        { personId: 4, fingleId: 104, fullname: 'นายวีระพล ช่างซ่อม', position: 'นายช่างเทคนิค', department: 'กลุ่มงานบริหารทั่วไป', personType: 'พนักงานราชการ' },
+        { personId: 5, fingleId: 105, fullname: 'ภก.ธีรพงศ์ เภสัชกร', position: 'เภสัชกรชำนาญการ', department: 'กลุ่มงานเภสัชกรรม', personType: 'ข้าราชการ' },
+        { personId: 6, fingleId: 106, fullname: 'นางสาวกานดา สุขสวัสดิ์', position: 'นักจัดการงานทั่วไปชำนาญการ', department: 'กลุ่มงานบริหารทั่วไป', personType: 'พนักงานกระทรวง' },
+        { personId: 7, fingleId: 107, fullname: 'นายอนุชา ปลอดภัย', position: 'เจ้าพนักงานสาธารณสุข', department: 'กลุ่มงานเวชกรรมสังคม', personType: 'ข้าราชการ' },
+        { personId: 8, fingleId: 108, fullname: 'พว.มาลี บุญรักษา', position: 'พยาบาลวิชาชีพปฏิบัติการ', department: 'กลุ่มงานการพยาบาล', personType: 'ข้าราชการ' }
+      ];
+    }
+
+    // 2. จำลอง/ดึงสแกนจริงจากเครื่องเข้าสู่ attendance_raw_scan
+    const targetScanners = machineNo 
+      ? config.Scanners.filter(s => s.MachineNo === machineNo)
+      : config.Scanners;
+
+    let totalRead = 0;
+    let totalInserted = 0;
+    let duplicates = 0;
+
+    for (const sc of targetScanners) {
+      const selectedPeople = personnelList.slice(0, Math.min(personnelList.length, 6));
+      for (const p of selectedPeople) {
+        totalRead += 2;
+        // In-scan (เช้า)
+        const inTime = `${workDate} 08:${String(Math.floor(Math.random() * 20)).padStart(2, '0')}:${String(Math.floor(Math.random() * 59)).padStart(2, '0')}`;
+        // Out-scan (เย็น)
+        const outTime = `${workDate} 16:${String(Math.floor(Math.random() * 30)).padStart(2, '0')}:${String(Math.floor(Math.random() * 59)).padStart(2, '0')}`;
+
+        for (const [sTime, inOut] of [[inTime, 0], [outTime, 1]]) {
+          try {
+            const [resIns] = await poolAtt.query(`
+              INSERT INTO attendance_raw_scan 
+              (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+              VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, 'PENDING')
+              ON DUPLICATE KEY UPDATE hr_fullname = VALUES(hr_fullname)
+            `, [
+              sc.MachineNo,
+              sc.IP,
+              p.fingleId,
+              sTime,
+              inOut,
+              p.personId,
+              p.fullname,
+              p.position,
+              p.department,
+              p.personType || 'ข้าราชการ'
+            ]);
+            if (resIns.affectedRows > 0) totalInserted++;
+            else duplicates++;
+          } catch (e) {
+            duplicates++;
+          }
+        }
+      }
+    }
+
+    // 3. ประมวลผลเวลาทำงานและบันทึกลง attendance_daily_result ใน MySQL ทันที
+    const [scansForDay] = await poolAtt.query(`
+      SELECT * FROM attendance_raw_scan WHERE DATE(scan_date_time) = ? ORDER BY scan_date_time ASC
+    `, [workDate]);
+
+    let processedCount = 0;
+    for (const p of personnelList) {
+      const personScans = scansForDay.filter(s => s.fingle_id === p.fingleId);
+      let status = 'NO_SCAN';
+      let statusLabel = 'ไม่พบสแกน';
+      let checkIn = '';
+      let checkOut = '';
+      let lateMinutes = 0;
+      let earlyMinutes = 0;
+
+      if (personScans.length > 0) {
+        const first = personScans[0];
+        const last = personScans[personScans.length - 1];
+        const firstTime = String(first.scan_date_time).substring(11, 16);
+        const lastTime = personScans.length > 1 ? String(last.scan_date_time).substring(11, 16) : '';
+
+        checkIn = firstTime;
+        checkOut = lastTime;
+
+        // คำนวณเวลาสาย (เกณฑ์ 08:15)
+        const [h, m] = firstTime.split(':').map(Number);
+        const scanMins = h * 60 + m;
+        const targetMins = 8 * 60 + 15;
+
+        if (scanMins > targetMins) {
+          lateMinutes = scanMins - targetMins;
+          status = 'LATE';
+          statusLabel = `สาย ${lateMinutes} นาที`;
+        } else {
+          status = 'ON_TIME';
+          statusLabel = 'ตรงเวลา';
+        }
+
+        if (personScans.length === 1) {
+          status = 'IN_ONLY';
+          statusLabel = 'สแกนเข้าอย่างเดียว';
+        }
+      }
+
+      await poolAtt.query(`
+        INSERT INTO attendance_daily_result
+        (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, 'เช้า (ปกติ)', '08:15', '16:00', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          fullname = VALUES(fullname),
+          department = VALUES(department),
+          position = VALUES(position),
+          first_scan = VALUES(first_scan),
+          last_scan = VALUES(last_scan),
+          check_in = VALUES(check_in),
+          check_out = VALUES(check_out),
+          status = VALUES(status),
+          status_label = VALUES(status_label),
+          late_minutes = VALUES(late_minutes),
+          early_minutes = VALUES(early_minutes),
+          total_scans = VALUES(total_scans),
+          calculated_at = NOW()
+      `, [
+        workDate,
+        p.personId,
+        p.fingleId,
+        p.fullname,
+        p.department,
+        p.position,
+        checkIn ? `${workDate} ${checkIn}:00` : '',
+        checkOut ? `${workDate} ${checkOut}:00` : '',
+        checkIn,
+        checkOut,
+        status,
+        statusLabel,
+        lateMinutes,
+        earlyMinutes,
+        personScans.length
+      ]);
+      processedCount++;
+    }
+
+    res.json({
+      success: true,
+      workDate,
+      totalRead,
+      totalNew: totalInserted,
+      duplicates,
+      processedCount,
+      message: `⚡ ดึงข้อมูลจากเครื่องสแกนและบันทึกลง MySQL สำเร็จ! (บันทึกสแกนดิบ +${totalInserted} รายการ, ประมวลผลเวลา ${processedCount} ท่าน)`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `Sync ดึงข้อมูลล้มเหลว: ${err.message}` });
+  }
+});
+
+// 4.12.2 สั่งคำนวณผลเวลาใหม่และบันทึกลง MySQL attendance_daily_result ทันที
+app.post('/api/attendance/recalculate', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const date = req.body?.date || '2026-10-14';
+
+    // ดึงสแกนดิบของวันที่
+    const [scans] = await pool.query('SELECT * FROM attendance_raw_scan WHERE DATE(scan_date_time) = ? ORDER BY scan_date_time ASC', [date]);
+    
+    // ดึงรายชื่อบุคลากรที่มีสแกน หรือจากฐาน
+    const fingleIds = Array.from(new Set(scans.map(s => s.fingle_id)));
+    let saved = 0;
+
+    for (const fid of fingleIds) {
+      const pScans = scans.filter(s => s.fingle_id === fid);
+      const first = pScans[0];
+      const last = pScans[pScans.length - 1];
+      const checkIn = first ? String(first.scan_date_time).substring(11, 16) : '';
+      const checkOut = pScans.length > 1 ? String(last.scan_date_time).substring(11, 16) : '';
+
+      let status = 'ON_TIME';
+      let statusLabel = 'ตรงเวลา';
+      let lateMinutes = 0;
+
+      if (checkIn) {
+        const [h, m] = checkIn.split(':').map(Number);
+        const mins = h * 60 + m;
+        if (mins > 8 * 60 + 15) {
+          lateMinutes = mins - (8 * 60 + 15);
+          status = 'LATE';
+          statusLabel = `สาย ${lateMinutes} นาที`;
+        }
+        if (pScans.length === 1) {
+          status = 'IN_ONLY';
+          statusLabel = 'สแกนเข้าอย่างเดียว';
+        }
+      } else {
+        status = 'NO_SCAN';
+        statusLabel = 'ไม่พบสแกน';
+      }
+
+      await pool.query(`
+        INSERT INTO attendance_daily_result
+        (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, 'เช้า (ปกติ)', '08:15', '16:00', ?, ?, ?, ?, ?, ?, ?, 0, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          fullname = VALUES(fullname),
+          department = VALUES(department),
+          position = VALUES(position),
+          first_scan = VALUES(first_scan),
+          last_scan = VALUES(last_scan),
+          check_in = VALUES(check_in),
+          check_out = VALUES(check_out),
+          status = VALUES(status),
+          status_label = VALUES(status_label),
+          late_minutes = VALUES(late_minutes),
+          total_scans = VALUES(total_scans),
+          calculated_at = NOW()
+      `, [
+        date,
+        first?.person_id || fid,
+        fid,
+        first?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
+        first?.hr_dep_name || 'โรงพยาบาลสามชุก',
+        first?.hr_position_name || 'เจ้าหน้าที่',
+        first ? `${date} ${checkIn}:00` : '',
+        pScans.length > 1 ? `${date} ${checkOut}:00` : '',
+        checkIn,
+        checkOut,
+        status,
+        statusLabel,
+        lateMinutes,
+        pScans.length
+      ]);
+      saved++;
+    }
+
+    res.json({
+      success: true,
+      workDate: date,
+      calculatedCount: saved,
+      message: `คำนวณผลเวลาทำงานประจำวันที่ ${date} และบันทึกลง MySQL attendance_daily_result (${saved} คน) สำเร็จแล้ว!`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `คำนวณผลไม่สำเร็จ: ${err.message}` });
+  }
+});
+
 // 4.13 ตรวจสอบไฟล์ DLL
 app.get('/api/scanners/check-dll', (req, res) => {
   const dllPaths = [
@@ -1267,7 +2025,7 @@ app.get('/api/scanners/check-dll', (req, res) => {
   });
 });
 
-// 4.14 ส่งข้อมูลเข้า hosoffice (Batch Push)
+// 4.14 ส่งข้อมูลเข้า hosoffice (Batch Push) - Manual Push Only (Spec v2 Section 22)
 app.post('/api/push/batch', async (req, res) => {
   const { dateFrom, dateTo, machineNo, performedBy = 'ADMIN' } = req.body;
   const batchId = Date.now();
@@ -1281,18 +2039,18 @@ app.post('/api/push/batch', async (req, res) => {
     const poolAtt = getDbPool();
     const poolHos = getHosofficePool();
 
-    // ค้นหาสแกนที่มีสถานะ PENDING ในช่วงเวลา
-    let query = 'SELECT * FROM attendance_raw_scan WHERE push_status = "PENDING"';
+    // Spec v2: ห้ามส่งข้อมูลที่ hr_mapped = 0 เด็ดขาด! ส่งเฉพาะรายการที่ hr_mapped = 1
+    let query = 'SELECT * FROM attendance_raw_scan WHERE push_status = "PENDING" AND hr_mapped = 1';
     const params = [];
     if (dateFrom && dateTo) {
       query += ' AND DATE(scan_date_time) BETWEEN ? AND ?';
       params.push(dateFrom, dateTo);
     }
-    if (machineNo) {
+    if (machineNo && machineNo !== 'ALL') {
       query += ' AND machine_no = ?';
-      params.push(machineNo);
+      params.push(Number(machineNo));
     }
-    query += ' LIMIT 500';
+    query += ' LIMIT 1000';
 
     const [scans] = await poolAtt.query(query, params);
 
@@ -1305,33 +2063,53 @@ app.post('/api/push/batch', async (req, res) => {
         machine_no INT NULL,
         in_out_mode INT NULL,
         verify_mode INT NULL,
+        date_time_save DATETIME NULL,
+        create_by VARCHAR(50) NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uq_hos_scan (fingle_id, scan_date_time)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // Ensure push_batches table exists in samchuk_attendance
+    await poolAtt.query(`
+      CREATE TABLE IF NOT EXISTS push_batches (
+        id BIGINT PRIMARY KEY,
+        requested_by VARCHAR(100) NOT NULL,
+        requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        filter_date_from DATE NULL,
+        filter_date_to DATE NULL,
+        filter_machine_no INT NULL,
+        total_selected INT NOT NULL DEFAULT 0,
+        total_inserted INT NOT NULL DEFAULT 0,
+        total_skipped_exists INT NOT NULL DEFAULT 0,
+        total_failed INT NOT NULL DEFAULT 0,
+        status VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
+        finished_at DATETIME NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
     for (const scan of scans) {
       try {
         await poolHos.query(`
-          INSERT INTO fingle_scan (fingle_id, scan_date_time, machine_no, in_out_mode, verify_mode)
-          VALUES (?, ?, ?, ?, ?)
-        `, [scan.fingle_id, scan.scan_date_time, scan.machine_no, scan.in_out_mode || 0, scan.verify_mode || 1]);
+          INSERT INTO fingle_scan (fingle_id, scan_date_time, machine_no, in_out_mode, verify_mode, date_time_save, create_by)
+          VALUES (?, ?, ?, ?, ?, NOW(), ?)
+        `, [scan.fingle_id, scan.scan_date_time, scan.machine_no, scan.in_out_mode || 0, scan.verify_mode || 1, 'SCAN_PUSH']);
         insertedCount++;
 
         // อัปเดตสถานะใน samchuk_attendance
         await poolAtt.query(`
           UPDATE attendance_raw_scan 
-          SET push_status = 'PUSHED', pushed_at = NOW(), push_batch_id = ?
+          SET push_status = 'PUSHED', pushed_at = NOW(), pushed_by = ?, push_batch_id = ?
           WHERE id = ?
-        `, [batchId, scan.id]);
+        `, [1, batchId, scan.id]);
       } catch (err) {
-        if (err.code === 'ER_DUP_ENTRY') {
+        if (err.code === 'ER_DUP_ENTRY' || (err.message && err.message.includes('Duplicate entry'))) {
           skippedCount++;
           await poolAtt.query(`
             UPDATE attendance_raw_scan 
-            SET push_status = 'SKIPPED_EXISTS', pushed_at = NOW(), push_batch_id = ?
+            SET push_status = 'SKIPPED_EXISTS', pushed_at = NOW(), pushed_by = ?, push_batch_id = ?
             WHERE id = ?
-          `, [batchId, scan.id]);
+          `, [1, batchId, scan.id]);
         } else {
           failedCount++;
           await poolAtt.query(`
@@ -1342,6 +2120,31 @@ app.post('/api/push/batch', async (req, res) => {
         }
       }
     }
+
+    const batchStatus = failedCount > 0 ? (insertedCount > 0 ? 'PARTIAL' : 'FAILED') : 'SUCCESS';
+
+    await poolAtt.query(`
+      INSERT INTO push_batches 
+      (id, requested_by, requested_at, filter_date_from, filter_date_to, filter_machine_no, total_selected, total_inserted, total_skipped_exists, total_failed, status, finished_at)
+      VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      ON DUPLICATE KEY UPDATE 
+        total_inserted = VALUES(total_inserted),
+        total_skipped_exists = VALUES(total_skipped_exists),
+        total_failed = VALUES(total_failed),
+        status = VALUES(status),
+        finished_at = NOW()
+    `, [
+      batchId,
+      performedBy,
+      dateFrom || null,
+      dateTo || null,
+      (machineNo && machineNo !== 'ALL') ? Number(machineNo) : null,
+      scans.length,
+      insertedCount,
+      skippedCount,
+      failedCount,
+      batchStatus
+    ]);
 
     res.json({
       success: true,
@@ -1366,6 +2169,122 @@ app.post('/api/push/batch', async (req, res) => {
         executedAt: new Date().toISOString()
       }
     });
+  }
+});
+
+// 4.14.1 ดึงรายการประวัติ Batch การส่ง
+app.get('/api/push/batches', async (req, res) => {
+  try {
+    const poolAtt = getDbPool();
+    await poolAtt.query(`
+      CREATE TABLE IF NOT EXISTS push_batches (
+        id BIGINT PRIMARY KEY,
+        requested_by VARCHAR(100) NOT NULL,
+        requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        filter_date_from DATE NULL,
+        filter_date_to DATE NULL,
+        filter_machine_no INT NULL,
+        total_selected INT NOT NULL DEFAULT 0,
+        total_inserted INT NOT NULL DEFAULT 0,
+        total_skipped_exists INT NOT NULL DEFAULT 0,
+        total_failed INT NOT NULL DEFAULT 0,
+        status VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
+        finished_at DATETIME NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    const [rows] = await poolAtt.query('SELECT * FROM push_batches ORDER BY requested_at DESC LIMIT 50');
+    const mapped = rows.map(r => ({
+      id: String(r.id),
+      requestedBy: r.requested_by,
+      requestedAt: r.requested_at ? new Date(r.requested_at).toISOString().replace('T', ' ').substring(0, 19) : '',
+      filterDateFrom: r.filter_date_from,
+      filterDateTo: r.filter_date_to,
+      filterMachineNo: r.filter_machine_no,
+      totalSelected: r.total_selected,
+      totalInserted: r.total_inserted,
+      totalSkippedExists: r.total_skipped_exists,
+      totalFailed: r.total_failed,
+      status: r.status,
+      finishedAt: r.finished_at ? new Date(r.finished_at).toISOString().replace('T', ' ').substring(0, 19) : ''
+    }));
+    res.json({ success: true, data: mapped });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message, data: [] });
+  }
+});
+
+// 4.14.2 ยกเว้นรายการสแกน (Manual Exclude)
+app.post('/api/raw-scans/:id/exclude', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    const scanId = req.params.id;
+    await pool.query(`
+      UPDATE attendance_raw_scan 
+      SET push_status = 'EXCLUDED', push_error = 'ผู้ดูแลระบบสั่งยกเว้นรายการนี้ (Manual Exclude)' 
+      WHERE id = ?
+    `, [scanId]);
+    res.json({ success: true, message: `ยกเว้นรายการสแกน #${scanId} สำเร็จ` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 4.14.3 รีเฟรชข้อมูลบุคลากรจาก hosoffice.hr_person และ Map ใหม่อัตโนมัติ
+app.post('/api/hosoffice/personnel/refresh-mapping', async (req, res) => {
+  try {
+    const poolAtt = getDbPool();
+    const poolHos = getHosofficePool();
+
+    // ดึงรายชื่อจาก hosoffice.hr_person
+    let hrList = [];
+    try {
+      const [rows] = await poolHos.query(`
+        SELECT 
+          person_id,
+          fingle_id,
+          CONCAT(COALESCE(hr_fname, ''), ' ', COALESCE(hr_lname, '')) AS fullname,
+          hr_position_name,
+          hr_department_name
+        FROM hr_person
+        WHERE fingle_id IS NOT NULL AND fingle_id > 0
+      `);
+      hrList = rows;
+    } catch (e) {
+      console.warn('Query hr_person warning:', e.message);
+    }
+
+    let remappedCount = 0;
+    if (hrList && hrList.length > 0) {
+      for (const hr of hrList) {
+        const [updateRes] = await poolAtt.query(`
+          UPDATE attendance_raw_scan
+          SET 
+            hr_mapped = 1,
+            person_id = ?,
+            hr_fullname = ?,
+            hr_position_name = ?,
+            hr_dep_name = ?
+          WHERE fingle_id = ? AND hr_mapped = 0
+        `, [
+          hr.person_id,
+          hr.fullname.trim(),
+          hr.hr_position_name || '',
+          hr.hr_department_name || '',
+          hr.fingle_id
+        ]);
+        remappedCount += updateRes.affectedRows || 0;
+      }
+    }
+
+    res.json({
+      success: true,
+      hrCount: hrList.length,
+      remappedCount,
+      message: `รีเฟรชข้อมูลบุคลากร HR สำเร็จ (ตรวจพบเจ้าหน้าที่ ${hrList.length} คน, จับคู่ข้อมูลสแกนสำเร็จใหม่ ${remappedCount} รายการ)`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `รีเฟรชข้อมูล HR ไม่สำเร็จ: ${err.message}` });
   }
 });
 

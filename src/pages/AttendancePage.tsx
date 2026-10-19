@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   CheckCircle2, 
   Calendar, 
@@ -6,11 +6,15 @@ import {
   RefreshCw, 
   AlertCircle, 
   Clock, 
-  Download, 
+  Check, 
+  Database,
+  Download,
+  Printer,
+  FileSpreadsheet,
   Filter,
-  Check,
-  XCircle,
-  HelpCircle
+  UserCheck,
+  TrendingUp,
+  AlertTriangle
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { DailyResult } from '../types/attendance';
@@ -22,264 +26,598 @@ interface AttendancePageProps {
 export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
   const isAdmin = state.currentUser.role === 'ADMIN';
 
-  // Selected date (default today 2026-10-14)
+  // Selected date (default 2026-10-14)
   const [selectedDate, setSelectedDate] = useState('2026-10-14');
+  const [selectedType, setSelectedType] = useState<string>('ALL');
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [isRecalculating, setIsRecalculating] = useState(false);
+  const [saveDbMsg, setSaveDbMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isSavingDb, setIsSavingDb] = useState(false);
 
-  // Calculate daily attendance (uses auto-calculated results upon sync by default)
-  const results: DailyResult[] = attendanceStore.getDailyAttendance(selectedDate);
+  // Load results from MySQL when date changes
+  useEffect(() => {
+    attendanceStore.loadDailyAttendanceFromDb(selectedDate);
+  }, [selectedDate]);
+
+  // Calculate daily attendance safely inside useMemo
+  const results: DailyResult[] = useMemo(() => {
+    return attendanceStore.getDailyAttendance(selectedDate);
+  }, [selectedDate, state.rawScans, state.personnel, state.personnelTypes, state.shifts]);
+
+  // Personnel Types list for filter
+  const personnelTypesList = useMemo(() => {
+    const fromTypes = (state.personnelTypes || []).map(t => t.name);
+    const fromResults = results.map(r => r.personnelTypeName).filter(Boolean) as string[];
+    return Array.from(new Set([...fromTypes, ...fromResults]));
+  }, [state.personnelTypes, results]);
 
   // Departments list for filter
-  const departments = Array.from(new Set(state.personnel.map(p => p.hrDepName)));
+  const departments = useMemo(() => {
+    return Array.from(new Set(state.personnel.map(p => p.hrDepName)));
+  }, [state.personnel]);
 
   // Filtered results
-  const filteredResults = results.filter((r) => {
-    if (selectedDept !== 'ALL' && r.department !== selectedDept) return false;
-    if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
-    if (searchTerm) {
-      const matchName = r.fullname.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchFingle = r.fingleId.toString().includes(searchTerm);
-      if (!matchName && !matchFingle) return false;
-    }
-    return true;
-  });
+  const filteredResults = useMemo(() => {
+    return results.filter((r) => {
+      if (selectedType !== 'ALL' && (r.personnelTypeName || '') !== selectedType) return false;
+      if (selectedDept !== 'ALL' && r.department !== selectedDept) return false;
+      if (statusFilter !== 'ALL') {
+        if (statusFilter === 'LATE') {
+          if (r.status !== 'LATE' && r.status !== 'LATE_AND_EARLY') return false;
+        } else if (statusFilter === 'ON_TIME') {
+          if (r.status !== 'ON_TIME') return false;
+        } else if (r.status !== statusFilter) {
+          return false;
+        }
+      }
+      if (searchTerm) {
+        const q = searchTerm.toLowerCase();
+        const matchName = r.fullname.toLowerCase().includes(q);
+        const matchFingle = r.fingleId.toString().includes(q);
+        const matchPos = r.position.toLowerCase().includes(q);
+        const matchType = (r.personnelTypeName || '').toLowerCase().includes(q);
+        if (!matchName && !matchFingle && !matchPos && !matchType) return false;
+      }
+      return true;
+    });
+  }, [results, selectedType, selectedDept, statusFilter, searchTerm]);
 
   // Summary counts
+  const totalCount = results.length;
   const presentCount = results.filter(r => r.status !== 'NO_SCAN').length;
   const onTimeCount = results.filter(r => r.status === 'ON_TIME').length;
   const lateCount = results.filter(r => r.status === 'LATE' || r.status === 'LATE_AND_EARLY').length;
   const noScanCount = results.filter(r => r.status === 'NO_SCAN').length;
   const inOnlyCount = results.filter(r => r.status === 'IN_ONLY').length;
 
-  const handleRecalculate = () => {
+  // On-time percentage calculation
+  const onTimeRate = presentCount > 0 ? Math.round((onTimeCount / presentCount) * 100) : 0;
+  const lateMinutesTotal = results.reduce((acc, r) => acc + (r.lateMinutes || 0), 0);
+  const avgLateMinutes = lateCount > 0 ? Math.round(lateMinutesTotal / lateCount) : 0;
+
+  const handleRecalculate = async () => {
     setIsRecalculating(true);
-    setTimeout(() => {
-      attendanceStore.getDailyAttendance(selectedDate, true);
+    setSaveDbMsg(null);
+    try {
+      await attendanceStore.recalculateDailyAttendance(selectedDate);
       setIsRecalculating(false);
-    }, 400);
+      setSaveDbMsg({ type: 'success', text: 'คำนวณผลเวลาใหม่และบันทึกลง MySQL สำเร็จ' });
+    } catch (e: any) {
+      setIsRecalculating(false);
+      setSaveDbMsg({ type: 'error', text: `ประมวลผลไม่สำเร็จ: ${e.message}` });
+    }
+  };
+
+  const handleSaveToMySQL = async () => {
+    setIsSavingDb(true);
+    setSaveDbMsg(null);
+    try {
+      const res = await attendanceStore.saveDailyResultsToMySql(selectedDate);
+      if (res.success) {
+        setSaveDbMsg({ type: 'success', text: res.message || 'บันทึกลง MySQL เรียบร้อย' });
+      } else {
+        setSaveDbMsg({ type: 'error', text: res.message || 'บันทึกลง MySQL ไม่สำเร็จ' });
+      }
+    } catch (e: any) {
+      setSaveDbMsg({ type: 'error', text: `บันทึกไม่สำเร็จ: ${e.message}` });
+    } finally {
+      setIsSavingDb(false);
+    }
+  };
+
+  // Export CSV for Executive Report
+  const handleExportCsv = () => {
+    const headers = ['วันที่,FINGLE_ID,ชื่อ-สกุล,ตำแหน่ง,กลุ่มงาน,ประเภทบุคลากร,กะ,เวลาที่กำหนด,เวลาเข้างาน,เวลาออกงาน,สถานะ,สาย(นาที),จำนวนสแกน'];
+    const rows = filteredResults.map(r => {
+      const statusText = r.status === 'ON_TIME' ? 'ตรงเวลา' :
+                         r.status === 'LATE' ? `สาย ${r.lateMinutes} นาที` :
+                         r.status === 'IN_ONLY' ? 'รอสแกนออก' : 'ไม่พบสแกน';
+      return `"${r.workDate}","${r.fingleId}","${r.fullname}","${r.position}","${r.department}","${r.personnelTypeName || '-'}","${r.shiftName || '-'}","${r.plannedStartTime || '-'} - ${r.plannedEndTime || '-'}","${r.inTime || '-'}","${r.outTime || '-'}","${statusText}",${r.lateMinutes},${r.scansCount}`;
+    });
+    const blob = new Blob(["\uFEFF" + [headers, ...rows].join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `รายงานเวลาปฏิบัติงาน_${selectedDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+    <div className="space-y-4 max-w-7xl mx-auto pb-12 print:p-0">
+      {/* Executive Command Strip (Top Bar) */}
+      <div className="bg-white border border-slate-200/90 rounded-xl p-4.5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 text-emerald-800">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              ⚡ ประมวลผลเวลาอัตโนมัติ Real-time (Auto-Calculated on Sync)
+          <div className="flex items-center gap-2 mb-1 text-[11px] text-slate-500">
+            <span className="font-semibold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200/70">
+              EXECUTIVE AUDIT
             </span>
-            {state.lastAutoCalculatedAt && (
-              <span className="text-[11px] text-slate-500 font-mono">
-                ล่าสุด: {state.lastAutoCalculatedAt.split(' ')[1]}
-              </span>
-            )}
+            <span aria-hidden="true">·</span>
+            <span className="font-mono text-slate-500">รพ.สามชุก จ.สุพรรณบุรี</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono text-slate-400">attendance_daily_result</span>
           </div>
-          <h2 className="text-base font-bold text-slate-800">
-            ผลการประมวลผลเวลาปฏิบัติงาน (Daily Attendance Processing)
-          </h2>
-          <p className="text-xs text-slate-500">
-            จับคู่ Raw Scan กับกะการทำงาน (Roster &gt; Override &gt; กลุ่ม &gt; มาตรฐาน) คำนวณการเข้าตรงเวลา สาย ออกก่อน และ OT อัตโนมัติทันที
+          <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <FileSpreadsheet className="w-5 h-5 text-teal-700" />
+            รายงานสรุปเวลาปฏิบัติงานผู้บริหาร
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            ตรวจเวลาสแกนจริงเปรียบเทียบตามประเภทบุคลากร สรุปจำนวนสายและเวลาเข้า-ออกจริง
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold">
-            <Calendar className="w-4 h-4 text-teal-600" />
-            <span>ประจำวันที่:</span>
+        {/* Date Selector & Action Buttons */}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {/* Date Selector */}
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-300/90 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-2xs">
+            <Calendar className="w-3.5 h-3.5 text-teal-700" />
+            <span className="text-slate-600 font-medium">วันที่:</span>
             <input
               type="date"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="font-mono text-slate-800 focus:outline-none cursor-pointer"
+              className="font-mono text-slate-900 bg-transparent focus:outline-none cursor-pointer text-xs"
             />
           </div>
 
+          {/* Export Report Action (Solid Matte) */}
+          <button
+            onClick={handleExportCsv}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg border border-slate-300 shadow-2xs cursor-pointer transition-all duration-150"
+            title="ส่งออกรายงานสรุปเป็นไฟล์ Excel (.csv)"
+          >
+            <Download className="w-3.5 h-3.5 text-slate-500" />
+            <span>ส่งออกรายงาน</span>
+          </button>
+
+          {/* Print Report */}
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg border border-slate-300 shadow-2xs cursor-pointer transition-all duration-150 print:hidden"
+            title="พิมพ์รายงานสรุป"
+          >
+            <Printer className="w-3.5 h-3.5 text-slate-500" />
+            <span>พิมพ์</span>
+          </button>
+
           {isAdmin && (
-            <button
-              onClick={handleRecalculate}
-              disabled={isRecalculating}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRecalculating ? 'animate-spin' : ''}`} />
-              <span>{isRecalculating ? 'กำลังคำนวณ...' : 'คำนวณใหม่ (Recalculate)'}</span>
-            </button>
+            <>
+              {/* Recalculate (Matte Teal) */}
+              <button
+                onClick={handleRecalculate}
+                disabled={isRecalculating}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-800 hover:bg-teal-900 active:bg-teal-950 text-white text-xs font-semibold rounded-lg shadow-2xs cursor-pointer disabled:opacity-50 transition-all duration-150"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRecalculating ? 'animate-spin' : ''}`} />
+                <span>{isRecalculating ? 'กำลังคำนวณ...' : 'คำนวณใหม่'}</span>
+              </button>
+
+              {/* Save MySQL (Matte Slate) */}
+              <button
+                onClick={handleSaveToMySQL}
+                disabled={isSavingDb}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 active:bg-black text-white text-xs font-semibold rounded-lg shadow-2xs cursor-pointer disabled:opacity-50 transition-all duration-150"
+                title="บันทึกผลลงตาราง attendance_daily_result ใน MySQL"
+              >
+                <Database className="w-3.5 h-3.5 text-teal-300" />
+                <span>{isSavingDb ? 'บันทึก...' : 'บันทึก MySQL'}</span>
+              </button>
+            </>
           )}
         </div>
       </div>
 
-      {/* Summary KPI Strip */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-xs">
-          <div className="text-xs text-slate-500">มาปฏิบัติงาน</div>
-          <div className="text-xl font-bold text-slate-800 font-mono tabular-nums mt-0.5">
-            {presentCount} <span className="text-xs font-normal text-slate-400">/ {results.length} คน</span>
+      {/* Action Notification Toast */}
+      {saveDbMsg && (
+        <div className={`p-3 rounded-lg text-xs flex items-center justify-between border transition-all ${
+          saveDbMsg.type === 'success' ? 'bg-emerald-50 text-emerald-900 border-emerald-200' : 'bg-rose-50 text-rose-900 border-rose-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-semibold">{saveDbMsg.text}</span>
+          </div>
+          <button onClick={() => setSaveDbMsg(null)} className="text-slate-400 hover:text-slate-600 cursor-pointer">✕</button>
+        </div>
+      )}
+
+      {/* Quick Stats Grid with On-Time Rate Visual Meter */}
+      <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-3">
+        {/* On-Time Rate Mini Meter */}
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span className="font-medium">อัตราตรงเวลา (On-time Rate)</span>
+            <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
+          </div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="text-2xl font-bold font-mono tracking-tight text-slate-900 tabular-nums">
+              {onTimeRate}%
+            </span>
+            <span className="text-[11px] text-slate-500">
+              ({onTimeCount}/{presentCount} คน)
+            </span>
+          </div>
+          {/* Progress Mini Bar */}
+          <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
+            <div 
+              className={`h-full rounded-full transition-all duration-500 ${
+                onTimeRate >= 85 ? 'bg-emerald-500' : onTimeRate >= 70 ? 'bg-amber-500' : 'bg-rose-500'
+              }`}
+              style={{ width: `${Math.min(100, onTimeRate)}%` }}
+            ></div>
           </div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-xs">
-          <div className="text-xs text-emerald-700 font-medium">เข้างานตรงเวลา</div>
-          <div className="text-xl font-bold text-emerald-700 font-mono tabular-nums mt-0.5">
-            {onTimeCount} คน
+        {/* Total & Present Staff */}
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs">
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span className="font-medium">บุคลากรทั้งหมด</span>
+            <UserCheck className="w-3.5 h-3.5 text-slate-400" />
+          </div>
+          <div className="mt-1 text-2xl font-bold font-mono tracking-tight text-slate-900 tabular-nums">
+            {totalCount} <span className="text-xs font-normal text-slate-400">คน</span>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            มาสแกน <strong className="text-slate-800 font-mono">{presentCount}</strong> คน ({totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0}%)
           </div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-xs">
-          <div className="text-xs text-amber-700 font-medium">มาสาย (Late)</div>
-          <div className="text-xl font-bold text-amber-600 font-mono tabular-nums mt-0.5">
-            {lateCount} คน
+        {/* Late Count (Amber Accent) */}
+        <div className="bg-white p-3.5 rounded-xl border border-amber-300/80 bg-amber-500/[0.02] shadow-xs">
+          <div className="flex items-center justify-between text-xs text-amber-900 font-bold">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+              มาสาย (Late)
+            </span>
+            <span className="text-[10px] font-mono text-amber-800 bg-amber-100 px-1.5 py-0.2 rounded font-semibold">
+              เฉลี่ย {avgLateMinutes} น.
+            </span>
+          </div>
+          <div className="mt-1 text-2xl font-bold font-mono tracking-tight text-amber-950 tabular-nums">
+            {lateCount} <span className="text-xs font-normal text-slate-500">คน</span>
+          </div>
+          <div className="text-[11px] text-amber-800/90 mt-1">
+            สแกนเข้าเกินเวลากะตามประเภท
           </div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-xs">
-          <div className="text-xs text-slate-500">สแกนเข้าอย่างเดียว</div>
-          <div className="text-xl font-bold text-slate-700 font-mono tabular-nums mt-0.5">
-            {inOnlyCount} คน
+        {/* In-Only (Waiting Clock-out) */}
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs">
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span className="font-medium">รอสแกนออก</span>
+            <Clock className="w-3.5 h-3.5 text-slate-400" />
+          </div>
+          <div className="mt-1 text-2xl font-bold font-mono tracking-tight text-slate-700 tabular-nums">
+            {inOnlyCount} <span className="text-xs font-normal text-slate-400">คน</span>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            บันทึกเข้าแล้ว รอเวลาเลิกกะ
           </div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-xs">
-          <div className="text-xs text-rose-600 font-medium">ยังไม่พบการสแกน</div>
-          <div className="text-xl font-bold text-rose-700 font-mono tabular-nums mt-0.5">
-            {noScanCount} คน
+        {/* No Scan */}
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs hidden lg:block">
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span className="font-medium">ยังไม่พบสแกน</span>
+            <AlertTriangle className="w-3.5 h-3.5 text-slate-400" />
+          </div>
+          <div className="mt-1 text-2xl font-bold font-mono tracking-tight text-slate-600 tabular-nums">
+            {noScanCount} <span className="text-xs font-normal text-slate-400">คน</span>
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            วันหยุด / ลา / ไม่ได้ลงเวลา
           </div>
         </div>
       </div>
 
-      {/* Filter toolbar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
-          <input
-            type="text"
-            placeholder="ค้นหาชื่อเจ้าหน้าที่, FINGLE_ID..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-8 pr-3 py-2 text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500"
-          />
+      {/* Quick-Pill Segmented Filter Bar */}
+      <div className="bg-white border border-slate-200/90 rounded-xl p-3 shadow-xs space-y-3">
+        {/* Row 1: Status Quick-Pills + Search */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+          {/* Status Quick Pills */}
+          <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 rounded-lg">
+            <button
+              onClick={() => setStatusFilter('ALL')}
+              className={`px-3 py-1 rounded-md font-medium cursor-pointer transition-all duration-150 ${
+                statusFilter === 'ALL'
+                  ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              ทั้งหมด ({results.length})
+            </button>
+            <button
+              onClick={() => setStatusFilter('LATE')}
+              className={`px-3 py-1 rounded-md font-medium cursor-pointer transition-all duration-150 flex items-center gap-1.5 ${
+                statusFilter === 'LATE'
+                  ? 'bg-white text-amber-900 shadow-2xs font-bold ring-1 ring-amber-300'
+                  : 'text-amber-800 hover:text-amber-950'
+              }`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+              <span>มาสาย ({lateCount})</span>
+            </button>
+            <button
+              onClick={() => setStatusFilter('ON_TIME')}
+              className={`px-3 py-1 rounded-md font-medium cursor-pointer transition-all duration-150 flex items-center gap-1.5 ${
+                statusFilter === 'ON_TIME'
+                  ? 'bg-white text-emerald-900 shadow-2xs font-bold ring-1 ring-emerald-300'
+                  : 'text-emerald-800 hover:text-emerald-950'
+              }`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              <span>ตรงเวลา ({onTimeCount})</span>
+            </button>
+            <button
+              onClick={() => setStatusFilter('IN_ONLY')}
+              className={`px-3 py-1 rounded-md font-medium cursor-pointer transition-all duration-150 ${
+                statusFilter === 'IN_ONLY'
+                  ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              รอสแกนออก ({inOnlyCount})
+            </button>
+            <button
+              onClick={() => setStatusFilter('NO_SCAN')}
+              className={`px-3 py-1 rounded-md font-medium cursor-pointer transition-all duration-150 ${
+                statusFilter === 'NO_SCAN'
+                  ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              ไม่พบสแกน ({noScanCount})
+            </button>
+          </div>
+
+          {/* Search Input */}
+          <div className="relative min-w-[240px]">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+            <input
+              type="text"
+              placeholder="ค้นหาชื่อ, ตำแหน่ง, รหัสสแกน..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600"
+            />
+            {searchTerm && (
+              <button 
+                onClick={() => setSearchTerm('')} 
+                className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
 
-        <div>
-          <select
-            value={selectedDept}
-            onChange={(e) => setSelectedDept(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
-          >
-            <option value="ALL">ทุกกลุ่มงาน/ฝ่าย</option>
-            {departments.map((d) => (
-              <option key={d} value={d}>{d}</option>
+        {/* Row 2: Personnel Type Quick Pills + Department Filter */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs pt-1 border-t border-slate-100">
+          {/* Personnel Type Pills */}
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-[11px] font-semibold text-slate-500 mr-1">ประเภทบุคลากร:</span>
+            <button
+              onClick={() => setSelectedType('ALL')}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-medium cursor-pointer transition-colors ${
+                selectedType === 'ALL'
+                  ? 'bg-teal-800 text-white font-semibold'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              ทุกประเภท
+            </button>
+            {personnelTypesList.map((t) => (
+              <button
+                key={t}
+                onClick={() => setSelectedType(t)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium cursor-pointer transition-colors ${
+                  selectedType === t
+                    ? 'bg-teal-800 text-white font-semibold'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                {t}
+              </button>
             ))}
-          </select>
-        </div>
+          </div>
 
-        <div>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
-          >
-            <option value="ALL">สถานะทั้งหมด</option>
-            <option value="ON_TIME">ตรงเวลา (ON_TIME)</option>
-            <option value="LATE">มาสาย (LATE)</option>
-            <option value="IN_ONLY">สแกนเข้าอย่างเดียว (IN_ONLY)</option>
-            <option value="NO_SCAN">ยังไม่มีการสแกน (NO_SCAN)</option>
-          </select>
+          {/* Department Selector */}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[11px] text-slate-500 font-medium">กลุ่มงาน:</span>
+            <select
+              value={selectedDept}
+              onChange={(e) => setSelectedDept(e.target.value)}
+              className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1 text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600 cursor-pointer max-w-[200px] truncate"
+            >
+              <option value="ALL">ทุกกลุ่มงาน/ฝ่าย ({departments.length})</option>
+              {departments.map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
-      {/* Attendance Processing Table */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
+      {/* Counter & Rule Note */}
+      <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+        <div>
+          แสดงผล <span className="font-bold text-slate-900 font-mono tabular-nums">{filteredResults.length}</span> จากทั้งหมด {results.length} รายการ
+          {selectedType !== 'ALL' && (
+            <span className="ml-2 font-medium text-teal-800">
+              · ประเภท: {selectedType}
+            </span>
+          )}
+          {statusFilter !== 'ALL' && (
+            <span className="ml-2 font-medium text-amber-900">
+              · กรองสถานะ: {statusFilter}
+            </span>
+          )}
+        </div>
+        <div className="text-[11px] text-slate-400 font-mono">
+          *เวลาเข้างานเกินเวลาเริ่มกะ คิดเป็นนาทีสายทันที (Zero Tolerance)
+        </div>
+      </div>
+
+      {/* Executive Attendance Table with Sticky Header & Left Accent Borders */}
+      <div className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-xs">
+        <div className="overflow-x-auto max-h-[640px]">
+          <table className="w-full text-left text-xs border-collapse">
+            {/* Sticky Table Header */}
+            <thead className="sticky top-0 bg-slate-100 text-slate-700 font-semibold border-b border-slate-200/90 z-10 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
               <tr>
-                <th className="py-2.5 px-3">FINGLE_ID</th>
-                <th className="py-2.5 px-3">ชื่อ - สกุล</th>
-                <th className="py-2.5 px-3">กลุ่มงาน / หน่วยงาน</th>
-                <th className="py-2.5 px-3">กะที่กำหนด</th>
-                <th className="py-2.5 px-3">ที่มาของกะ</th>
-                <th className="py-2.5 px-3">เวลาเข้า (IN)</th>
-                <th className="py-2.5 px-3">เวลาออก (OUT)</th>
-                <th className="py-2.5 px-3">ผลการลงเวลา</th>
-                <th className="py-2.5 px-3 text-right">จำนวนสแกน</th>
+                <th className="py-3 px-3.5 whitespace-nowrap">วันที่</th>
+                <th className="py-3 px-3.5">ชื่อ - สกุล</th>
+                <th className="py-3 px-3.5">ประเภทบุคลากร</th>
+                <th className="py-3 px-3.5">กะการทำงาน</th>
+                <th className="py-3 px-3.5 text-center">เวลาเข้างาน</th>
+                <th className="py-3 px-3.5 text-center">เวลาออกงาน</th>
+                <th className="py-3 px-3.5">สถานะการลงเวลา</th>
+                <th className="py-3 px-3.5 text-right">จำนวนสแกน</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-sans">
-              {filteredResults.map((row, rowIdx) => (
-                <tr key={`${row.personId}-${rowIdx}`} className="hover:bg-slate-50">
-                  <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
-                    {row.fingleId}
-                  </td>
-                  <td className="py-2.5 px-3 font-medium text-slate-900">
-                    {row.fullname}
-                    <div className="text-[10px] text-slate-400">{row.position}</div>
-                  </td>
-                  <td className="py-2.5 px-3 text-slate-600 truncate max-w-xs">
-                    {row.department}
-                  </td>
-                  <td className="py-2.5 px-3 font-mono">
-                    <span className="font-bold text-slate-800">[{row.shiftCode}]</span>{' '}
-                    <span className="text-slate-600 text-[11px]">{row.plannedStartTime}–{row.plannedEndTime}</span>
-                  </td>
-                  <td className="py-2.5 px-3 text-[11px]">
-                    <span className={`px-1.5 py-0.5 rounded font-mono ${
-                      row.resolutionSource === 'ROSTER'
-                        ? 'bg-purple-100 text-purple-800 font-semibold'
-                        : row.resolutionSource === 'PERSON_OVERRIDE'
-                        ? 'bg-blue-100 text-blue-800 font-semibold'
-                        : row.resolutionSource === 'GROUP_OVERRIDE'
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}>
-                      {row.resolutionSource}
-                    </span>
-                  </td>
-                  <td className="py-2.5 px-3 font-mono">
-                    {row.inTime ? (
-                      <span className="font-bold text-slate-800">{row.inTime}</span>
-                    ) : (
-                      <span className="text-slate-300">-</span>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-3 font-mono">
-                    {row.outTime ? (
-                      <span className="font-bold text-slate-800">{row.outTime}</span>
-                    ) : (
-                      <span className="text-slate-300">-</span>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-3">
-                    {row.status === 'ON_TIME' && (
-                      <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold text-[11px]">
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>ตรงเวลา</span>
-                      </span>
-                    )}
-                    {row.status === 'LATE' && (
-                      <span className="inline-flex items-center gap-1 text-amber-700 font-bold text-[11px]">
-                        <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                        <span>สาย {row.lateMinutes} นาที</span>
-                      </span>
-                    )}
-                    {row.status === 'IN_ONLY' && (
-                      <span className="text-slate-600 font-medium text-[11px]">
-                        ลงเวลาเข้าแล้ว (รอออก)
-                      </span>
-                    )}
-                    {row.status === 'NO_SCAN' && (
-                      <span className="text-slate-400 italic text-[11px]">
-                        ไม่พบการสแกน
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-700">
-                    {row.scansCount}
+              {filteredResults.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-14 text-center text-slate-400">
+                    ไม่พบข้อมูลการลงเวลาตามเงื่อนไขที่เลือก
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredResults.map((row, rowIdx) => {
+                  const isLate = row.status === 'LATE' || row.status === 'LATE_AND_EARLY';
+                  const isOnTime = row.status === 'ON_TIME';
+
+                  return (
+                    <tr 
+                      key={`${row.personId}-${rowIdx}`} 
+                      className={`transition-colors duration-150 ${
+                        isLate 
+                          ? 'border-l-4 border-l-amber-500 bg-amber-500/[0.03] hover:bg-amber-500/[0.07]' 
+                          : 'border-l-4 border-l-transparent hover:bg-slate-50/80'
+                      }`}
+                    >
+                      {/* วันที่ */}
+                      <td className="py-2.5 px-3.5 font-mono text-slate-600 whitespace-nowrap">
+                        {row.workDate}
+                      </td>
+
+                      {/* ชื่อ - สกุล & ข้อมูลตำแหน่ง */}
+                      <td className="py-2.5 px-3.5">
+                        <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                          <span>{row.fullname}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 flex items-center gap-1.5 mt-0.5 font-sans">
+                          <span className="font-mono text-teal-800 font-semibold">#{row.fingleId}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="text-slate-600">{row.position}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="text-slate-400 truncate max-w-xs">{row.department}</span>
+                        </div>
+                      </td>
+
+                      {/* ประเภทบุคลากร */}
+                      <td className="py-2.5 px-3.5 whitespace-nowrap">
+                        <span className="text-[11px] font-medium text-slate-800">
+                          {row.personnelTypeName || 'ข้าราชการ'}
+                        </span>
+                      </td>
+
+                      {/* กะการทำงาน */}
+                      <td className="py-2.5 px-3.5 whitespace-nowrap font-mono">
+                        <div className="font-bold text-slate-800 text-[11px]">
+                          {row.shiftName}
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-sans">
+                          {row.plannedStartTime} - {row.plannedEndTime} น.
+                        </div>
+                      </td>
+
+                      {/* เวลาเข้างาน (IN) */}
+                      <td className="py-2.5 px-3.5 font-mono text-center whitespace-nowrap">
+                        {row.inTime ? (
+                          <span className={`px-2 py-0.5 rounded text-[11px] font-bold tabular-nums ${
+                            row.lateMinutes > 0 
+                              ? 'bg-amber-100 text-amber-950 font-bold border border-amber-300/80' 
+                              : 'bg-slate-100 text-slate-800'
+                          }`}>
+                            {row.inTime}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </td>
+
+                      {/* เวลาออกงาน (OUT) */}
+                      <td className="py-2.5 px-3.5 font-mono text-center whitespace-nowrap">
+                        {row.outTime ? (
+                          <span className="font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-[11px] tabular-nums">
+                            {row.outTime}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </td>
+
+                      {/* สถานะการลงเวลา (ตรงเวลา / สาย +Xm) */}
+                      <td className="py-2.5 px-3.5 whitespace-nowrap">
+                        {isOnTime && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold text-emerald-800 bg-emerald-500/10 border border-emerald-500/20">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                            <span>ตรงเวลา</span>
+                          </span>
+                        )}
+                        {isLate && (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold text-amber-950 bg-amber-500/15 border border-amber-400">
+                            <AlertCircle className="w-3 h-3 text-amber-600" />
+                            <span>สาย {row.lateMinutes} นาที (+{row.lateMinutes}m)</span>
+                          </span>
+                        )}
+                        {row.status === 'IN_ONLY' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            <span>รอสแกนออก</span>
+                          </span>
+                        )}
+                        {row.status === 'NO_SCAN' && (
+                          <span className="text-slate-400 italic text-[11px]">
+                            ไม่พบการสแกน
+                          </span>
+                        )}
+                      </td>
+
+                      {/* จำนวนสแกน */}
+                      <td className="py-2.5 px-3.5 text-right font-mono font-bold text-slate-700 tabular-nums">
+                        {row.scansCount > 0 ? (
+                          <span>{row.scansCount}</span>
+                        ) : (
+                          <span className="text-slate-300 font-normal">0</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>

@@ -1,26 +1,19 @@
 import React, { useState } from 'react';
 import { 
-  User, 
   Calendar, 
   Clock, 
   CheckCircle2, 
   AlertCircle, 
   Fingerprint, 
-  CalendarClock, 
   Award, 
   Printer, 
   Download, 
-  Hospital, 
   Building, 
   Briefcase, 
-  ShieldCheck,
-  ChevronLeft,
-  ChevronRight,
-  Info,
   Sparkles
 } from 'lucide-react';
-import { StoreState, attendanceStore, formatDate, getDayType } from '../services/attendanceStore';
-import { Shift, DailyResult, RawScan, PersonRoster } from '../types/attendance';
+import { StoreState, attendanceStore, getDayType } from '../services/attendanceStore';
+import { DailyResult } from '../types/attendance';
 
 interface MyAttendancePageProps {
   state: StoreState;
@@ -29,7 +22,7 @@ interface MyAttendancePageProps {
 export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => {
   const currentUser = state.currentUser;
   const [selectedMonth, setSelectedMonth] = useState('2026-10');
-  const [activeTab, setActiveTab] = useState<'attendance' | 'roster' | 'raw_scans'>('attendance');
+  const [activeTab, setActiveTab] = useState<'attendance' | 'raw_scans'>('attendance');
 
   // Match the user with HrPerson
   const person = state.personnel.find(p => p.personId === currentUser.personId) || 
@@ -82,9 +75,6 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
 
   // Raw scans for this person in staging database
   const myRawScans = state.rawScans.filter(s => s.fingleId === fingleId || s.personId === person.personId);
-
-  // Roster entries for this person in selected month
-  const myRoster = state.roster.filter(r => r.personId === person.personId && r.workDate.startsWith(selectedMonth));
 
   // Compute monthly stats
   const daysWorked = attendanceHistory.filter(r => r.status !== 'NO_SCAN').length;
@@ -341,6 +331,7 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
       </div>
 
       {/* Tabs Navigation */}
+      {/* Tabs Navigation */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-1 text-xs font-semibold print:hidden">
         <button
           onClick={() => setActiveTab('attendance')}
@@ -352,18 +343,6 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
         >
           <Clock className="w-4 h-4" />
           <span>ผลการคิดเวลาและประวัติสแกน ({attendanceHistory.length} วัน)</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('roster')}
-          className={`px-4 py-2 rounded-lg flex items-center gap-2 cursor-pointer transition-colors ${
-            activeTab === 'roster'
-              ? 'bg-teal-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }`}
-        >
-          <CalendarClock className="w-4 h-4" />
-          <span>ตารางเวรที่ได้รับมอบหมาย ({myRoster.length} รายการ)</span>
         </button>
 
         <button
@@ -386,8 +365,8 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
             <span className="font-semibold text-slate-800">
               รายละเอียดผลการลงเวลาปฏิบัติงานประจำวัน (ประจำเดือน {selectedMonth})
             </span>
-            <span className="text-slate-500">
-              คำนวณตามลำดับ: Roster &gt; Override &gt; Group &gt; Default
+            <span className="text-teal-700 font-medium">
+              เงื่อนไขเวลาตามประเภทบุคลากร: {person.hrPersonTypeName || 'ข้าราชการ'}
             </span>
           </div>
 
@@ -505,58 +484,6 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
                 )}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 2: Assigned Roster */}
-      {activeTab === 'roster' && (
-        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs space-y-4 p-5">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <div>
-              <h3 className="text-sm font-bold text-slate-800">
-                ตารางเวรปฏิบัติงานประจำเดือน (Monthly Work Roster)
-              </h3>
-              <p className="text-xs text-slate-500">
-                เวรที่หัวหน้าตึกหรือฝ่ายบริหารมอบหมายให้ปฏิบัติงานในรอบเดือน {selectedMonth}
-              </p>
-            </div>
-            <span className="text-xs font-semibold px-2.5 py-1 rounded bg-teal-50 text-teal-800 border border-teal-200">
-              สังกัด: {person.hrDepSubName || person.hrDepName}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-            {myRoster.length === 0 ? (
-              <div className="col-span-4 p-8 text-center text-xs text-slate-400 bg-slate-50 rounded-xl">
-                ไม่มีการลงตารางเวรเฉพาะเจาะจงในเดือนนี้ (ระบบใช้กะเริ่มต้นตามกลุ่มบุคลากร)
-              </div>
-            ) : (
-              myRoster.map((r, i) => {
-                const shiftObj = state.shifts.find(s => s.id === r.shiftId);
-                return (
-                  <div key={i} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100/70 transition-colors">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-mono font-bold text-slate-800">
-                        {r.workDate}
-                      </span>
-                      <span 
-                        className="px-2 py-0.5 rounded text-[10px] font-bold text-white"
-                        style={{ backgroundColor: shiftObj?.color || '#0284c7' }}
-                      >
-                        กะ {shiftObj?.shiftCode || 'เวร'}
-                      </span>
-                    </div>
-                    <div className="text-xs font-semibold text-slate-700">
-                      {shiftObj?.shiftName || 'กะเวร'}
-                    </div>
-                    <div className="text-[11px] font-mono text-slate-500 mt-1">
-                      {shiftObj?.startTime} - {shiftObj?.endTime} น.
-                    </div>
-                  </div>
-                );
-              })
-            )}
           </div>
         </div>
       )}

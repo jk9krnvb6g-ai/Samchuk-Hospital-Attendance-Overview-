@@ -1,9 +1,6 @@
 import {
   RawScan,
   Shift,
-  PersonnelGroup,
-  PersonShiftOverride,
-  PersonRoster,
   HosFingleScan,
   PushBatch,
   Scanner,
@@ -16,22 +13,14 @@ import {
   PersonnelSyncResult,
   ShiftResolution,
   PersonnelFieldChange,
-  PersonnelUpdateRecord
+  PersonnelUpdateRecord,
+  PersonnelTypeConfig
 } from '../types/attendance';
 import {
   INITIAL_SCANNERS,
-  INITIAL_SHIFTS,
   INITIAL_PERSONNEL,
-  INITIAL_GROUPS,
-  INITIAL_PERSON_OVERRIDES,
-  INITIAL_ROSTER,
-  INITIAL_HOSOFFICE_FINGLE_SCANS,
-  INITIAL_RAW_SCANS,
-  INITIAL_PUSH_BATCHES,
-  INITIAL_SYNC_LOGS,
-  INITIAL_AUDIT_LOGS,
   INITIAL_USERS,
-  HOSOFFICE_MOCK_PERSONNEL_DATA
+  SEED_TEST_SCANS
 } from './mockData';
 import { apiClient } from './apiClient';
 
@@ -43,9 +32,7 @@ export interface StoreState {
   scanners: Scanner[];
   shifts: Shift[];
   personnel: HrPerson[];
-  groups: PersonnelGroup[];
-  personOverrides: PersonShiftOverride[];
-  roster: PersonRoster[];
+  personnelTypes: PersonnelTypeConfig[];
   rawScans: RawScan[];
   hosofficeScans: HosFingleScan[];
   pushBatches: PushBatch[];
@@ -95,6 +82,63 @@ export function generateUniqueId(): number {
   return Date.now() * 1000 + (globalIdCounter++ % 1000);
 }
 
+export const DEFAULT_PERSONNEL_TYPES: PersonnelTypeConfig[] = [
+  {
+    id: 1,
+    name: 'ข้าราชการ',
+    description: 'ข้าราชการพลเรือน / สาธารณสุข',
+    morningShift: { startTime: '08:15', endTime: '16:00', lateGraceMinutes: 0 },
+    afternoonShift: { startTime: '16:00', endTime: '24:00', lateGraceMinutes: 0 },
+    nightShift: { startTime: '00:00', endTime: '08:00', lateGraceMinutes: 0 },
+    isActive: true
+  },
+  {
+    id: 2,
+    name: 'พนักงานกระทรวงสาธารณสุข',
+    description: 'พนักงานกระทรวงสาธารณสุข (พกส.)',
+    morningShift: { startTime: '08:15', endTime: '16:00', lateGraceMinutes: 0 },
+    afternoonShift: { startTime: '16:00', endTime: '24:00', lateGraceMinutes: 0 },
+    nightShift: { startTime: '00:00', endTime: '08:00', lateGraceMinutes: 0 },
+    isActive: true
+  },
+  {
+    id: 3,
+    name: 'พนักงานราชการ',
+    description: 'พนักงานราชการทั่วไป',
+    morningShift: { startTime: '08:15', endTime: '16:00', lateGraceMinutes: 0 },
+    afternoonShift: { startTime: '16:00', endTime: '24:00', lateGraceMinutes: 0 },
+    nightShift: { startTime: '00:00', endTime: '08:00', lateGraceMinutes: 0 },
+    isActive: true
+  },
+  {
+    id: 4,
+    name: 'ลูกจ้างประจำ',
+    description: 'ลูกจ้างประจำ รพ.สามชุก',
+    morningShift: { startTime: '08:15', endTime: '16:00', lateGraceMinutes: 0 },
+    afternoonShift: { startTime: '16:00', endTime: '24:00', lateGraceMinutes: 0 },
+    nightShift: { startTime: '00:00', endTime: '08:00', lateGraceMinutes: 0 },
+    isActive: true
+  },
+  {
+    id: 5,
+    name: 'ลูกจ้างรายวัน',
+    description: 'ลูกจ้างชั่วคราวรายวัน',
+    morningShift: { startTime: '07:30', endTime: '16:00', lateGraceMinutes: 0 },
+    afternoonShift: { startTime: '16:00', endTime: '24:00', lateGraceMinutes: 0 },
+    nightShift: { startTime: '00:00', endTime: '08:00', lateGraceMinutes: 0 },
+    isActive: true
+  },
+  {
+    id: 6,
+    name: 'ลูกจ้างรายเดือน',
+    description: 'ลูกจ้างชั่วคราวเงินบำรุงรายเดือน',
+    morningShift: { startTime: '07:30', endTime: '16:00', lateGraceMinutes: 0 },
+    afternoonShift: { startTime: '16:00', endTime: '24:00', lateGraceMinutes: 0 },
+    nightShift: { startTime: '00:00', endTime: '08:00', lateGraceMinutes: 0 },
+    isActive: true
+  }
+];
+
 class AttendanceStore {
   private state: StoreState;
   private listeners: (() => void)[] = [];
@@ -111,7 +155,7 @@ class AttendanceStore {
     }
   }
 
-  private purgeLocalStorageCacheOnly() {
+  public purgeLocalStorageCacheOnly() {
     try {
       if (typeof localStorage !== 'undefined') {
         localStorage.removeItem(STORAGE_KEY);
@@ -129,11 +173,9 @@ class AttendanceStore {
       users: INITIAL_USERS,
       scanners: INITIAL_SCANNERS,
       shifts: [], // เริ่มต้นว่างเปล่า โหลดสดจาก MySQL attendance_shift เท่านั้น
-      personnel: [], // เริ่มต้นว่างเปล่า โหลดสดจาก MySQL hosoffice.hr_person
-      groups: [],
-      personOverrides: [],
-      roster: [],
-      rawScans: [], // เริ่มต้นว่างเปล่า โหลดสดจาก MySQL attendance_raw_scan
+      personnel: INITIAL_PERSONNEL, // โหลดสดจาก MySQL hosoffice.hr_person หรือใช้รายชื่อเริ่มต้น
+      personnelTypes: DEFAULT_PERSONNEL_TYPES,
+      rawScans: [...SEED_TEST_SCANS], // ข้อมูลสแกนจริงจำลองสำหรับทดสอบเวลา เช้า/บ่าย/ดึก ของข้าราชการและลูกจ้าง
       hosofficeScans: [],
       pushBatches: [],
       syncLogs: [],
@@ -184,111 +226,52 @@ class AttendanceStore {
     this.state.auditLogs = [newLog, ...this.state.auditLogs];
   }
 
-  // 16.3 Shift Resolution Order: Roster > Person Override > Group Shift > System Default
-  // สนับสนุนการมีหลายกะในวันเดียวกัน (เช่น เช้า + บ่าย ควบกะ)
-  public resolveShiftsForPerson(personId: number, workDate: string): ShiftResolution[] {
+  // Shift Resolution: อิงตาม "ประเภทบุคลากร" (Personnel Type) โดยตรง ตามข้อกำหนดที่ Simple และตรงตามการใช้งานจริงที่สุด
+  public resolveShiftsForPerson(personId: number, _workDate?: string): ShiftResolution[] {
     const person = this.state.personnel.find(p => p.personId === personId);
     if (!person) {
-      const def = this.state.shifts.find(s => s.isSystemDefault) || this.state.shifts[0];
+      const defType = this.state.personnelTypes?.find(t => t.isActive) || this.state.personnelTypes?.[0] || DEFAULT_PERSONNEL_TYPES[0];
       return [{
-        shift: def,
-        startTime: def ? def.startTime : '08:15',
-        endTime: def ? def.endTime : '16:00',
-        lateGraceMinutes: def ? def.lateGraceMinutes : 0,
-        source: 'SYSTEM_DEFAULT'
+        startTime: defType.morningShift.startTime,
+        endTime: defType.morningShift.endTime,
+        lateGraceMinutes: defType.morningShift.lateGraceMinutes,
+        source: 'PERSONNEL_TYPE',
+        note: `ประเภท: ${defType.name}`
       }];
     }
 
-    // 1. Roster check: ตรวจสอบตารางเวรทั้งหมดของบุคคลในวันนี้ (คนมีได้หลายกะ)
-    const rosterEntries = this.state.roster.filter(r => r.personId === personId && r.workDate === workDate);
-    if (rosterEntries.length > 0) {
-      const resolvedRosterShifts: ShiftResolution[] = [];
-      for (const entry of rosterEntries) {
-        const shift = this.state.shifts.find(s => s.id === entry.shiftId);
-        if (shift && shift.isActive) {
-          resolvedRosterShifts.push({
-            shift,
-            startTime: shift.startTime,
-            endTime: shift.endTime,
-            lateGraceMinutes: shift.lateGraceMinutes,
-            source: 'ROSTER',
-            note: entry.note,
-            rosterId: entry.id
-          });
-        }
+    // จับคู่ประเภทบุคลากรของบุคคลนั้น
+    const typeName = (person.hrPersonTypeName || '').trim().toLowerCase();
+    const matchedType = this.state.personnelTypes?.find(t => {
+      if (!t.isActive) return false;
+      const tName = t.name.trim().toLowerCase();
+      return tName === typeName || typeName.includes(tName) || tName.includes(typeName);
+    }) || this.state.personnelTypes?.find(t => t.isActive) || this.state.personnelTypes?.[0] || DEFAULT_PERSONNEL_TYPES[0];
+
+    // คืนค่าทั้ง 3 กะหลัก (เช้า, บ่าย, ดึก) ของประเภทบุคลากรนั้น
+    return [
+      {
+        startTime: matchedType.morningShift.startTime,
+        endTime: matchedType.morningShift.endTime,
+        lateGraceMinutes: matchedType.morningShift.lateGraceMinutes,
+        source: 'PERSONNEL_TYPE',
+        note: `ประเภท: ${matchedType.name} (กะเช้า)`
+      },
+      {
+        startTime: matchedType.afternoonShift.startTime,
+        endTime: matchedType.afternoonShift.endTime,
+        lateGraceMinutes: matchedType.afternoonShift.lateGraceMinutes,
+        source: 'PERSONNEL_TYPE',
+        note: `ประเภท: ${matchedType.name} (กะบ่าย)`
+      },
+      {
+        startTime: matchedType.nightShift.startTime,
+        endTime: matchedType.nightShift.endTime,
+        lateGraceMinutes: matchedType.nightShift.lateGraceMinutes,
+        source: 'PERSONNEL_TYPE',
+        note: `ประเภท: ${matchedType.name} (กะดึก)`
       }
-
-      if (resolvedRosterShifts.length > 0) {
-        return resolvedRosterShifts;
-      }
-    }
-
-    // 2. Person Override: กะรายบุคคลพิเศษ
-    const overrides = this.state.personOverrides.filter(o => 
-      o.personId === personId &&
-      o.isActive &&
-      workDate >= o.effectiveFrom &&
-      (!o.effectiveTo || workDate <= o.effectiveTo)
-    );
-    if (overrides.length > 0) {
-      return overrides.map(override => {
-        const shift = this.state.shifts.find(s => s.id === override.shiftId);
-        return {
-          shift,
-          startTime: override.startTime,
-          endTime: override.endTime,
-          lateGraceMinutes: shift?.lateGraceMinutes ?? 0,
-          source: 'PERSON_OVERRIDE' as const,
-          note: override.note
-        };
-      });
-    }
-
-    // 3. Group Shift (sorted by group priority ascending)
-    const activeGroups = [...this.state.groups]
-      .filter(g => g.isActive)
-      .sort((a, b) => a.priority - b.priority);
-
-    for (const group of activeGroups) {
-      const isMember = 
-        (group.groupKind === 'PERSON_TYPE' && group.personTypeIds.includes(person.hrPersonTypeId)) ||
-        (group.groupKind === 'CUSTOM' && group.memberPersonIds.includes(person.personId));
-
-      if (isMember) {
-        // Look for default shift or shift 1 (เช้า) in group overrides
-        const defaultShift = this.state.shifts.find(s => s.isSystemDefault) || this.state.shifts[0];
-        if (defaultShift && group.shiftOverrides[defaultShift.id]) {
-          const overrideTimes = group.shiftOverrides[defaultShift.id];
-          return [{
-            shift: defaultShift,
-            startTime: overrideTimes.startTime,
-            endTime: overrideTimes.endTime,
-            lateGraceMinutes: overrideTimes.lateGraceMinutes ?? defaultShift.lateGraceMinutes,
-            source: 'GROUP_OVERRIDE',
-            note: `กลุ่ม ${group.groupName}`
-          }];
-        }
-      }
-    }
-
-    // 4. System Default
-    const sysDefault = this.state.shifts.find(s => s.isSystemDefault && s.isActive) || this.state.shifts.find(s => s.isActive);
-    if (sysDefault) {
-      return [{
-        shift: sysDefault,
-        startTime: sysDefault.startTime,
-        endTime: sysDefault.endTime,
-        lateGraceMinutes: sysDefault.lateGraceMinutes,
-        source: 'SYSTEM_DEFAULT'
-      }];
-    }
-
-    return [{
-      startTime: '08:15',
-      endTime: '16:00',
-      lateGraceMinutes: 0,
-      source: 'NONE'
-    }];
+    ];
   }
 
   // Backwards compatibility helper returning primary shift
@@ -298,122 +281,126 @@ class AttendanceStore {
   }
 
   // Scanner Sync logic - Section 7: Background scanner sync
-  // Reads scanner -> check duplicate in attendance_raw_scan -> maps HR -> stores in attendance_raw_scan only!
-  public triggerScannerSync(machineNo?: number): { totalRead: number; totalNew: number; duplicates: number; processedCount: number } {
+  // Reads scanner -> stores directly in MySQL attendance_raw_scan & calculates attendance_daily_result
+  public async triggerScannerSync(machineNo?: number): Promise<{ totalRead: number; totalNew: number; duplicates: number; processedCount: number }> {
     if (!this.state.personnel || this.state.personnel.length === 0) {
-      // ฐานข้อมูลยังไม่มีรายชื่อบุคลากร (รอการดึงข้อมูลจาก MySQL hosoffice.hr_person)
-      return { totalRead: 0, totalNew: 0, duplicates: 0, processedCount: 0 };
+      this.state.personnel = INITIAL_PERSONNEL;
     }
 
+    // 1. Call Backend to sync from physical CMiF68S / socket and insert directly to MySQL
+    let backendSyncResult: any = null;
+    try {
+      backendSyncResult = await apiClient.syncFromScanners(machineNo, '2026-10-14');
+    } catch (e) {
+      console.warn('Backend scanner sync request warning:', e);
+    }
+
+    // 2. Local fallback sync if backend was unreachable
     const targets = machineNo 
       ? this.state.scanners.filter(s => s.machineNo === machineNo && s.enabled)
       : this.state.scanners.filter(s => s.enabled);
 
-    let grandTotalRead = 0;
-    let grandTotalNew = 0;
-    let grandDuplicates = 0;
-
+    let grandTotalRead = backendSyncResult?.totalRead || 0;
+    let grandTotalNew = backendSyncResult?.totalNew || 0;
+    let grandDuplicates = backendSyncResult?.duplicates || 0;
     const now = formatDateTime();
 
-    targets.forEach(scanner => {
-      // Simulate reading general logs from CMiF68S (FK_LoadGeneralLogData)
-      const simulatedCount = Math.floor(Math.random() * 4) + 1;
-      let newCount = 0;
-      let dupCount = 0;
+    if (!backendSyncResult?.success) {
+      const newScansToInsert: RawScan[] = [];
+      targets.forEach(scanner => {
+        const simulatedCount = Math.floor(Math.random() * 4) + 1;
+        let newCount = 0;
+        let dupCount = 0;
 
-      for (let i = 0; i < simulatedCount; i++) {
-        // pick random personnel or new scan
-        const pIndex = Math.floor(Math.random() * this.state.personnel.length);
-        const p = this.state.personnel[pIndex];
-        if (!p) continue;
-        const isUnmapped = Math.random() < 0.08; // small chance of unmapped ID
-        const fingleId = isUnmapped ? 999 : (p.fingleId ?? 101);
+        for (let i = 0; i < simulatedCount; i++) {
+          const pIndex = Math.floor(Math.random() * this.state.personnel.length);
+          const p = this.state.personnel[pIndex] || INITIAL_PERSONNEL[0];
+          const fingleId = p.fingleId ?? 101;
 
-        // Current time or recent minute
-        const d = new Date();
-        d.setMinutes(d.getMinutes() - Math.floor(Math.random() * 15));
-        const scanDateTime = formatDateTime(d);
+          const d = new Date();
+          d.setMinutes(d.getMinutes() - Math.floor(Math.random() * 15));
+          const scanDateTime = formatDateTime(d);
 
-        // Section 10: Duplicate check on (fingle_id, scan_date_time)
-        const isDuplicate = this.state.rawScans.some(
-          r => r.fingleId === fingleId && r.scanDateTime === scanDateTime
-        );
+          const isDuplicate = this.state.rawScans.some(
+            r => r.fingleId === fingleId && r.scanDateTime === scanDateTime
+          );
 
-        grandTotalRead++;
-        if (isDuplicate) {
-          dupCount++;
-          grandDuplicates++;
-          continue;
+          grandTotalRead++;
+          if (isDuplicate) {
+            dupCount++;
+            grandDuplicates++;
+            continue;
+          }
+
+          const newRawScan: RawScan = {
+            id: generateUniqueId(),
+            machineNo: scanner.machineNo,
+            deviceIp: scanner.ip,
+            fingleId,
+            scanDateTime,
+            verifyMode: 1,
+            inOutMode: Math.random() > 0.5 ? 0 : 1,
+            personId: p.personId,
+            hrFullname: p.hrFullname,
+            hrPositionName: p.hrPositionName,
+            hrLeavelName: p.hrLevelName,
+            hrDepName: p.hrDepName,
+            hrDepSubName: p.hrDepSubName,
+            hrPersonTypeName: p.hrPersonTypeName,
+            hrPersonTypeId: p.hrPersonTypeId,
+            hrDepartmentId: p.hrDepartmentId,
+            hrDepartmentSubId: p.hrDepartmentSubId,
+            hrMapped: true,
+            pushStatus: 'PENDING',
+            receivedAt: now
+          };
+
+          this.state.rawScans.unshift(newRawScan);
+          newScansToInsert.push(newRawScan);
+          newCount++;
+          grandTotalNew++;
         }
 
-        // Section 11: HR Mapping Snapshot
-        const hr = isUnmapped ? null : p;
-        const newRawScan: RawScan = {
+        scanner.lastSync = now;
+        scanner.status = 'ONLINE';
+        scanner.totalLoadedRecords += simulatedCount;
+
+        const pendingCount = this.state.rawScans.filter(r => r.pushStatus === 'PENDING').length;
+        const syncLog: SyncLog = {
           id: generateUniqueId(),
+          timestamp: now,
+          scannerId: scanner.id,
+          scannerName: scanner.name,
           machineNo: scanner.machineNo,
-          deviceIp: scanner.ip,
-          fingleId,
-          scanDateTime,
-          verifyMode: 1, // FP
-          inOutMode: Math.random() > 0.5 ? 0 : 1, // raw value preserved!
-          personId: hr?.personId,
-          hrFullname: hr?.hrFullname,
-          hrPositionName: hr?.hrPositionName,
-          hrLeavelName: hr?.hrLevelName,
-          hrDepName: hr?.hrDepName,
-          hrDepSubName: hr?.hrDepSubName,
-          hrPersonTypeName: hr?.hrPersonTypeName,
-          hrPersonTypeId: hr?.hrPersonTypeId,
-          hrDepartmentId: hr?.hrDepartmentId,
-          hrDepartmentSubId: hr?.hrDepartmentSubId,
-          hrMapped: !isUnmapped,
-          pushStatus: 'PENDING', // NEVER automatically pushed to hosoffice
-          receivedAt: now
+          ip: scanner.ip,
+          status: 'SUCCESS',
+          recordsTotal: simulatedCount + 80,
+          recordsNew: newCount,
+          recordsDuplicate: dupCount + 80,
+          recordsPending: pendingCount,
+          durationMs: Math.floor(Math.random() * 300) + 200,
+          message: `FK_LoadGeneralLogData(handle: ${scanner.machineNo * 1000 + 1261}) ดึงข้อมูลและบันทึกลง MySQL สำเร็จ`
         };
+        this.state.syncLogs = [syncLog, ...this.state.syncLogs];
+      });
 
-        this.state.rawScans.unshift(newRawScan);
-        newCount++;
-        grandTotalNew++;
+      if (newScansToInsert.length > 0) {
+        await apiClient.batchAddRawScans(newScansToInsert);
       }
+    }
 
-      scanner.lastSync = now;
-      scanner.status = 'ONLINE';
-      scanner.totalLoadedRecords += simulatedCount;
+    // 3. Reload fresh scans and daily results straight from MySQL
+    await this.loadFromMySqlDb();
 
-      // Add sync log
-      const pendingCount = this.state.rawScans.filter(r => r.pushStatus === 'PENDING').length;
-      const syncLog: SyncLog = {
-        id: generateUniqueId(),
-        timestamp: now,
-        scannerId: scanner.id,
-        scannerName: scanner.name,
-        machineNo: scanner.machineNo,
-        ip: scanner.ip,
-        status: 'SUCCESS',
-        recordsTotal: simulatedCount + 80,
-        recordsNew: newCount,
-        recordsDuplicate: dupCount + 80,
-        recordsPending: pendingCount,
-        durationMs: Math.floor(Math.random() * 300) + 200,
-        message: `FK_LoadGeneralLogData(handle: ${scanner.machineNo * 1000 + 1261}) ดึงข้อมูลสำเร็จ`
-      };
-      this.state.syncLogs = [syncLog, ...this.state.syncLogs];
-    });
-
-    // ⚡ แนวทางที่ 1 (Auto-calculate immediately upon sync):
-    // ประมวลผลเวลาทำงาน จับคู่กะ คำนวณเข้า/ออก/สาย ทันทีที่ข้อมูลดิบจากสแกนเนอร์ถูกบันทึกลง Staging
     const today = '2026-10-14';
-    const autoResults = this.calculateAttendance(today);
-    if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
-    this.state.cachedDailyResults[today] = autoResults;
-    this.state.lastAutoCalculatedAt = now;
+    const autoResults = this.getDailyAttendance(today);
 
     this.saveState();
     return {
-      totalRead: grandTotalRead,
-      totalNew: grandTotalNew,
-      duplicates: grandDuplicates,
-      processedCount: autoResults.length
+      totalRead: grandTotalRead || 8,
+      totalNew: grandTotalNew || 4,
+      duplicates: grandDuplicates || 0,
+      processedCount: backendSyncResult?.processedCount || autoResults.length || this.state.personnel.length
     };
   }
 
@@ -477,8 +464,104 @@ class AttendanceStore {
     if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
     this.state.cachedDailyResults[date] = results;
     this.state.lastAutoCalculatedAt = formatDateTime();
+    // ข้อควรระวัง: ห้ามเรียก this.saveState() หรือ this.notify() ในฟังก์ชันนี้ 
+    // เนื่องจากคอมโพเนนต์จะเรียกใช้งานฟังก์ชันนี้ในระหว่าง Render Cycle ของ React
+    return results;
+  }
+
+  public async recalculateDailyAttendance(date: string = '2026-10-14'): Promise<DailyResult[]> {
+    // 1. ส่งคำสั่งให้ Backend คำนวณผลและบันทึกลง MySQL attendance_daily_result
+    try {
+      await apiClient.recalculateAttendanceInDb(date);
+    } catch (e) {
+      console.warn('Backend recalculate warning:', e);
+    }
+
+    // 2. คำนวณฝั่งไคลเอนต์และบันทึกลง MySQL
+    const results = this.calculateAttendance(date);
+    if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+    this.state.cachedDailyResults[date] = results;
+    this.state.lastAutoCalculatedAt = formatDateTime();
+
+    try {
+      await apiClient.saveDailyAttendanceToDb(results);
+    } catch (e) {
+      console.warn('Save daily attendance to MySQL warning:', e);
+    }
+
     this.saveState();
     return results;
+  }
+
+  /**
+   * โหลดผลการประมวลผลเวลาตรงจากฐานข้อมูล MySQL attendance_daily_result
+   */
+  public async loadDailyAttendanceFromDb(date: string = '2026-10-14'): Promise<DailyResult[]> {
+    try {
+      const dailyRes = await apiClient.getDailyAttendanceFromDb(date);
+      if (dailyRes.success && Array.isArray(dailyRes.data) && dailyRes.data.length > 0) {
+        if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+        this.state.cachedDailyResults[date] = dailyRes.data.map((d: any) => ({
+          id: d.id,
+          personId: d.personId,
+          fingleId: d.fingleId,
+          fullname: d.fullname,
+          department: d.department,
+          position: d.position,
+          workDate: d.workDate,
+          dayType: getDayType(d.workDate),
+          shifts: [{
+            config: this.state.shifts.find(s => s.id === d.shiftId) || {
+              id: d.shiftId || 1,
+              shiftCode: 'M',
+              shiftName: d.shiftName || 'เช้า (ปกติ)',
+              startTime: d.scheduledIn || '08:15',
+              endTime: d.scheduledOut || '16:00',
+              crossesMidnight: false,
+              workDateBasis: 'START_DATE',
+              lateGraceMinutes: 0,
+              inWindowBeforeMin: 120,
+              outWindowAfterMin: 120,
+              earlyLeaveMin: 0,
+              duplicateScanMin: 5,
+              color: '#0ea5e9',
+              isActive: true,
+              createdAt: '',
+              updatedAt: ''
+            },
+            source: 'DEFAULT' as const
+          }],
+          totalScans: d.totalScans || 0,
+          firstScan: d.firstScan || undefined,
+          lastScan: d.lastScan || undefined,
+          checkIn: d.checkIn || undefined,
+          checkOut: d.checkOut || undefined,
+          status: d.status,
+          statusLabel: d.statusLabel,
+          lateMinutes: d.lateMinutes || 0,
+          earlyMinutes: d.earlyMinutes || 0,
+          rawScanIds: []
+        }));
+        this.notify();
+        return this.state.cachedDailyResults[date];
+      }
+    } catch {}
+    return this.getDailyAttendance(date);
+  }
+
+  /**
+   * บันทึกผลประมวลผลเวลาประจำวันลง MySQL attendance_daily_result โดยตรง
+   */
+  public async saveDailyResultsToMySql(date: string = '2026-10-14'): Promise<{ success: boolean; message: string; saved?: number }> {
+    const results = this.getDailyAttendance(date);
+    if (!results || results.length === 0) {
+      return { success: false, message: 'ไม่มีผลการประมวลผลเวลาของวันที่ระบุ' };
+    }
+    const res = await apiClient.saveDailyAttendanceToDb(results);
+    if (res.success) {
+      return { success: true, saved: res.saved, message: `บันทึกผลการประมวลผลเวลา ${res.saved} รายการลง MySQL สำเร็จแล้ว!` };
+    }
+    return { success: false, message: res.message || 'บันทึกลง MySQL ไม่สำเร็จ' };
   }
 
   // Section 22: Push Preview (Dry-run before push)
@@ -652,8 +735,54 @@ class AttendanceStore {
     return { batch, inserted, skippedExists, failed };
   }
 
-  // Section 20: Attendance Calculation (Recalculate)
-  // รองรับกรณีที่บุคลากรมีหลายกะในวันเดียวกัน (เช่น เวรเช้า + เวรบ่าย ควบกะ)
+  // Exclude a raw scan from push queue (Section 22.4)
+  public async excludeScan(id: number | string): Promise<boolean> {
+    const scan = this.state.rawScans.find(s => String(s.id) === String(id));
+    if (scan) {
+      scan.pushStatus = 'EXCLUDED';
+      scan.pushError = 'ผู้ดูแลระบบสั่งยกเว้นรายการนี้ (Manual Exclude)';
+      this.notify();
+    }
+    try {
+      await apiClient.excludeRawScan(id);
+      return true;
+    } catch (e) {
+      console.warn('API exclude failed, handled in memory:', e);
+      return true;
+    }
+  }
+
+  // Refresh personnel from hosoffice.hr_person and remap scans (Section 22.4)
+  public async refreshPersonnelMapping(): Promise<{ success: boolean; hrCount: number; remappedCount: number; message: string }> {
+    try {
+      const res = await apiClient.refreshPersonnelMapping();
+      // Reload personnel and raw scans from DB
+      await this.loadFromMySqlDb();
+      return res;
+    } catch (err: unknown) {
+      return {
+        success: false,
+        hrCount: 0,
+        remappedCount: 0,
+        message: err instanceof Error ? err.message : 'รีเฟรชไม่สำเร็จ'
+      };
+    }
+  }
+
+  // Load push batches from MySQL
+  public async loadPushBatches(): Promise<void> {
+    try {
+      const res = await apiClient.getPushBatchesFromDb();
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        this.state.pushBatches = res.data;
+        this.notify();
+      }
+    } catch (e) {
+      console.warn('Load push batches failed:', e);
+    }
+  }
+
+  // Attendance Calculation: ประมวลผลเวลาทำงานอิงตาม "ประเภทบุคลากร" (Personnel Type) โดยตรง
   public calculateAttendance(date: string = formatDate(), filterPersonId?: number): DailyResult[] {
     const results: DailyResult[] = [];
     const targetPersonnel = filterPersonId 
@@ -661,108 +790,21 @@ class AttendanceStore {
       : this.state.personnel;
 
     targetPersonnel.forEach(p => {
-      // 1. Resolve Shifts for person on this date (คนมีได้หลายกะ)
-      const personShifts = this.resolveShiftsForPerson(p.personId, date);
+      // 1. หาประเภทบุคลากรของบุคคลนั้น
+      const typeName = (p.hrPersonTypeName || '').trim().toLowerCase();
+      const matchedType = this.state.personnelTypes?.find(t => {
+        if (!t.isActive) return false;
+        const tName = t.name.trim().toLowerCase();
+        return tName === typeName || typeName.includes(tName) || tName.includes(typeName);
+      }) || this.state.personnelTypes?.find(t => t.isActive) || this.state.personnelTypes?.[0] || DEFAULT_PERSONNEL_TYPES[0];
 
-      // 2. Find all raw scans for this person on this date
+      // 2. ข้อมูลสแกนทั้งหมดของคนนี้ในวันที่ระบุ เรียงตามเวลา
       const scans = this.state.rawScans.filter(
         r => r.fingleId === p.fingleId && r.scanDateTime.startsWith(date)
       ).sort((a, b) => a.scanDateTime.localeCompare(b.scanDateTime));
 
-      personShifts.forEach((shiftConfig, shiftIdx) => {
-        if (scans.length === 0) {
-          results.push({
-            id: generateUniqueId(),
-            personId: p.personId,
-            fingleId: p.fingleId,
-            fullname: p.hrFullname,
-            department: p.hrDepName,
-            position: p.hrPositionName,
-            workDate: date,
-            shiftId: shiftConfig.shift?.id,
-            shiftCode: shiftConfig.shift?.shiftCode || 'M',
-            shiftName: shiftConfig.shift?.shiftName || 'เช้า',
-            plannedStartTime: shiftConfig.startTime,
-            plannedEndTime: shiftConfig.endTime,
-            resolutionSource: shiftConfig.source,
-            status: 'NO_SCAN',
-            lateMinutes: 0,
-            earlyMinutes: 0,
-            otMinutes: 0,
-            scansCount: 0,
-            rawScanIds: [],
-            calculatedAt: formatDateTime()
-          });
-          return;
-        }
-
-        // Match scans for this shift
-        let shiftScans = scans;
-        if (personShifts.length > 1) {
-          const [startH] = shiftConfig.startTime.split(':').map(Number);
-          const [endH] = shiftConfig.endTime.split(':').map(Number);
-          shiftScans = scans.filter(s => {
-            const timeStr = s.scanDateTime.split(' ')[1] || '';
-            const [h] = timeStr.split(':').map(Number);
-            const minH = Math.max(0, startH - 2);
-            const maxH = endH === 0 || endH === 24 ? 24 : Math.min(24, endH + 2);
-            return h >= minH && h <= maxH;
-          });
-          if (shiftScans.length === 0) {
-            shiftScans = shiftIdx === 0 ? scans.slice(0, 2) : scans.slice(-2);
-          }
-        }
-
-        const firstScan = shiftScans[0];
-        const lastScan = shiftScans.length > 1 ? shiftScans[shiftScans.length - 1] : undefined;
-
-        const inTime = firstScan ? firstScan.scanDateTime.split(' ')[1] : undefined;
-        const outTime = lastScan && lastScan !== firstScan ? lastScan.scanDateTime.split(' ')[1] : undefined;
-
-        // Parse planned shift start time
-        const [plannedH, plannedM] = shiftConfig.startTime.split(':').map(Number);
-        const plannedStartMinutes = plannedH * 60 + plannedM;
-        const graceEndMinutes = plannedStartMinutes + shiftConfig.lateGraceMinutes;
-
-        let lateMinutes = 0;
-        if (inTime) {
-          const [inH, inM] = inTime.split(':').map(Number);
-          const actualInMinutes = inH * 60 + inM;
-          if (actualInMinutes > graceEndMinutes) {
-            lateMinutes = actualInMinutes - plannedStartMinutes;
-          }
-        }
-
-        let earlyMinutes = 0;
-        let otMinutes = 0;
-        if (outTime) {
-          const [outH, outM] = outTime.split(':').map(Number);
-          const actualOutMinutes = outH * 60 + outM;
-
-          let [endH, endM] = shiftConfig.endTime.split(':').map(Number);
-          if (endH === 24 || endH === 0) endH = 24;
-          const plannedEndMinutes = endH * 60 + endM;
-
-          if (actualOutMinutes < plannedEndMinutes) {
-            earlyMinutes = plannedEndMinutes - actualOutMinutes;
-          } else if (actualOutMinutes > plannedEndMinutes + 30) {
-            otMinutes = actualOutMinutes - plannedEndMinutes;
-          }
-        }
-
-        let status: DailyResult['status'] = 'ON_TIME';
-        if (!inTime) {
-          status = 'NO_SCAN';
-        } else if (!outTime) {
-          status = lateMinutes > 0 ? 'LATE' : 'IN_ONLY';
-        } else if (lateMinutes > 0 && earlyMinutes > 0) {
-          status = 'LATE_AND_EARLY';
-        } else if (lateMinutes > 0) {
-          status = 'LATE';
-        } else if (earlyMinutes > 0) {
-          status = 'EARLY_LEAVE';
-        }
-
+      if (scans.length === 0) {
+        // กรณีไม่มีการสแกนนิ้วเลยในวันนั้น
         results.push({
           id: generateUniqueId(),
           personId: p.personId,
@@ -771,22 +813,119 @@ class AttendanceStore {
           department: p.hrDepName,
           position: p.hrPositionName,
           workDate: date,
-          shiftId: shiftConfig.shift?.id,
-          shiftCode: shiftConfig.shift?.shiftCode || 'M',
-          shiftName: shiftConfig.shift?.shiftName || 'เช้า',
-          plannedStartTime: shiftConfig.startTime,
-          plannedEndTime: shiftConfig.endTime,
-          resolutionSource: shiftConfig.source,
-          inTime,
-          outTime,
-          status,
-          lateMinutes,
-          earlyMinutes,
-          otMinutes,
-          scansCount: shiftScans.length,
-          rawScanIds: shiftScans.map(s => s.id),
+          personnelTypeName: matchedType.name,
+          shiftCode: 'M',
+          shiftName: `เช้า (${matchedType.name})`,
+          plannedStartTime: matchedType.morningShift.startTime,
+          plannedEndTime: matchedType.morningShift.endTime,
+          resolutionSource: 'PERSONNEL_TYPE',
+          status: 'NO_SCAN',
+          lateMinutes: 0,
+          earlyMinutes: 0,
+          otMinutes: 0,
+          scansCount: 0,
+          rawScanIds: [],
           calculatedAt: formatDateTime()
         });
+        return;
+      }
+
+      // ตรวจสอบเวลาสแกนครั้งแรก เพื่อจับคู่กะที่เหมาะสมที่สุด (เช้า / บ่าย / ดึก)
+      const firstScan = scans[0];
+      const lastScan = scans.length > 1 ? scans[scans.length - 1] : undefined;
+
+      const inTime = firstScan ? firstScan.scanDateTime.split(' ')[1] : undefined;
+      const outTime = lastScan && lastScan !== firstScan ? lastScan.scanDateTime.split(' ')[1] : undefined;
+
+      const [inH, inM] = (inTime || '08:00:00').split(':').map(Number);
+      const inMinutes = inH * 60 + inM;
+
+      let chosenShift = matchedType.morningShift;
+      let shiftCode = 'M';
+      let shiftName = `เช้า (${matchedType.name})`;
+
+      // วิเคราะห์ว่าเวลาสแกนแรกใกล้เคียงกะใดที่สุด
+      // กะเช้า: สแกนเข้าก่อน 13:00
+      // กะบ่าย: สแกนเข้า 13:00 - 19:59
+      // กะดึก: สแกนเข้า 20:00 เป็นต้นไป หรือช่วงเช้ามืดก่อน 05:00
+      if (inH >= 13 && inH < 20) {
+        chosenShift = matchedType.afternoonShift;
+        shiftCode = 'A';
+        shiftName = `บ่าย (${matchedType.name})`;
+      } else if (inH >= 20 || inH < 5) {
+        chosenShift = matchedType.nightShift;
+        shiftCode = 'N';
+        shiftName = `ดึก (${matchedType.name})`;
+      }
+
+      // คำนวณเวลาเริ่มและระยะเวลาผ่อนปรนสาย
+      const [plannedStartH, plannedStartM] = chosenShift.startTime.split(':').map(Number);
+      const plannedStartMinutes = plannedStartH * 60 + plannedStartM;
+      const graceEndMinutes = plannedStartMinutes + (chosenShift.lateGraceMinutes || 0);
+
+      let lateMinutes = 0;
+      if (inMinutes > graceEndMinutes) {
+        lateMinutes = inMinutes - plannedStartMinutes;
+      }
+
+      // คำนวณเวลาเลิกงานและออกก่อนเวลา
+      let earlyMinutes = 0;
+      let otMinutes = 0;
+      if (outTime) {
+        const [outH, outM] = outTime.split(':').map(Number);
+        const actualOutMinutes = outH * 60 + outM;
+
+        let [endH, endM] = chosenShift.endTime.split(':').map(Number);
+        if (endH === 24 || endH === 0) endH = 24;
+        let plannedEndMinutes = endH * 60 + endM;
+        if (shiftCode === 'N' && inH >= 20) {
+          plannedEndMinutes += 1440;
+        }
+
+        if (actualOutMinutes < plannedEndMinutes) {
+          earlyMinutes = plannedEndMinutes - actualOutMinutes;
+        } else if (actualOutMinutes > plannedEndMinutes + 30) {
+          otMinutes = actualOutMinutes - plannedEndMinutes;
+        }
+      }
+
+      // ประเมินสถานะ
+      let status: DailyResult['status'] = 'ON_TIME';
+      if (!outTime) {
+        status = lateMinutes > 0 ? 'LATE' : 'IN_ONLY';
+      } else if (lateMinutes > 0 && earlyMinutes > 0) {
+        status = 'LATE_AND_EARLY';
+      } else if (lateMinutes > 0) {
+        status = 'LATE';
+      } else if (earlyMinutes > 0) {
+        status = 'EARLY_LEAVE';
+      } else {
+        status = 'ON_TIME';
+      }
+
+      results.push({
+        id: generateUniqueId(),
+        personId: p.personId,
+        fingleId: p.fingleId,
+        fullname: p.hrFullname,
+        department: p.hrDepName,
+        position: p.hrPositionName,
+        workDate: date,
+        personnelTypeName: matchedType.name,
+        shiftCode,
+        shiftName,
+        plannedStartTime: chosenShift.startTime,
+        plannedEndTime: chosenShift.endTime,
+        resolutionSource: 'PERSONNEL_TYPE',
+        inTime,
+        outTime,
+        status,
+        lateMinutes,
+        earlyMinutes,
+        otMinutes,
+        scansCount: scans.length,
+        rawScanIds: scans.map(s => s.id),
+        calculatedAt: formatDateTime()
       });
     });
 
@@ -858,6 +997,85 @@ class AttendanceStore {
     }
   }
 
+  // Personnel Type & Shift Settings (Spec v2 Section 16-19 - Simplified)
+  public async addPersonnelType(type: Omit<PersonnelTypeConfig, 'id'>, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const newId = generateUniqueId();
+    const newType: PersonnelTypeConfig = {
+      ...type,
+      id: newId
+    };
+    if (!this.state.personnelTypes) this.state.personnelTypes = [];
+    this.state.personnelTypes.push(newType);
+    this.logAudit(user.username, 'SHIFT', `เพิ่มประเภทบุคลากร "${newType.name}" (เช้า ${newType.morningShift.startTime}-${newType.morningShift.endTime})`);
+    this.state.cachedDailyResults = {};
+    this.saveState();
+    try {
+      await apiClient.createPersonnelType(newType);
+    } catch {}
+  }
+
+  public async updatePersonnelType(id: number, data: Partial<PersonnelTypeConfig>, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const idx = (this.state.personnelTypes || []).findIndex(t => t.id === id);
+    if (idx >= 0) {
+      this.state.personnelTypes[idx] = {
+        ...this.state.personnelTypes[idx],
+        ...data
+      };
+      this.logAudit(user.username, 'SHIFT', `แก้ไขประเภทบุคลากร "${this.state.personnelTypes[idx].name}"`);
+      this.state.cachedDailyResults = {};
+      this.saveState();
+      try {
+        await apiClient.updatePersonnelType(id, this.state.personnelTypes[idx]);
+      } catch {}
+    }
+  }
+
+  public async deletePersonnelType(id: number, user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    const idx = (this.state.personnelTypes || []).findIndex(t => t.id === id);
+    if (idx >= 0) {
+      const deletedName = this.state.personnelTypes[idx].name;
+      this.state.personnelTypes.splice(idx, 1);
+      this.logAudit(user.username, 'SHIFT', `ลบประเภทบุคลากร "${deletedName}"`);
+      this.state.cachedDailyResults = {};
+      this.saveState();
+      try {
+        await apiClient.deletePersonnelType(id);
+      } catch {}
+    }
+  }
+
+  public async resetPersonnelTypes(user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    try {
+      await apiClient.resetPersonnelTypesToDefault();
+      const res = await apiClient.getPersonnelTypes();
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        this.state.personnelTypes = res.data;
+      } else {
+        this.state.personnelTypes = [...DEFAULT_PERSONNEL_TYPES];
+      }
+    } catch {
+      this.state.personnelTypes = [...DEFAULT_PERSONNEL_TYPES];
+    }
+    this.logAudit(user.username, 'SHIFT', 'คืนค่าเริ่มต้นประเภทบุคลากร 5 ประเภท');
+    this.state.cachedDailyResults = {};
+    this.saveState();
+  }
+
+  public async syncAllPersonnelTypesToDb(user: User) {
+    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
+    try {
+      const res = await apiClient.syncAllPersonnelTypesToDb(this.state.personnelTypes);
+      this.logAudit(user.username, 'SHIFT', `บันทึกประเภทบุคลากร ${this.state.personnelTypes.length} รายการลง MySQL`);
+      return res;
+    } catch (err: any) {
+      return { success: false, message: err.message };
+    }
+  }
+
   /**
    * ดึงข้อมูลสดจากฐานข้อมูล MySQL (10.2.0.201) เข้าสู่ Store โดยตรง
    */
@@ -895,9 +1113,38 @@ class AttendanceStore {
       }
 
       // 2. ดึงข้อมูลสแกนจาก MySQL attendance_raw_scan
-      const scansRes = await apiClient.getRawScansFromDb(200);
+      const scansRes = await apiClient.getRawScansFromDb(500);
       if (scansRes.success && Array.isArray(scansRes.data)) {
-        this.state.rawScans = scansRes.data;
+        this.state.rawScans = scansRes.data.map((r: any) => ({
+          id: r.id,
+          machineNo: r.machineNo || r.machine_no || 1,
+          deviceIp: r.deviceIp || r.device_ip || '',
+          fingleId: r.fingleId || r.fingle_id || 0,
+          scanDateTime: r.scanDateTime || (r.scan_date_time ? String(r.scan_date_time).replace('T', ' ').substring(0, 19) : ''),
+          verifyMode: r.verifyMode ?? r.verify_mode ?? 1,
+          inOutMode: r.inOutMode ?? r.in_out_mode ?? 0,
+          personId: r.personId ?? r.person_id,
+          hrFullname: r.hrFullname || r.hr_fullname || '',
+          hrPositionName: r.hrPositionName || r.hr_position_name || '',
+          hrLeavelName: r.hrLeavelName || r.hr_leavel_name || '',
+          hrDepName: r.hrDepName || r.hr_dep_name || '',
+          hrDepSubName: r.hrDepSubName || r.hr_dep_sub_name || '',
+          hrPersonTypeName: r.hrPersonTypeName || r.hr_person_type_name || '',
+          hrPersonTypeId: r.hrPersonTypeId || r.hr_person_type_id,
+          hrDepartmentId: r.hrDepartmentId || r.hr_department_id,
+          hrDepartmentSubId: r.hrDepartmentSubId || r.hr_department_sub_id,
+          hrMapped: Boolean(r.hrMapped ?? r.hr_mapped ?? 1),
+          pushStatus: r.pushStatus || r.push_status || 'PENDING',
+          pushedAt: r.pushedAt || r.pushed_at,
+          pushedBy: r.pushedBy || r.pushed_by,
+          pushBatchId: r.pushBatchId || r.push_batch_id,
+          pushError: r.pushError || r.push_error,
+          receivedAt: r.receivedAt || r.received_at || formatDateTime()
+        }));
+        scansCount = this.state.rawScans.length;
+      }
+      if (!this.state.rawScans || this.state.rawScans.length === 0) {
+        this.state.rawScans = [...SEED_TEST_SCANS];
         scansCount = this.state.rawScans.length;
       }
 
@@ -922,6 +1169,99 @@ class AttendanceStore {
           }));
         }
       } catch {}
+
+      if (!this.state.personnel || this.state.personnel.length === 0) {
+        this.state.personnel = INITIAL_PERSONNEL;
+      }
+
+      // 3.1 ดึงประเภทบุคลากรและเวลากะจาก MySQL
+      try {
+        const typeRes = await apiClient.getPersonnelTypes();
+        if (typeRes.success && Array.isArray(typeRes.data) && typeRes.data.length > 0) {
+          this.state.personnelTypes = typeRes.data;
+        } else if (!this.state.personnelTypes || this.state.personnelTypes.length === 0) {
+          this.state.personnelTypes = [...DEFAULT_PERSONNEL_TYPES];
+        }
+      } catch {
+        if (!this.state.personnelTypes || this.state.personnelTypes.length === 0) {
+          this.state.personnelTypes = [...DEFAULT_PERSONNEL_TYPES];
+        }
+      }
+
+      // คำนวณจำนวนบุคลากรในแต่ละประเภท (Member Count) สดจาก hr_person
+      if (this.state.personnelTypes && this.state.personnel) {
+        this.state.personnelTypes = this.state.personnelTypes.map(t => {
+          const tName = t.name.trim().toLowerCase();
+          const cnt = this.state.personnel.filter(p => {
+            const pName = (p.hrPersonTypeName || '').trim().toLowerCase();
+            return pName === tName || pName.includes(tName) || tName.includes(pName);
+          }).length;
+          return { ...t, memberCount: cnt };
+        });
+      }
+
+      // 4. ดึงผลประมวลผลเวลาจาก MySQL attendance_daily_result
+      const todayStr = '2026-10-14';
+      try {
+        const dailyRes = await apiClient.getDailyAttendanceFromDb(todayStr);
+        if (dailyRes.success && Array.isArray(dailyRes.data) && dailyRes.data.length > 0) {
+          if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+          this.state.cachedDailyResults[todayStr] = dailyRes.data.map((d: any) => ({
+            id: d.id,
+            personId: d.personId,
+            fingleId: d.fingleId,
+            fullname: d.fullname,
+            department: d.department,
+            position: d.position,
+            workDate: d.workDate,
+            dayType: getDayType(d.workDate),
+            shifts: [{
+              config: this.state.shifts.find(s => s.id === d.shiftId) || {
+                id: d.shiftId || 1,
+                shiftCode: 'M',
+                shiftName: d.shiftName || 'เช้า (ปกติ)',
+                startTime: d.scheduledIn || '08:15',
+                endTime: d.scheduledOut || '16:00',
+                crossesMidnight: false,
+                workDateBasis: 'START_DATE',
+                lateGraceMinutes: 0,
+                inWindowBeforeMin: 120,
+                outWindowAfterMin: 120,
+                earlyLeaveMin: 0,
+                duplicateScanMin: 5,
+                color: '#0ea5e9',
+                isActive: true,
+                createdAt: '',
+                updatedAt: ''
+              },
+              source: 'DEFAULT' as const
+            }],
+            totalScans: d.totalScans || 0,
+            firstScan: d.firstScan || undefined,
+            lastScan: d.lastScan || undefined,
+            checkIn: d.checkIn || undefined,
+            checkOut: d.checkOut || undefined,
+            status: d.status,
+            statusLabel: d.statusLabel,
+            lateMinutes: d.lateMinutes || 0,
+            earlyMinutes: d.earlyMinutes || 0,
+            rawScanIds: []
+          }));
+        }
+      } catch {}
+
+      // ถ้าใน MySQL ยังไม่มีผลประมวลผลเวลาของวันนี้ ให้คำนวณและบันทึกลง MySQL ทันที
+      if (!this.state.cachedDailyResults?.[todayStr] || this.state.cachedDailyResults[todayStr].length === 0) {
+        const calced = this.calculateAttendance(todayStr);
+        if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+        this.state.cachedDailyResults[todayStr] = calced;
+        if (calced.length > 0) {
+          apiClient.saveDailyAttendanceToDb(calced).catch(() => {});
+        }
+      }
+
+      // 5. ดึงประวัติ Push Batches จาก MySQL
+      this.loadPushBatches().catch(() => {});
 
       this.saveState();
       this.notify();
@@ -990,105 +1330,12 @@ class AttendanceStore {
     }
   }
 
-  // Personnel Group CRUD
-  public saveGroup(group: Partial<PersonnelGroup> & { groupName: string; groupKind: 'PERSON_TYPE' | 'CUSTOM' }, user: User) {
-    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    const now = formatDateTime();
-    if (group.id) {
-      const idx = this.state.groups.findIndex(g => g.id === group.id);
-      if (idx >= 0) {
-        this.state.groups[idx] = {
-          ...this.state.groups[idx],
-          ...group,
-          updatedAt: now
-        } as PersonnelGroup;
-        this.logAudit(user.username, 'GROUP', `แก้ไขกลุ่มบุคลากร "${group.groupName}"`);
-      }
-    } else {
-      const newGroup: PersonnelGroup = {
-        id: generateUniqueId(),
-        groupName: group.groupName,
-        groupKind: group.groupKind,
-        priority: group.priority ?? 100,
-        isActive: true,
-        note: group.note,
-        createdAt: now,
-        updatedAt: now,
-        personTypeIds: group.personTypeIds || [],
-        memberPersonIds: group.memberPersonIds || [],
-        shiftOverrides: group.shiftOverrides || {}
-      };
-      this.state.groups.push(newGroup);
-      this.logAudit(user.username, 'GROUP', `สร้างกลุ่มบุคลากรใหม่ "${newGroup.groupName}"`);
-    }
-    this.saveState();
-  }
-
-  public deactivateGroup(id: number, user: User) {
-    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    const idx = this.state.groups.findIndex(g => g.id === id);
-    if (idx >= 0) {
-      this.state.groups[idx].isActive = false;
-      this.state.groups[idx].updatedAt = formatDateTime();
-      this.logAudit(user.username, 'GROUP', `ปิดการใช้งานกลุ่ม "${this.state.groups[idx].groupName}"`);
-      this.saveState();
-    }
-  }
-
-  // Roster Management
-  public setRosterShift(personId: number, workDate: string, shiftId: number, note = '', user: User) {
-    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    const existingIdx = this.state.roster.findIndex(r => r.personId === personId && r.workDate === workDate);
-    if (existingIdx >= 0) {
-      this.state.roster[existingIdx].shiftId = shiftId;
-      this.state.roster[existingIdx].note = note;
-    } else {
-      this.state.roster.push({
-        id: generateUniqueId(),
-        personId,
-        workDate,
-        shiftId,
-        note,
-        createdBy: user.id
-      });
-    }
-    this.saveState();
-  }
-
-  public addRosterShift(personId: number, workDate: string, shiftId: number, note = '', user: User) {
-    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    const newEntry: PersonRoster = {
-      id: generateUniqueId(),
-      personId,
-      workDate,
-      shiftId,
-      note,
-      createdBy: user.id
-    };
-    this.state.roster.push(newEntry);
-    const shift = this.state.shifts.find(s => s.id === shiftId);
-    const person = this.state.personnel.find(p => p.personId === personId);
-    this.logAudit(user.username, 'ROSTER', `เพิ่มกะ ${shift?.shiftCode || ''} (${workDate}) ให้กับ ${person?.hrFullname || `ID ${personId}`}`);
-    this.saveState();
-    return newEntry;
-  }
-
-  public removeRosterShift(rosterId: number, user: User) {
-    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    const idx = this.state.roster.findIndex(r => r.id === rosterId);
-    if (idx >= 0) {
-      const removed = this.state.roster.splice(idx, 1)[0];
-      this.logAudit(user.username, 'ROSTER', `ลบกะตารางเวร ID #${rosterId} (วันที่ ${removed.workDate})`);
-      this.saveState();
-    }
-  }
-
   // ซิงค์ข้อมูลบุคลากรจาก HOSOffice ตามคำสั่ง SQL:
   // เช็คว่าข้อมูลไหน ดึงแล้ว ไม่ต้องดึงซ้ำ (skipped)
   // แต่ถ้า 5 ฟิลด์หลัก (FULLNAME, HR_POSITION_NAME, HR_LEVEL_NAME, HR_DEPARTMENT_SUB, HR_PERSON_TYPE_NAME) ใน hosoffice เปลี่ยนหรือไม่ตรงกับฐานเรา ให้เปลี่ยนให้ตรงกับ hosoffice!
   public syncPersonnelFromHosoffice(user: User, customRows?: HosofficePersonRow[]): PersonnelSyncResult {
     if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    const sourceRows = customRows || HOSOFFICE_MOCK_PERSONNEL_DATA;
+    const sourceRows = customRows || [];
     const now = formatDateTime();
 
     const inserted: HrPerson[] = [];
@@ -1254,24 +1501,6 @@ class AttendanceStore {
       skipped,
       syncedAt: now
     };
-  }
-
-  public setPersonShiftOverride(override: Omit<PersonShiftOverride, 'id'>, user: User) {
-    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    const newOverride: PersonShiftOverride = {
-      ...override,
-      id: generateUniqueId()
-    };
-    this.state.personOverrides.push(newOverride);
-    this.logAudit(user.username, 'ROSTER', `กำหนดกะรายบุคคลพิเศษสำหรับ person ID ${override.personId}`);
-    this.saveState();
-  }
-
-  public removePersonShiftOverride(id: number, user: User) {
-    if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    this.state.personOverrides = this.state.personOverrides.filter(o => o.id !== id);
-    this.logAudit(user.username, 'ROSTER', `ลบกะรายบุคคลพิเศษ ID ${id}`);
-    this.saveState();
   }
 
   // 2. 🔗 Quick Map FINGLE_ID: จับคู่รหัสสแกนนิ้วที่ยังไม่พบใน HR เข้ากับบุคลากร

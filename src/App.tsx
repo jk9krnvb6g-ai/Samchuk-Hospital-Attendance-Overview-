@@ -39,14 +39,17 @@ export default function App() {
     return () => clearInterval(timer);
   }, [storeState.autoSyncEnabled]);
 
-  // Handle manual sync action
-  const handleTriggerSync = () => {
+  // Handle manual sync action (ดึงสแกนดิบจากเครื่องและบันทึกลง MySQL ทันที)
+  const handleTriggerSync = async () => {
     setIsSyncing(true);
-    setTimeout(() => {
-      const res = attendanceStore.triggerScannerSync();
+    try {
+      const res = await attendanceStore.triggerScannerSync();
       setIsSyncing(false);
-      showToast(`⚡ บันทึกสแกนดิบ (+${res.totalNew} รายการ) และประมวลผลเวลา (${res.processedCount} คน) สำเร็จพร้อมกันในขั้นตอนเดียว!`);
-    }, 500);
+      showToast(`⚡ ดึงข้อมูลจากเครื่องสแกน บันทึกสแกนดิบ (+${res.totalNew} รายการ) และประมวลผลเวลา (${res.processedCount} คน) ลงฐานข้อมูล MySQL เรียบร้อยแล้ว!`);
+    } catch {
+      setIsSyncing(false);
+      showToast('เกิดข้อผิดพลาดในการดึงข้อมูลจากเครื่องสแกน');
+    }
   };
 
   const showToast = (msg: string) => {
@@ -75,24 +78,24 @@ export default function App() {
       subtitle: 'ตรวจสอบและยืนยันการส่งข้อมูลเข้าตาราง hosoffice.fingle_scan'
     },
     shifts: {
-      title: 'จัดการกะการทำงานและตารางเวร (Shifts & Roster)',
-      subtitle: 'แก้ไขเวลากะเช้า/บ่าย/ดึก/เช้าควบบ่าย, จัดกลุ่มบุคลากร และ Override'
+      title: 'จัดการกะการทำงานและประเภทบุคลากร (Personnel Types & Shifts)',
+      subtitle: 'กำหนดเวลากะเช้า/บ่าย/ดึก และเกณฑ์สายแยกตามประเภทบุคลากร รพ.สามชุก'
     },
     raw_scans: {
       title: 'บันทึกสแกนดิบ (Raw Scans Staging DB)',
       subtitle: 'ตาราง attendance_raw_scan ข้อมูลจริงจาก HIP CMiF68S'
     },
     attendance: {
-      title: 'ผลการประมวลผลเวลาปฏิบัติงาน (Attendance Calculation)',
-      subtitle: 'คำนวณการเข้าตรงเวลา สาย ออกก่อน และ OT ตามลำดับความสำคัญของกะ'
+      title: 'รายงานสรุปเวลาปฏิบัติงานสำหรับผู้บริหาร (Executive Attendance Summary)',
+      subtitle: 'สรุปเวลาสแกนจริง เข้า-ออก และคำนวณการมาสายตามประเภทบุคลากร (Personnel Type) โดยตรง'
     },
     monthly_report: {
       title: 'รายงานสรุปประจำเดือนสำหรับฝ่ายบุคคล/การเงิน (Monthly HR Attendance Report)',
       subtitle: 'สรุปยอดวันทำงาน, มาสาย, ออกก่อน, OT สะสม และพิมพ์รายงาน/ส่งออก Excel'
     },
     my_attendance: {
-      title: 'เวลาทำงานและตารางเวรของฉัน (My Attendance & Roster)',
-      subtitle: 'ตรวจสอบสถานะสแกนนิ้ววันนี้, ตารางเวรที่ได้รับมอบหมาย และประวัติการลงเวลาส่วนบุคคล'
+      title: 'เวลาทำงานของฉัน (My Personal Attendance)',
+      subtitle: 'ตรวจสอบสถานะสแกนนิ้ววันนี้, เวลากะตามประเภทบุคลากร และประวัติการลงเวลาส่วนบุคคล'
     },
     scanners: {
       title: 'จัดการเครื่องสแกนนิ้วมือ (CMiF68S Scanners)',

@@ -12,16 +12,14 @@ import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
-  Plus,
-  Trash2,
-  Clock,
-  Layers,
-  Sparkles,
+  Clock, 
+  Layers, 
+  Sparkles, 
   X,
-  Calendar
+  Info
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
-import { PersonnelSyncResult, ShiftResolution } from '../types/attendance';
+import { PersonnelSyncResult, HrPerson } from '../types/attendance';
 import { apiClient } from '../services/apiClient';
 
 interface PersonnelPageProps {
@@ -41,15 +39,8 @@ export const PersonnelPage: React.FC<PersonnelPageProps> = ({ state }) => {
   const [syncResult, setSyncResult] = useState<PersonnelSyncResult | null>(null);
   const [syncActiveTab, setSyncActiveTab] = useState<'UPDATED' | 'INSERTED' | 'SKIPPED'>('UPDATED');
 
-  // Multi-Shift Management Modal for a Person
-  const [managingPersonShifts, setManagingPersonShifts] = useState<{
-    personId: number;
-    fullname: string;
-    fingleId: number;
-    department: string;
-  } | null>(null);
-  const [newShiftId, setNewShiftId] = useState<number>(1);
-  const [newShiftNote, setNewShiftNote] = useState<string>('');
+  // Viewing Personnel Type & Shift Schedule Modal for a Person
+  const [viewingPersonShifts, setViewingPersonShifts] = useState<HrPerson | null>(null);
 
   // Today for shift resolution preview
   const today = '2026-10-14';
@@ -155,25 +146,6 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
     if (result.updatedCount > 0) setSyncActiveTab('UPDATED');
     else if (result.insertedCount > 0) setSyncActiveTab('INSERTED');
     else setSyncActiveTab('SKIPPED');
-  };
-
-  // Add a shift for a person today
-  const handleAddShiftToday = () => {
-    if (!managingPersonShifts || !isAdmin) return;
-    attendanceStore.addRosterShift(
-      managingPersonShifts.personId,
-      today,
-      newShiftId,
-      newShiftNote || 'เพิ่มกะปฏิบัติงานวันนี้',
-      state.currentUser
-    );
-    setNewShiftNote('');
-  };
-
-  // Remove a roster shift
-  const handleRemoveShiftToday = (rosterId: number) => {
-    if (!isAdmin) return;
-    attendanceStore.removeRosterShift(rosterId, state.currentUser);
   };
 
   return (
@@ -403,21 +375,13 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
                           })}
                         </div>
 
-                        {/* Manage / Add shifts button */}
-                        {isAdmin && (
-                          <button
-                            onClick={() => setManagingPersonShifts({
-                              personId: person.personId,
-                              fullname: person.hrFullname,
-                              fingleId: person.fingleId,
-                              department: person.hrDepSubName || person.hrDepName
-                            })}
-                            className="text-[10px] text-teal-700 hover:text-teal-900 font-medium hover:underline inline-flex items-center gap-0.5 cursor-pointer mt-0.5"
-                          >
-                            <Plus className="w-3 h-3" />
-                            <span>จัดการ/เพิ่มกะวันนี้</span>
-                          </button>
-                        )}
+                        <button
+                          onClick={() => setViewingPersonShifts(person)}
+                          className="text-[10px] text-teal-700 hover:text-teal-900 font-medium hover:underline inline-flex items-center gap-0.5 cursor-pointer mt-0.5"
+                        >
+                          <Info className="w-3 h-3" />
+                          <span>ดูเวลากะ ({person.hrPersonTypeName || 'ข้าราชการ'})</span>
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -716,124 +680,78 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
         </div>
       )}
 
-      {/* MODAL 2: Manage Shifts for a Person Today (คนมีได้หลายกะ) */}
-      {managingPersonShifts && (
+      {/* MODAL 2: View Shift Schedule by Personnel Type */}
+      {viewingPersonShifts && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 border border-slate-200">
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Calendar className="w-5 h-5 text-teal-600" />
-                  <span>จัดการกะปฏิบัติงานวันนี้ (คนมีได้หลายกะ)</span>
+                  <Clock className="w-5 h-5 text-teal-600" />
+                  <span>เวลากะทำงานตามประเภทบุคลากร</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  {managingPersonShifts.fullname} · FINGLE_ID #{managingPersonShifts.fingleId} · วันที่ {today}
+                  {viewingPersonShifts.hrFullname} · FINGLE #{viewingPersonShifts.fingleId} · {viewingPersonShifts.hrPositionName}
                 </p>
               </div>
               <button
-                onClick={() => setManagingPersonShifts(null)}
+                onClick={() => setViewingPersonShifts(null)}
                 className="text-slate-400 hover:text-slate-600 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Current Active Shifts Today */}
+            <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl text-xs flex items-center justify-between">
+              <div>
+                <span className="text-teal-900 font-bold">ประเภทบุคลากร:</span>{' '}
+                <span className="font-semibold text-teal-800">{viewingPersonShifts.hrPersonTypeName || 'ข้าราชการ'}</span>
+              </div>
+              <span className="text-[11px] text-teal-700 bg-white px-2 py-0.5 rounded border border-teal-200 font-mono">
+                {viewingPersonShifts.hrDepName}
+              </span>
+            </div>
+
+            {/* Shift Details */}
             <div className="space-y-2">
-              <div className="text-xs font-bold text-slate-700 flex items-center justify-between">
-                <span>กะปฏิบัติงานที่กำหนดไว้ในวันนี้:</span>
-                <span className="text-teal-700 font-mono">
-                  {attendanceStore.resolveShiftsForPerson(managingPersonShifts.personId, today).length} กะ
-                </span>
+              <div className="text-xs font-bold text-slate-700">
+                กะมาตรฐานที่ใช้คำนวณเวลา (3 กะหลัก):
               </div>
 
               <div className="space-y-2">
-                {attendanceStore.resolveShiftsForPerson(managingPersonShifts.personId, today).map((s, idx) => (
+                {attendanceStore.resolveShiftsForPerson(viewingPersonShifts.personId, today).map((s, idx) => (
                   <div
-                    key={`${s.shift?.id || idx}-${idx}`}
+                    key={idx}
                     className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs"
                   >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="px-2 py-0.5 rounded text-white font-bold text-[11px] font-mono shadow-2xs"
-                        style={{ backgroundColor: s.shift?.color || '#0284c7' }}
-                      >
-                        [{s.shift?.shiftCode || 'M'}]
+                    <div className="flex items-center gap-2.5">
+                      <span className="px-2 py-0.5 rounded text-white font-bold text-[11px] font-mono bg-teal-700 shadow-2xs">
+                        {idx === 0 ? 'กะเช้า' : idx === 1 ? 'กะบ่าย' : 'กะดึก'}
                       </span>
                       <div>
                         <div className="font-bold text-slate-800">
-                          {s.shift?.shiftName || 'กะปกติ'} ({s.startTime} - {s.endTime})
+                          {s.startTime} - {s.endTime} น.
                         </div>
                         <div className="text-[10px] text-slate-500">
-                          แหล่งที่มา: <span className="font-semibold text-teal-700">{s.source}</span>
-                          {s.note ? ` · ${s.note}` : ''}
+                          {s.lateGraceMinutes > 0 ? `ยืดหยุ่นสายได้ ${s.lateGraceMinutes} นาที` : 'ไม่มีเวลายืดหยุ่น (เริ่มสายทันที)'}
                         </div>
                       </div>
                     </div>
-
-                    {s.rosterId && isAdmin && (
-                      <button
-                        onClick={() => handleRemoveShiftToday(s.rosterId!)}
-                        className="text-rose-600 hover:text-rose-800 hover:bg-rose-50 p-1.5 rounded-lg transition-colors cursor-pointer"
-                        title="ลบกะนี้ออกจากตารางวันนี้"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {s.source}
+                    </span>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Add Another Shift Form */}
-            {isAdmin && (
-              <div className="p-4 bg-teal-50/60 rounded-xl border border-teal-200/80 space-y-3">
-                <div className="text-xs font-bold text-teal-900 flex items-center gap-1.5">
-                  <Plus className="w-4 h-4 text-teal-700" />
-                  <span>เพิ่มกะปฏิบัติงานอีกกะ (ควบเวร / กะที่สอง)</span>
-                </div>
-
-                <div className="space-y-2 text-xs">
-                  <div>
-                    <label className="block text-slate-600 mb-1 font-medium">เลือกกะที่จะเพิ่ม:</label>
-                    <select
-                      value={newShiftId}
-                      onChange={(e) => setNewShiftId(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
-                    >
-                      {state.shifts.filter(s => s.isActive).map(s => (
-                        <option key={s.id} value={s.id}>
-                          [{s.shiftCode}] {s.shiftName} ({s.startTime} - {s.endTime})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-600 mb-1 font-medium">หมายเหตุกะ (เช่น เวรควบ ER / เวรพิเศษ):</label>
-                    <input
-                      type="text"
-                      placeholder="เช่น เวรบ่าย ER ควบกะ, รับส่งต่อฉุกเฉิน..."
-                      value={newShiftNote}
-                      onChange={(e) => setNewShiftNote(e.target.value)}
-                      className="w-full bg-white border border-slate-300 rounded-lg p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleAddShiftToday}
-                    className="w-full py-2 bg-teal-700 hover:bg-teal-800 text-white font-semibold rounded-lg shadow-xs cursor-pointer transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>บันทึกเพิ่มกะให้เจ้าหน้าที่วันนี้</span>
-                  </button>
-                </div>
-              </div>
-            )}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-[11px] text-slate-600">
+              💡 สามารถปรับแก้เวลาเริ่ม-เลิก และเวลายืดหยุ่นของประเภทนี้ได้ที่เมนู <strong>"ประเภทบุคลากร &amp; เวลากะ"</strong>
+            </div>
 
             <div className="flex justify-end pt-2">
               <button
-                onClick={() => setManagingPersonShifts(null)}
+                onClick={() => setViewingPersonShifts(null)}
                 className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-lg text-xs cursor-pointer"
               >
                 ปิดหน้าต่าง

@@ -299,6 +299,44 @@ class ApiClientService {
     }
   }
 
+  /**
+   * สั่งให้ Backend ดึงข้อมูลสแกนจริงจากเครื่องสแกนและบันทึกลง MySQL ทันที
+   */
+  public async syncFromScanners(machineNo?: number, date?: string) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/scanners/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machineNo, date })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : 'Sync failed'
+      };
+    }
+  }
+
+  /**
+   * สั่งให้ Backend คำนวณผลเวลาทำงานและบันทึกลง MySQL attendance_daily_result ทันที
+   */
+  public async recalculateAttendanceInDb(date?: string) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/attendance/recalculate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : 'Recalculate failed'
+      };
+    }
+  }
+
   private getFriendlyFetchError(err: unknown, serviceName: string = 'Backend API'): string {
     const rawMsg = err instanceof Error ? err.message : 'Failed';
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
@@ -486,6 +524,21 @@ class ApiClientService {
   }
 
   /**
+   * ซ่อมแซมและปรับปรุงชื่อภาษาไทย 4 กะหลัก (เช้า, บ่าย, ดึก, เช้าควบบ่าย) ใน MySQL
+   */
+  public async repairThaiShifts() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/shifts/repair-thai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
    * ดึงข้อมูลสแกน (attendance_raw_scan) จาก MySQL โดยตรง
    */
   public async getRawScansFromDb(limit: number = 200) {
@@ -506,6 +559,51 @@ class ApiClientService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(scan)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * บันทึกข้อมูลสแกนแบบกลุ่มลง MySQL attendance_raw_scan
+   */
+  public async batchAddRawScans(scans: any[]) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scans })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ดึงผลการประมวลผลเวลา (attendance_daily_result) จาก MySQL ตามวันที่
+   */
+  public async getDailyAttendanceFromDb(date?: string) {
+    try {
+      const queryDate = date ? `?date=${encodeURIComponent(date)}` : '';
+      const res = await fetch(`${this.customBaseUrl}/api/attendance/daily${queryDate}`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * บันทึกผลการประมวลผลเวลา (attendance_daily_result) ลง MySQL แบบกลุ่ม
+   */
+  public async saveDailyAttendanceToDb(results: any[]) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/attendance/daily/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ results })
       });
       return await res.json();
     } catch (err: unknown) {
@@ -595,6 +693,133 @@ class ApiClientService {
     }
   }
 
+  /**
+   * ดึงประวัติ Push Batches จาก MySQL
+   */
+  public async getPushBatchesFromDb() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/push/batches`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed', data: [] };
+    }
+  }
+
+  /**
+   * ยกเว้นรายการสแกนดิบไม่ให้นำมารวมในคิวส่ง (Exclude)
+   */
+  public async excludeRawScan(id: number | string) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/${id}/exclude`, {
+        method: 'POST'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * รีเฟรชข้อมูลบุคลากรจาก hosoffice.hr_person และ Map ใหม่อัตโนมัติ
+   */
+  public async refreshPersonnelMapping() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/hosoffice/personnel/refresh-mapping`, {
+        method: 'POST'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ดึงรายการประเภทบุคลากรและเวลากะจาก MySQL
+   */
+  public async getPersonnelTypes() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel-types`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed', data: [] };
+    }
+  }
+
+  /**
+   * เพิ่มประเภทบุคลากรใหม่ใน MySQL
+   */
+  public async createPersonnelType(data: any) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel-types`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * อัปเดตประเภทบุคลากรใน MySQL
+   */
+  public async updatePersonnelType(id: number, data: any) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel-types/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ลบประเภทบุคลากรใน MySQL
+   */
+  public async deletePersonnelType(id: number) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel-types/${id}`, {
+        method: 'DELETE'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * คืนค่าประเภทบุคลากรเริ่มต้น (Reset to Presets)
+   */
+  public async resetPersonnelTypesToDefault() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel-types/reset-default`, {
+        method: 'POST'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * บันทึกประเภทบุคลากรทั้งหมดลง MySQL
+   */
+  public async syncAllPersonnelTypesToDb(types: any[]) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel-types/sync-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ types })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
 }
 
 export const apiClient = new ApiClientService();

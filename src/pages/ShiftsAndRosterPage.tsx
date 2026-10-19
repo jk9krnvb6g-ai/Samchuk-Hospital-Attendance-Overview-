@@ -1,1575 +1,776 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Clock, 
   Users, 
-  Calendar, 
   Plus, 
-  Edit2, 
   Trash2, 
-  Check, 
-  Copy, 
-  AlertCircle, 
-  UserCheck, 
   Save, 
   X,
+  Database, 
+  Search, 
+  Sun,
+  Sunset,
+  Moon,
+  AlertCircle,
+  RotateCcw,
+  Check,
+  Sliders,
+  Calendar,
   Layers,
-  ChevronLeft,
-  ChevronRight,
-  ShieldCheck,
-  CalendarCheck,
-  Database,
-  RefreshCw,
-  Settings,
-  Search,
-  Wifi,
-  Key,
   Sparkles
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
-import { Shift, PersonnelGroup, HrPerson } from '../types/attendance';
-import { apiClient } from '../services/apiClient';
+import { PersonnelTypeConfig, ShiftTimeConfig } from '../types/attendance';
 
 interface ShiftsAndRosterPageProps {
   state: StoreState;
 }
 
+// Convert "HH:MM" to minute offset from 00:00 (0 - 1440)
+function timeToMinutes(t: string = '00:00'): number {
+  const [h, m] = t.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+// Visual 24-Hour Timeline Bar Component
+const VisualShiftTimeline: React.FC<{ type: PersonnelTypeConfig }> = ({ type }) => {
+  const morningStart = timeToMinutes(type.morningShift?.startTime || '08:15');
+  const morningEnd = timeToMinutes(type.morningShift?.endTime || '16:00');
+
+  const afternoonStart = timeToMinutes(type.afternoonShift?.startTime || '16:00');
+  let afternoonEnd = timeToMinutes(type.afternoonShift?.endTime || '24:00');
+  if (afternoonEnd === 0 || afternoonEnd === 1440) afternoonEnd = 1440;
+
+  const nightStart = timeToMinutes(type.nightShift?.startTime || '00:00');
+  const nightEnd = timeToMinutes(type.nightShift?.endTime || '08:00');
+
+  // Convert minutes to percentage of 24h (1440 minutes)
+  const toPct = (mins: number) => Math.min(100, Math.max(0, (mins / 1440) * 100));
+
+  const morningLeft = toPct(morningStart);
+  const morningWidth = toPct(morningEnd) - morningLeft;
+
+  const afternoonLeft = toPct(afternoonStart);
+  const afternoonWidth = toPct(afternoonEnd) - afternoonLeft;
+
+  const nightLeft = toPct(nightStart);
+  const nightWidth = toPct(nightEnd) - nightLeft;
+
+  return (
+    <div className="space-y-1.5 w-full">
+      {/* Timeline track */}
+      <div className="relative h-6 bg-slate-100 rounded-md overflow-hidden border border-slate-200/90 shadow-[inset_0_1px_2px_rgba(0,0,0,0.04)]">
+        {/* Night Shift Block (00:00 - 08:00) */}
+        <div 
+          className="absolute top-0 bottom-0 bg-indigo-500/15 border-r border-indigo-300 flex items-center justify-center text-[10px] font-mono font-bold text-indigo-950 transition-all"
+          style={{ left: `${nightLeft}%`, width: `${nightWidth}%` }}
+          title={`กะดึก: ${type.nightShift?.startTime} - ${type.nightShift?.endTime}`}
+        >
+          <span className="truncate px-1">ดึก {type.nightShift?.startTime}-{type.nightShift?.endTime}</span>
+        </div>
+
+        {/* Morning Shift Block (07:30 or 08:15 - 16:00) */}
+        <div 
+          className="absolute top-0 bottom-0 bg-amber-500/20 border-r border-amber-400 flex items-center justify-center text-[10px] font-mono font-bold text-amber-950 transition-all"
+          style={{ left: `${morningLeft}%`, width: `${morningWidth}%` }}
+          title={`กะเช้า: ${type.morningShift?.startTime} - ${type.morningShift?.endTime} (สายทันทีหลัง ${type.morningShift?.startTime})`}
+        >
+          <span className="truncate px-1">เช้า {type.morningShift?.startTime}-{type.morningShift?.endTime}</span>
+        </div>
+
+        {/* Afternoon Shift Block (16:00 - 24:00) */}
+        <div 
+          className="absolute top-0 bottom-0 bg-teal-500/20 flex items-center justify-center text-[10px] font-mono font-bold text-teal-950 transition-all"
+          style={{ left: `${afternoonLeft}%`, width: `${afternoonWidth}%` }}
+          title={`กะบ่าย: ${type.afternoonShift?.startTime} - ${type.afternoonShift?.endTime}`}
+        >
+          <span className="truncate px-1">บ่าย {type.afternoonShift?.startTime}-{type.afternoonShift?.endTime}</span>
+        </div>
+
+        {/* Start Marker for Morning (Late threshold) */}
+        <div 
+          className="absolute top-0 bottom-0 w-0.5 bg-rose-500 z-10"
+          style={{ left: `${morningLeft}%` }}
+          title={`จุดตัดสายกะเช้า: ${type.morningShift?.startTime}`}
+        ></div>
+      </div>
+
+      {/* Ticks and Key Timestamps */}
+      <div className="flex justify-between text-[10px] text-slate-400 font-mono select-none px-0.5">
+        <span>00:00</span>
+        <span className="text-amber-800 font-semibold">{type.morningShift?.startTime}</span>
+        <span className="text-teal-800 font-semibold">{type.afternoonShift?.startTime}</span>
+        <span>24:00</span>
+      </div>
+    </div>
+  );
+};
+
 export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state }) => {
   const isAdmin = state.currentUser.role === 'ADMIN';
 
-  // DB Sync State
-  const [isSyncingDb, setIsSyncingDb] = useState(false);
-  const [dbSyncMsg, setDbSyncMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string; help?: string } | null>(null);
-  const [dbStats, setDbStats] = useState<any>(null);
-  const [showDbSettings, setShowDbSettings] = useState(false);
-  const [isProbing, setIsProbing] = useState(false);
-  const [probeResults, setProbeResults] = useState<any[] | null>(null);
-  const [dbConfigForm, setDbConfigForm] = useState({
-    host: '10.2.0.201',
-    port: 3306,
-    user: 'root',
-    password: '',
-    database: 'samchuk_attendance'
+  // Filters & Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterActiveOnly, setFilterActiveOnly] = useState(false);
+
+  // Modal / Form state for Add or Edit
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<'ADD' | 'EDIT'>('ADD');
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Form Fields
+  const [formName, setFormName] = useState('');
+  const [formCode, setFormCode] = useState('');
+  const [formDescription, setFormDescription] = useState('');
+  const [formIsActive, setFormIsActive] = useState(true);
+
+  // 3 Shifts Time Configuration
+  const [formMorning, setFormMorning] = useState<ShiftTimeConfig>({
+    startTime: '08:15',
+    endTime: '16:00',
+    lateGraceMinutes: 0
   });
-  const [isSavingConfig, setIsSavingConfig] = useState(false);
-
-  // Sub-tabs
-  const [activeTab, setActiveTab] = useState<'shifts' | 'groups' | 'overrides' | 'roster'>('shifts');
-
-  // Edit Shift Modal
-  const [editingShift, setEditingShift] = useState<Shift | null>(null);
-  const [isNewShift, setIsNewShift] = useState(false);
-
-  // Edit Group Modal
-  const [editingGroup, setEditingGroup] = useState<PersonnelGroup | null>(null);
-  const [isNewGroup, setIsNewGroup] = useState(false);
-
-  // Edit Person Override Modal
-  const [editingOverride, setEditingOverride] = useState<any | null>(null);
-  const [isNewOverride, setIsNewOverride] = useState(false);
-
-  // Month selector for Roster
-  const [selectedMonth, setSelectedMonth] = useState('2026-10');
-
-  // Days in month
-  const daysInMonth = 31; // For 2026-10
-  const days = Array.from({ length: daysInMonth }, (_, i) => {
-    const dayNum = i + 1;
-    const pad = dayNum.toString().padStart(2, '0');
-    return {
-      dayNum,
-      dateStr: `${selectedMonth}-${pad}`,
-      isWeekend: [3, 4, 10, 11, 17, 18, 24, 25, 31].includes(dayNum) // Saturday/Sunday simulation
-    };
+  const [formAfternoon, setFormAfternoon] = useState<ShiftTimeConfig>({
+    startTime: '16:00',
+    endTime: '24:00',
+    lateGraceMinutes: 0
+  });
+  const [formNight, setFormNight] = useState<ShiftTimeConfig>({
+    startTime: '00:00',
+    endTime: '08:00',
+    lateGraceMinutes: 0
   });
 
-  // Sync Shifts to MySQL
-  const handleSyncAllShiftsToDb = async () => {
-    setIsSyncingDb(true);
-    setDbSyncMsg({ type: 'info', text: 'กำลังเชื่อมต่อ MySQL และบันทึกข้อมูลกะ...' });
-    try {
-      const res = await apiClient.syncShiftsToDb(state.shifts);
-      if (res.success) {
-        setDbSyncMsg({ type: 'success', text: res.message || 'บันทึกกะลง MySQL สำเร็จ 100%' });
-        const testRes = await apiClient.testDatabaseConnection();
-        if (testRes.success) setDbStats(testRes);
-      } else {
-        setDbSyncMsg({ type: 'error', text: res.message || 'ไม่สามารถบันทึกลง MySQL ได้ (กรุณาเปิด start-backend.bat)' });
-      }
-    } catch (err: any) {
-      setDbSyncMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err.message}` });
-    } finally {
-      setIsSyncingDb(false);
-    }
-  };
+  // Action status notification
+  const [actionMsg, setActionMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const handleTestDb = async () => {
-    setIsSyncingDb(true);
-    setDbSyncMsg({ type: 'info', text: 'กำลังตรวจสอบสถานะ MySQL...' });
-    try {
-      const res = await apiClient.testDatabaseConnection();
-      if (res.success) {
-        setDbStats(res);
-        setDbSyncMsg({ 
-          type: 'success', 
-          text: `เชื่อมต่อ MySQL บน ${res.host}:${res.port} สำเร็จ! พบข้อมูลกะในตาราง: ${res.tables?.shifts ?? 0} กะ` 
-        });
-      } else {
-        setDbSyncMsg({ 
-          type: 'error', 
-          text: res.message || 'ติดต่อ MySQL ไม่สำเร็จ',
-          help: res.help
-        });
-      }
-    } catch (err: any) {
-      setDbSyncMsg({ type: 'error', text: `ข้อผิดพลาด: ${err.message}` });
-    } finally {
-      setIsSyncingDb(false);
-    }
-  };
-
-  const handleProbePorts = async () => {
-    setIsProbing(true);
-    setDbSyncMsg({ type: 'info', text: 'กำลังทดสอบยิงพอร์ต 3306 ไปยัง IP เป้าหมายทั้งหมด...' });
-    try {
-      const res = await apiClient.probeDatabasePorts();
-      if (res.success && res.results) {
-        setProbeResults(res.results);
-        const opened = res.results.filter((r: any) => r.open);
-        if (opened.length > 0) {
-          setDbSyncMsg({ 
-            type: 'info', 
-            text: `พบเซิร์ฟเวอร์เปิดพอร์ต 3306 อยู่ที่: ${opened.map((o: any) => o.host).join(', ')} (คุณสามารถคลิกเลือกใช้ IP ดังกล่าวได้)` 
-          });
-        } else {
-          setDbSyncMsg({ 
-            type: 'error', 
-            text: 'ไม่พบพอร์ต 3306 เปิดอยู่ใน IP ใดๆ เลย (อาจติด Firewall หรือ MySQL ยังไม่เริ่มทำงาน)' 
-          });
-        }
-      }
-    } catch (err: any) {
-      setDbSyncMsg({ type: 'error', text: `Probe Error: ${err.message}` });
-    } finally {
-      setIsProbing(false);
-    }
-  };
-
-  const handleSaveDbConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSavingConfig(true);
-    setDbSyncMsg({ type: 'info', text: `กำลังทดสอบเชื่อมต่อ ${dbConfigForm.host}:${dbConfigForm.port}...` });
-    try {
-      const res = await apiClient.configureDatabase(dbConfigForm);
-      if (res.success) {
-        setDbSyncMsg({ type: 'success', text: res.message || 'บันทึกการตั้งค่าและเชื่อมต่อ MySQL สำเร็จ!' });
-        setShowDbSettings(false);
-        handleTestDb();
-      } else {
-        setDbSyncMsg({ type: 'error', text: res.message || 'เชื่อมต่อไม่สำเร็จ' });
-      }
-    } catch (err: any) {
-      setDbSyncMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err.message}` });
-    } finally {
-      setIsSavingConfig(false);
-    }
-  };
-
-  // Handle Save Shift
-  const handleSaveShift = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingShift) return;
-
-    if (isNewShift) {
-      attendanceStore.addShift({
-        shiftCode: editingShift.shiftCode,
-        shiftName: editingShift.shiftName,
-        startTime: editingShift.startTime,
-        endTime: editingShift.endTime,
-        crossesMidnight: editingShift.crossesMidnight,
-        workDateBasis: editingShift.workDateBasis,
-        lateGraceMinutes: Number(editingShift.lateGraceMinutes),
-        inWindowBeforeMin: Number(editingShift.inWindowBeforeMin),
-        outWindowAfterMin: Number(editingShift.outWindowAfterMin),
-        earlyLeaveMin: Number(editingShift.earlyLeaveMin),
-        duplicateScanMin: Number(editingShift.duplicateScanMin),
-        color: editingShift.color || '#0284c7',
-        isActive: true
-      }, state.currentUser);
-    } else {
-      attendanceStore.updateShift(editingShift.id, editingShift, state.currentUser);
-    }
-
-    setEditingShift(null);
-
-    // ซิงค์เข้า MySQL 10.2.0.201 ทันที
-    try {
-      await apiClient.syncShiftsToDb(state.shifts);
-    } catch {
-      // ignore
-    }
-  };
-
-  // Handle Save Group
-  const handleSaveGroup = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingGroup) return;
-
-    attendanceStore.saveGroup(editingGroup, state.currentUser);
-    setEditingGroup(null);
-  };
-
-  // Copy Group Settings helper - Section 17.4
-  const handleCopyGroupSettings = (sourceGroupId: number) => {
-    const source = state.groups.find(g => g.id === sourceGroupId);
-    if (!source || !editingGroup) return;
-
-    setEditingGroup({
-      ...editingGroup,
-      shiftOverrides: { ...source.shiftOverrides }
+  // Calculate live member counts
+  const personnelTypesWithCounts = useMemo(() => {
+    return (state.personnelTypes || []).map(type => {
+      const tName = type.name.trim().toLowerCase();
+      const count = state.personnel.filter(p => {
+        const pName = (p.hrPersonTypeName || '').trim().toLowerCase();
+        return pName === tName || pName.includes(tName) || tName.includes(pName);
+      }).length;
+      return { ...type, memberCount: count };
     });
+  }, [state.personnelTypes, state.personnel]);
+
+  // Filtered list
+  const filteredTypes = useMemo(() => {
+    return personnelTypesWithCounts.filter(type => {
+      if (filterActiveOnly && !type.isActive) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const matchName = type.name.toLowerCase().includes(q);
+        const matchCode = (type.code || '').toLowerCase().includes(q);
+        const matchDesc = (type.description || '').toLowerCase().includes(q);
+        if (!matchName && !matchCode && !matchDesc) return false;
+      }
+      return true;
+    });
+  }, [personnelTypesWithCounts, filterActiveOnly, searchQuery]);
+
+  // Open Modal for Add
+  const handleOpenAdd = () => {
+    setModalMode('ADD');
+    setEditingId(null);
+    setFormName('');
+    setFormCode('');
+    setFormDescription('');
+    setFormIsActive(true);
+    setFormMorning({ startTime: '08:15', endTime: '16:00', lateGraceMinutes: 0 });
+    setFormAfternoon({ startTime: '16:00', endTime: '24:00', lateGraceMinutes: 0 });
+    setFormNight({ startTime: '00:00', endTime: '08:00', lateGraceMinutes: 0 });
+    setIsModalOpen(true);
   };
 
-  // Handle Save Person Override
-  const handleSaveOverride = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingOverride) return;
+  // Open Modal for Edit
+  const handleOpenEdit = (type: PersonnelTypeConfig) => {
+    setModalMode('EDIT');
+    setEditingId(type.id);
+    setFormName(type.name);
+    setFormCode(type.code || '');
+    setFormDescription(type.description || '');
+    setFormIsActive(type.isActive);
+    setFormMorning({
+      startTime: type.morningShift?.startTime || '08:15',
+      endTime: type.morningShift?.endTime || '16:00',
+      lateGraceMinutes: type.morningShift?.lateGraceMinutes ?? 0
+    });
+    setFormAfternoon({
+      startTime: type.afternoonShift?.startTime || '16:00',
+      endTime: type.afternoonShift?.endTime || '24:00',
+      lateGraceMinutes: type.afternoonShift?.lateGraceMinutes ?? 0
+    });
+    setFormNight({
+      startTime: type.nightShift?.startTime || '00:00',
+      endTime: type.nightShift?.endTime || '08:00',
+      lateGraceMinutes: type.nightShift?.lateGraceMinutes ?? 0
+    });
+    setIsModalOpen(true);
+  };
 
-    if (!isNewOverride && editingOverride.id) {
-      attendanceStore.removePersonShiftOverride(editingOverride.id, state.currentUser);
+  // Save Add/Edit
+  const handleSaveType = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formName.trim()) {
+      alert('กรุณาระบุชื่อประเภทบุคลากร');
+      return;
     }
 
-    attendanceStore.setPersonShiftOverride({
-      personId: Number(editingOverride.personId),
-      shiftId: Number(editingOverride.shiftId),
-      startTime: editingOverride.startTime,
-      endTime: editingOverride.endTime,
-      effectiveFrom: editingOverride.effectiveFrom,
-      effectiveTo: editingOverride.effectiveTo || undefined,
-      isActive: true,
-      note: editingOverride.note || ''
-    }, state.currentUser);
+    setIsProcessing(true);
+    try {
+      const typeData = {
+        name: formName.trim(),
+        code: formCode.trim() || undefined,
+        description: formDescription.trim() || undefined,
+        morningShift: formMorning,
+        afternoonShift: formAfternoon,
+        nightShift: formNight,
+        isActive: formIsActive
+      };
 
-    setEditingOverride(null);
+      if (modalMode === 'ADD') {
+        await attendanceStore.addPersonnelType(typeData, state.currentUser);
+        setActionMsg({ type: 'success', text: `เพิ่มประเภทบุคลากร "${formName}" สำเร็จ!` });
+      } else if (editingId) {
+        await attendanceStore.updatePersonnelType(editingId, typeData, state.currentUser);
+        setActionMsg({ type: 'success', text: `ปรับปรุงเวลาประเภท "${formName}" สำเร็จ!` });
+      }
+
+      setIsModalOpen(false);
+      await attendanceStore.recalculateDailyAttendance('2026-10-14');
+    } catch (err: any) {
+      setActionMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err.message}` });
+    } finally {
+      setIsProcessing(false);
+      setTimeout(() => setActionMsg(null), 3500);
+    }
   };
+
+  // Delete Type
+  const handleDeleteType = async (type: PersonnelTypeConfig) => {
+    if (!confirm(`คุณต้องการลบประเภทบุคลากร "${type.name}" ใช่หรือไม่?`)) return;
+
+    setIsProcessing(true);
+    try {
+      await attendanceStore.deletePersonnelType(type.id, state.currentUser);
+      await attendanceStore.recalculateDailyAttendance('2026-10-14');
+      setActionMsg({ type: 'success', text: `ลบประเภท "${type.name}" เรียบร้อยแล้ว` });
+    } catch (err: any) {
+      setActionMsg({ type: 'error', text: `ไม่สามารถลบได้: ${err.message}` });
+    } finally {
+      setIsProcessing(false);
+      setTimeout(() => setActionMsg(null), 3500);
+    }
+  };
+
+  // Reset to Hospital Presets
+  const handleResetPresets = async () => {
+    if (!confirm('ต้องการคืนค่าเริ่มต้น 5 ประเภทบุคลากรหลักของ รพ.สามชุก (ข้าราชการ, พกส., พนักงานราชการ, ลูกจ้างรายวัน, ลูกจ้างรายเดือน) ใช่หรือไม่?')) return;
+
+    setIsProcessing(true);
+    try {
+      await attendanceStore.resetPersonnelTypes(state.currentUser);
+      await attendanceStore.recalculateDailyAttendance('2026-10-14');
+      setActionMsg({ type: 'success', text: 'คืนค่าเริ่มต้น 5 ประเภทบุคลากรของ รพ.สามชุก สำเร็จ!' });
+    } catch (err: any) {
+      setActionMsg({ type: 'error', text: `คืนค่าไม่สำเร็จ: ${err.message}` });
+    } finally {
+      setIsProcessing(false);
+      setTimeout(() => setActionMsg(null), 3500);
+    }
+  };
+
+  // Sync to MySQL
+  const handleSyncToDb = async () => {
+    setIsProcessing(true);
+    try {
+      const res = await attendanceStore.syncAllPersonnelTypesToDb(state.currentUser);
+      if (res.success) {
+        setActionMsg({ type: 'success', text: `บันทึกลง MySQL attendance_personnel_type_shift สำเร็จ (${res.data?.count || state.personnelTypes.length} รายการ)` });
+      } else {
+        setActionMsg({ type: 'error', text: `บันทึกไม่สำเร็จ: ${res.message}` });
+      }
+    } catch (err: any) {
+      setActionMsg({ type: 'error', text: `บันทึกไม่สำเร็จ: ${err.message}` });
+    } finally {
+      setIsProcessing(false);
+      setTimeout(() => setActionMsg(null), 3500);
+    }
+  };
+
+  const totalMappedStaff = personnelTypesWithCounts.reduce((acc, t) => acc + (t.memberCount || 0), 0);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+    <div className="space-y-4 max-w-7xl mx-auto pb-12">
+      {/* Header & Command Bar */}
+      <div className="bg-white border border-slate-200/90 rounded-xl p-4.5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-base font-bold text-slate-800">
-            ระบบกะการทำงานและตารางเวร (Shift & Roster Management v2)
-          </h2>
-          <p className="text-xs text-slate-500">
-            กำหนดเวลากะเช้า/บ่าย/ดึก/เช้าควบบ่าย, จัดกลุ่มบุคลากร, Override รายบุคคล และจัดตารางเวรรายเดือน
+          <div className="flex items-center gap-2 mb-1 text-[11px] text-slate-500">
+            <span className="font-semibold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200/70">
+              SCHEDULE MATRIX
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono text-slate-500">รพ.สามชุก จ.สุพรรณบุรี</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono text-slate-400">3 กะมาตรฐาน (เช้า / บ่าย / ดึก)</span>
+          </div>
+          <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <Clock className="w-5 h-5 text-teal-700" />
+            ตั้งค่าประเภทบุคลากรและช่วงเวลากะ (Personnel Schedule Matrix)
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            กำหนดเวลาเริ่ม-เลิกงาน พร้อมเส้นไทม์ไลน์ 24 ชั่วโมง และเกณฑ์การมาสายของแต่ละประเภทบุคลากร
           </p>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200 text-xs font-semibold">
-          <button
-            onClick={() => setActiveTab('shifts')}
-            className={`px-3 py-1.5 rounded-md transition-colors cursor-pointer ${
-              activeTab === 'shifts' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            1. จัดการกะ (Shifts)
-          </button>
-          <button
-            onClick={() => setActiveTab('groups')}
-            className={`px-3 py-1.5 rounded-md transition-colors cursor-pointer ${
-              activeTab === 'groups' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            2. กลุ่มบุคลากร (Groups)
-          </button>
-          <button
-            onClick={() => setActiveTab('overrides')}
-            className={`px-3 py-1.5 rounded-md transition-colors cursor-pointer ${
-              activeTab === 'overrides' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            3. กะรายบุคคล (Overrides)
-          </button>
-          <button
-            onClick={() => setActiveTab('roster')}
-            className={`px-3 py-1.5 rounded-md transition-colors cursor-pointer ${
-              activeTab === 'roster' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            4. ตารางเวร (Monthly Roster)
-          </button>
+        {/* Action Controls (Matte Finish) */}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {isAdmin && (
+            <>
+              <button
+                onClick={handleResetPresets}
+                disabled={isProcessing}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 active:bg-slate-100 rounded-lg border border-slate-300 shadow-2xs transition-all duration-150 cursor-pointer"
+                title="คืนค่า 5 ประเภทบุคลากรเริ่มต้น (ข้าราชการ 08:15, ลูกจ้าง 07:30)"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                <span>คืนค่าเริ่มต้น</span>
+              </button>
+
+              <button
+                onClick={handleSyncToDb}
+                disabled={isProcessing}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 active:bg-slate-100 rounded-lg border border-slate-300 shadow-2xs transition-all duration-150 cursor-pointer"
+                title="บันทึกข้อมูลประเภทบุคลากรและเวลากะทั้งหมดลง MySQL"
+              >
+                <Database className="w-3.5 h-3.5 text-teal-700" />
+                <span>บันทึก MySQL</span>
+              </button>
+
+              <button
+                onClick={handleOpenAdd}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-800 hover:bg-teal-900 active:bg-teal-950 rounded-lg shadow-2xs transition-all duration-150 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>เพิ่มประเภทบุคลากร</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {/* TAB 1: SHIFTS MANAGEMENT - Section 16 */}
-      {activeTab === 'shifts' && (
-        <div className="space-y-4">
-          {/* MySQL Database Sync & Diagnostic Banner */}
-          <div className="bg-slate-900 text-white rounded-xl p-4 shadow-sm border border-slate-800 space-y-3">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-lg bg-teal-500/20 text-teal-400 border border-teal-500/30">
-                  <Database className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold text-slate-200">ฐานข้อมูล MySQL:</span>
-                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-teal-300 font-semibold border border-slate-700">
-                      {dbStats?.host || dbConfigForm.host}:{dbStats?.port || dbConfigForm.port} / {dbStats?.database || dbConfigForm.database}
-                    </span>
-                    {dbStats?.tables?.shifts !== undefined && (
-                      <span className="text-[11px] text-emerald-400 font-mono">
-                        (มีใน DB: {dbStats.tables.shifts} กะ)
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    เซิร์ฟเวอร์ Backend (พอร์ต 3002) จะทำการอ่าน/เขียนข้อมูลกะและประวัติสแกนนิ้วลงใน MySQL โดยตรง
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleTestDb}
-                  disabled={isSyncingDb}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 cursor-pointer disabled:opacity-50"
-                  title="ทดสอบว่า MySQL เชื่อมต่อได้หรือไม่"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`} />
-                  <span>เช็ค MySQL</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleProbePorts}
-                  disabled={isProbing}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-900/80 hover:bg-sky-800 text-sky-200 text-xs font-semibold rounded-lg border border-sky-700 cursor-pointer disabled:opacity-50"
-                  title="สแกนตรวจหาว่า IP ไหนเปิดพอร์ต 3306 บ้าง"
-                >
-                  <Search className={`w-3.5 h-3.5 ${isProbing ? 'animate-spin' : ''}`} />
-                  <span>{isProbing ? 'กำลังสแกน...' : '🔍 สแกนหาพอร์ต MySQL'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowDbSettings(!showDbSettings)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
-                    showDbSettings ? 'bg-amber-600 text-white border-amber-500' : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                  }`}
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  <span>ตั้งค่า IP/รหัสผ่าน</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setIsSyncingDb(true);
-                    setDbSyncMsg({ type: 'info', text: 'กำลังโหลดกะสดจาก MySQL 10.2.0.201...' });
-                    try {
-                      const res = await attendanceStore.loadFromMySqlDb();
-                      if (res.success) {
-                        setDbSyncMsg({ type: 'success', text: res.message });
-                        const testRes = await apiClient.testDatabaseConnection();
-                        if (testRes.success) setDbStats(testRes);
-                      } else {
-                        setDbSyncMsg({ type: 'error', text: res.message });
-                      }
-                    } finally {
-                      setIsSyncingDb(false);
-                    }
-                  }}
-                  disabled={isSyncingDb}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white text-xs font-semibold rounded-lg shadow-sm cursor-pointer disabled:opacity-50"
-                  title="ดึงข้อมูลกะสดจากตาราง attendance_shift ใน MySQL 10.2.0.201"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDb ? 'animate-spin' : ''}`} />
-                  <span>โหลดกะสดจาก MySQL</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSyncAllShiftsToDb}
-                  disabled={isSyncingDb}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm cursor-pointer disabled:opacity-50"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  <span>{isSyncingDb ? 'กำลังบันทึก...' : '💾 บันทึกกะลง MySQL'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Sync / Test Alert Message */}
-            {dbSyncMsg && (
-              <div className={`p-3 rounded-lg text-xs space-y-1 ${
-                dbSyncMsg.type === 'success' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60' :
-                dbSyncMsg.type === 'error' ? 'bg-rose-950/80 text-rose-300 border border-rose-800/60' :
-                'bg-blue-950/80 text-blue-300 border border-blue-800/60'
-              }`}>
-                <div className="flex items-start gap-2">
-                  {dbSyncMsg.type === 'success' ? <Check className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />}
-                  <div>
-                    <div className="font-semibold">{dbSyncMsg.text}</div>
-                    {dbSyncMsg.help && (
-                      <div className="text-[11px] opacity-90 mt-1 pl-1 border-l-2 border-rose-500/40">
-                        {dbSyncMsg.help}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Probe Results Panel */}
-            {probeResults && (
-              <div className="p-3 bg-slate-950/90 rounded-lg border border-slate-800 text-xs space-y-2">
-                <div className="flex items-center justify-between font-bold text-slate-200">
-                  <span className="flex items-center gap-1.5">
-                    <Wifi className="w-3.5 h-3.5 text-sky-400" />
-                    <span>ผลการสแกนตรวจหาพอร์ต MySQL (3306) ในระบบ:</span>
-                  </span>
-                  <span className="text-[11px] text-slate-400 font-normal">คลิก "เลือกใช้ IP นี้" เพื่อเปลี่ยนทันที</span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {probeResults.map((r, idx) => (
-                    <div
-                      key={idx}
-                      className={`p-2.5 rounded-lg border flex items-center justify-between ${
-                        r.open ? 'bg-emerald-950/40 border-emerald-800/60' : 'bg-slate-900 border-slate-800'
-                      }`}
-                    >
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${r.open ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-                          <span className="font-mono font-bold text-slate-100">{r.host}:{r.port}</span>
-                          <span className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
-                            r.open ? 'bg-emerald-800/60 text-emerald-300' : 'bg-rose-950 text-rose-400'
-                          }`}>
-                            {r.open ? `เปิดอยู่ (${r.latencyMs}ms)` : 'ปิด/Timeout'}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-400">{r.name}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDbConfigForm({ ...dbConfigForm, host: r.host });
-                          setShowDbSettings(true);
-                        }}
-                        className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-teal-300 text-[11px] font-semibold border border-slate-700 cursor-pointer"
-                      >
-                        เลือก IP นี้
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Inline DB Settings Form */}
-            {showDbSettings && (
-              <form onSubmit={handleSaveDbConfig} className="p-4 bg-slate-950 rounded-lg border border-amber-600/40 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                  <div className="flex items-center gap-2 text-amber-400 text-xs font-bold">
-                    <Settings className="w-4 h-4" />
-                    <span>ตั้งค่าเชื่อมต่อ MySQL (บันทึกอัตโนมัติลงไฟล์ .env บนเซิร์ฟเวอร์)</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowDbSettings(false)}
-                    className="text-slate-400 hover:text-white"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <span className="text-slate-400">เลือก IP ด่วน:</span>
-                  <button
-                    type="button"
-                    onClick={() => setDbConfigForm({ ...dbConfigForm, host: '10.2.0.201' })}
-                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono text-[11px]"
-                  >
-                    10.2.0.201
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDbConfigForm({ ...dbConfigForm, host: '10.1.0.201' })}
-                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono text-[11px]"
-                  >
-                    10.1.0.201
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDbConfigForm({ ...dbConfigForm, host: 'localhost' })}
-                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono text-[11px]"
-                  >
-                    localhost (127.0.0.1)
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Host / IP เซิร์ฟเวอร์</label>
-                    <input
-                      type="text"
-                      value={dbConfigForm.host}
-                      onChange={(e) => setDbConfigForm({ ...dbConfigForm, host: e.target.value })}
-                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">Port</label>
-                    <input
-                      type="number"
-                      value={dbConfigForm.port}
-                      onChange={(e) => setDbConfigForm({ ...dbConfigForm, port: Number(e.target.value) })}
-                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">MySQL Username</label>
-                    <input
-                      type="text"
-                      value={dbConfigForm.user}
-                      onChange={(e) => setDbConfigForm({ ...dbConfigForm, user: e.target.value })}
-                      placeholder="root หรือ attendance_app"
-                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">MySQL Password</label>
-                    <input
-                      type="password"
-                      value={dbConfigForm.password}
-                      onChange={(e) => setDbConfigForm({ ...dbConfigForm, password: e.target.value })}
-                      placeholder="(ถ้ามีรหัสผ่าน ให้ใส่ที่นี่)"
-                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <div className="text-[11px] text-slate-400">
-                    ฐานข้อมูล: <span className="font-mono text-amber-300">{dbConfigForm.database}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowDbSettings(false)}
-                      className="px-3 py-1.5 bg-slate-800 text-slate-300 text-xs rounded hover:bg-slate-700"
-                    >
-                      ยกเลิก
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={isSavingConfig}
-                      className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs rounded shadow-sm disabled:opacity-50"
-                    >
-                      {isSavingConfig ? 'กำลังทดสอบและบันทึก...' : 'บันทึกและเชื่อมต่อทันที'}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            )}
+      {/* Action Toast */}
+      {actionMsg && (
+        <div className={`p-3 rounded-lg flex items-center justify-between text-xs border transition-all ${
+          actionMsg.type === 'success' ? 'bg-emerald-50 text-emerald-900 border-emerald-200' :
+          actionMsg.type === 'error' ? 'bg-rose-50 text-rose-900 border-rose-200' :
+          'bg-slate-50 text-slate-900 border-slate-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            {actionMsg.type === 'success' && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
+            {actionMsg.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+            <span className="font-medium">{actionMsg.text}</span>
           </div>
+          <button onClick={() => setActionMsg(null)} className="text-slate-400 hover:text-slate-600 cursor-pointer">✕</button>
+        </div>
+      )}
 
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <h3 className="text-sm font-bold text-slate-800">
-                รายการกะการทำงานมาตรฐาน (Shift Master Data)
-              </h3>
-              <p className="text-xs text-slate-500">
-                ADMIN สามารถแก้ไขเวลาเริ่มและเวลาสิ้นสุดได้เองผ่านหน้าเว็บ โดยไม่ต้องแก้โค้ด
-              </p>
-            </div>
-            {isAdmin && (
-              <button
-                onClick={() => {
-                  setIsNewShift(true);
-                  setEditingShift({
-                    id: 0,
-                    shiftCode: 'NEW',
-                    shiftName: 'กะใหม่',
-                    startTime: '08:00',
-                    endTime: '16:00',
-                    crossesMidnight: false,
-                    workDateBasis: 'START_DATE',
-                    lateGraceMinutes: 0,
-                    inWindowBeforeMin: 120,
-                    outWindowAfterMin: 120,
-                    earlyLeaveMin: 0,
-                    duplicateScanMin: 5,
-                    color: '#0d9488',
-                    isActive: true,
-                    createdAt: '',
-                    updatedAt: ''
-                  });
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>เพิ่มกะใหม่</span>
-              </button>
-            )}
+      {/* High Data Density Overview Metrics */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs">
+          <span className="text-slate-500 font-medium">ประเภทบุคลากรทั้งหมด</span>
+          <div className="text-2xl font-bold text-slate-900 font-mono tabular-nums tracking-tight mt-1">
+            {personnelTypesWithCounts.length} <span className="text-xs font-normal text-slate-400">ประเภท</span>
           </div>
-
-          {state.shifts.length === 0 ? (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 text-center space-y-3">
-              <div className="font-bold text-amber-900 text-sm flex items-center justify-center gap-2">
-                <AlertCircle className="w-5 h-5 text-amber-600" />
-                <span>ยังไม่มีข้อมูลกะในฐานข้อมูล MySQL 10.2.0.201</span>
-              </div>
-              <p className="text-xs text-slate-600 max-w-md mx-auto">
-                ระบบทำงานในโหมดเชื่อมต่อตรง MySQL (ปิด LocalStorage ถาวรแล้ว) หากเพิ่งเริ่มต้นใช้งาน คุณสามารถกดปุ่มด้านล่างเพื่อนำเข้า 4 กะหลักของ รพ.สามชุก เข้าสู่ MySQL ได้ทันที
-              </p>
-              <button
-                type="button"
-                onClick={async () => {
-                  const res = await attendanceStore.seedHospitalShiftsToMySql();
-                  if (res.success) {
-                    setDbSyncMsg({ type: 'success', text: 'นำเข้า 4 กะหลัก รพ.สามชุก ลง MySQL เรียบร้อยแล้ว!' });
-                  } else {
-                    setDbSyncMsg({ type: 'error', text: res.message });
-                  }
-                }}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-xs cursor-pointer inline-flex items-center gap-2 text-xs"
-              >
-                <Sparkles className="w-4 h-4" />
-                <span>นำเข้า 4 กะหลัก (M, A, N, MA) ลง MySQL ทันที</span>
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {state.shifts.map((shift) => (
-              <div
-                key={shift.id}
-                className={`bg-white border rounded-xl p-4 shadow-xs flex flex-col justify-between transition-all ${
-                  shift.isActive ? 'border-slate-200' : 'border-slate-200 opacity-60 bg-slate-50'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span 
-                        className="w-3.5 h-3.5 rounded-full shrink-0" 
-                        style={{ backgroundColor: shift.color }}
-                      ></span>
-                      <span className="font-mono font-bold text-sm text-slate-800">
-                        [{shift.shiftCode}]
-                      </span>
-                      <span className="text-xs font-bold text-slate-800">
-                        {shift.shiftName}
-                      </span>
-                    </div>
-                    {shift.isSystemDefault && (
-                      <span className="text-[10px] bg-teal-100 text-teal-800 px-1.5 py-0.5 rounded font-semibold">
-                        ค่าเริ่มต้น
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="space-y-1.5 text-xs text-slate-600 font-mono pt-2 border-t border-slate-100">
-                    <div className="flex justify-between items-center">
-                      <span className="font-sans text-slate-400">เวลาทำงาน:</span>
-                      <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-sm">
-                        {shift.startTime} – {shift.endTime}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-400">ผ่อนผันสาย:</span>
-                      <span>{shift.lateGraceMinutes} นาที</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-400">หน้าต่างรับสแกนเข้า:</span>
-                      <span>ก่อน {shift.inWindowBeforeMin} นาที</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-400">หน้าต่างรับสแกนออก:</span>
-                      <span>หลัง {shift.outWindowAfterMin} นาที</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-sans text-slate-400">สแกนซ้ำ (ไม่นับ):</span>
-                      <span>&le; {shift.duplicateScanMin} นาที</span>
-                    </div>
-                  </div>
-                </div>
-
-                {isAdmin && (
-                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                    <button
-                      onClick={() => {
-                        setIsNewShift(false);
-                        setEditingShift({ ...shift });
-                      }}
-                      className="text-teal-700 hover:text-teal-900 font-semibold inline-flex items-center gap-1 cursor-pointer"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                      <span>แก้ไขเวลา</span>
-                    </button>
-                    {shift.isActive && !shift.isSystemDefault && (
-                      <button
-                        onClick={() => {
-                          if (confirm(`ต้องการปิดการใช้งานกะ [${shift.shiftCode}] ใช่หรือไม่? (Soft delete)`)) {
-                            attendanceStore.deactivateShift(shift.id, state.currentUser);
-                          }
-                        }}
-                        className="text-rose-600 hover:text-rose-800 text-[11px] cursor-pointer"
-                      >
-                        ปิดใช้งาน
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+          <div className="text-[11px] text-slate-500 mt-1">
+            เปิดใช้งาน {personnelTypesWithCounts.filter(t => t.isActive).length} รายการ
           </div>
+        </div>
+
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs">
+          <span className="text-slate-500 font-medium">บุคลากรที่ผูกเวลากะ</span>
+          <div className="text-2xl font-bold text-teal-800 font-mono tabular-nums tracking-tight mt-1">
+            {totalMappedStaff} <span className="text-xs font-normal text-slate-400">คน</span>
+          </div>
+          <div className="text-[11px] text-teal-700 mt-1">
+            จาก hr_person ทั้งหมด {state.personnel.length} คน
+          </div>
+        </div>
+
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs">
+          <span className="text-slate-500 font-medium">กะเช้า ข้าราชการ / พกส.</span>
+          <div className="text-2xl font-bold text-slate-900 font-mono tabular-nums tracking-tight mt-1">
+            08:15 <span className="text-xs font-normal text-slate-400">- 16:00 น.</span>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            สแกนเข้าเกิน 08:15 คิดสายทันที
+          </div>
+        </div>
+
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs">
+          <span className="text-slate-500 font-medium">กะเช้า ลูกจ้างรายวัน / รายเดือน</span>
+          <div className="text-2xl font-bold text-slate-900 font-mono tabular-nums tracking-tight mt-1">
+            07:30 <span className="text-xs font-normal text-slate-400">- 16:00 น.</span>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            สแกนเข้าเกิน 07:30 คิดสายทันที
+          </div>
+        </div>
+      </div>
+
+      {/* Search Toolbar */}
+      <div className="bg-white border border-slate-200/90 rounded-xl p-3 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="ค้นหาชื่อประเภทบุคลากร..."
+            className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600 cursor-pointer"
+            >
+              ✕
+            </button>
           )}
         </div>
-      )}
 
-      {/* TAB 2: GROUPS MANAGEMENT - Section 17 */}
-      {activeTab === 'groups' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <h3 className="text-sm font-bold text-slate-800">
-                กลุ่มบุคลากรและการตั้งเวลากะต่อกลุ่ม (Personnel Groups)
-              </h3>
-              <p className="text-xs text-slate-500">
-                แต่ละกลุ่มสามารถกำหนดเวลากะ เช้า/บ่าย/ดึก/ควบบ่าย ต่างกันได้ (เช่น ข้าราชการเข้า 08:15 vs ลูกจ้างเข้า 07:30)
-              </p>
-            </div>
-            {isAdmin && (
-              <button
-                onClick={() => {
-                  setIsNewGroup(true);
-                  setEditingGroup({
-                    id: 0,
-                    groupName: 'กลุ่มใหม่',
-                    groupKind: 'CUSTOM',
-                    priority: 50,
-                    isActive: true,
-                    note: '',
-                    createdAt: '',
-                    updatedAt: '',
-                    personTypeIds: [],
-                    memberPersonIds: [],
-                    shiftOverrides: {}
-                  });
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>เพิ่มกลุ่มใหม่</span>
-              </button>
-            )}
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-slate-600 cursor-pointer font-medium">
+            <input
+              type="checkbox"
+              checked={filterActiveOnly}
+              onChange={(e) => setFilterActiveOnly(e.target.checked)}
+              className="rounded border-slate-300 text-teal-700 focus:ring-teal-600 cursor-pointer"
+            />
+            <span>แสดงเฉพาะที่เปิดใช้งาน</span>
+          </label>
+          <span className="text-slate-300" aria-hidden="true">·</span>
+          <span className="text-slate-500 font-mono">{filteredTypes.length} ประเภท</span>
+        </div>
+      </div>
+
+      {/* Interactive Schedule Matrix Cards with Visual Time Bars */}
+      <div className="space-y-3">
+        {filteredTypes.length === 0 ? (
+          <div className="bg-white border border-slate-200/90 rounded-xl p-12 text-center text-slate-400 text-xs">
+            ไม่พบประเภทบุคลากรตามคำค้นหา
           </div>
-
-          <div className="space-y-4">
-            {state.groups.map((group) => {
-              // count members
-              let memberCount = 0;
-              if (group.groupKind === 'PERSON_TYPE') {
-                memberCount = state.personnel.filter(p => group.personTypeIds.includes(p.hrPersonTypeId)).length;
-              } else {
-                memberCount = group.memberPersonIds.length;
-              }
-
-              return (
-                <div key={group.id} className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
-                  <div className="flex items-start justify-between">
+        ) : (
+          filteredTypes.map((type) => {
+            return (
+              <div 
+                key={type.id} 
+                className="bg-white border border-slate-200/90 rounded-xl p-4 shadow-xs hover:border-teal-400/60 transition-all duration-150 space-y-3.5"
+              >
+                {/* Header: Name, Personnel Count, Actions */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-teal-50 border border-teal-200/80 flex items-center justify-center text-teal-800 font-bold text-xs shrink-0">
+                      {type.code || type.name.charAt(0)}
+                    </div>
                     <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold px-2 py-0.5 bg-slate-100 rounded text-slate-700 font-mono">
-                          Priority {group.priority}
-                        </span>
-                        <h4 className="text-sm font-bold text-slate-800">{group.groupName}</h4>
-                        <span className="text-xs text-slate-500">
-                          ({group.groupKind === 'PERSON_TYPE' ? 'ผูกตามประเภทบุคลากร HR' : 'กลุ่มกำหนดเอง'})
+                      <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                        <span>{type.name}</span>
+                        {type.code && (
+                          <span className="font-mono text-[10px] text-slate-500 px-1.5 py-0.2 rounded bg-slate-100 font-medium">
+                            {type.code}
+                          </span>
+                        )}
+                        {type.isActive ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.2 rounded-full border border-emerald-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            เปิดใช้งาน
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.2 rounded-full">
+                            ปิดใช้งาน
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
+                        <span>{type.description || 'บุคลากรโรงพยาบาลสามชุก'}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono text-teal-800 font-semibold">
+                          {type.memberCount || 0} คนในระบบ HR
                         </span>
                       </div>
-                      <p className="text-xs text-slate-500 mt-1">{group.note || 'ไม่มีหมายเหตุ'}</p>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-slate-600 bg-slate-50 px-2.5 py-1 rounded border border-slate-200">
-                        สมาชิก: <strong>{memberCount}</strong> คน
-                      </span>
-                      {isAdmin && (
-                        <button
-                          onClick={() => {
-                            setIsNewGroup(false);
-                            setEditingGroup({ ...group });
-                          }}
-                          className="px-3 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50 border border-teal-200 rounded-md cursor-pointer"
-                        >
-                          แก้ไขเวลา & สมาชิก
-                        </button>
-                      )}
                     </div>
                   </div>
 
-                  {/* Shifts Table for this group */}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-500 font-semibold border-y border-slate-200">
-                        <tr>
-                          <th className="py-2 px-3">รหัสกะ</th>
-                          <th className="py-2 px-3">ชื่อกะ</th>
-                          <th className="py-2 px-3">เวลากลุ่มนี้ (Group Time)</th>
-                          <th className="py-2 px-3">เวลามาตรฐาน (Default)</th>
-                          <th className="py-2 px-3">ผ่อนผันสาย</th>
-                          <th className="py-2 px-3 text-right">สถานะ</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {state.shifts.map((shift) => {
-                          const override = group.shiftOverrides[shift.id];
-                          const isOverridden = !!override;
-                          const startTime = override ? override.startTime : shift.startTime;
-                          const endTime = override ? override.endTime : shift.endTime;
-                          const grace = override?.lateGraceMinutes ?? shift.lateGraceMinutes;
+                  {isAdmin && (
+                    <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                      <button
+                        onClick={() => handleOpenEdit(type)}
+                        className="px-3 py-1.5 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 active:bg-teal-200 border border-teal-200/80 rounded-lg cursor-pointer transition-colors shadow-2xs"
+                        title="แก้ไขเวลาเริ่ม-เลิก ของทั้ง 3 กะ"
+                      >
+                        แก้ไขเวลากะ
+                      </button>
+                      <button
+                        onClick={() => handleDeleteType(type)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer transition-colors"
+                        title="ลบประเภทบุคลากรนี้"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-                          return (
-                            <tr key={shift.id}>
-                              <td className="py-2 px-3 font-mono font-bold text-slate-800">
-                                [{shift.shiftCode}]
-                              </td>
-                              <td className="py-2 px-3 font-medium text-slate-800">
-                                {shift.shiftName}
-                              </td>
-                              <td className="py-2 px-3 font-mono font-bold">
-                                {isOverridden ? (
-                                  <span className="text-teal-700 bg-teal-50 px-2 py-0.5 rounded">
-                                    {startTime} – {endTime}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-600">
-                                    {startTime} – {endTime}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-2 px-3 font-mono text-slate-400">
-                                {shift.startTime} – {shift.endTime}
-                              </td>
-                              <td className="py-2 px-3 text-slate-600 font-mono">
-                                {grace} นาที
-                              </td>
-                              <td className="py-2 px-3 text-right">
-                                {isOverridden ? (
-                                  <span className="text-[11px] text-teal-700 font-semibold">
-                                    ✓ กำหนดเฉพาะกลุ่ม
-                                  </span>
-                                ) : (
-                                  <span className="text-[11px] text-slate-400">
-                                    ใช้เวลามาตรฐาน
-                                  </span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                {/* 24-Hour Visual Schedule Timeline Bar */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-semibold text-slate-700">แถบเวลาปฏิบัติงาน 24 ชั่วโมง (Visual Timeline):</span>
+                    <span className="text-[10px] text-slate-400">เส้นสีแดง = จุดตัดคิดสาย</span>
+                  </div>
+                  <VisualShiftTimeline type={type} />
+                </div>
+
+                {/* 3 Shift Details Pills */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs">
+                  {/* Morning Shift */}
+                  <div className="p-2.5 rounded-lg border border-amber-200/80 bg-amber-500/[0.04] space-y-1">
+                    <div className="flex items-center justify-between text-amber-900 font-semibold text-[11px]">
+                      <span className="flex items-center gap-1.5">
+                        <Sun className="w-3.5 h-3.5 text-amber-600" />
+                        กะเช้า (Morning)
+                      </span>
+                      <span className="text-[10px] text-amber-800 font-mono">สายหลัง {type.morningShift?.startTime}</span>
+                    </div>
+                    <div className="text-sm font-bold font-mono text-slate-800 tabular-nums">
+                      {type.morningShift?.startTime} - {type.morningShift?.endTime} น.
+                    </div>
+                  </div>
+
+                  {/* Afternoon Shift */}
+                  <div className="p-2.5 rounded-lg border border-teal-200/80 bg-teal-500/[0.04] space-y-1">
+                    <div className="flex items-center justify-between text-teal-900 font-semibold text-[11px]">
+                      <span className="flex items-center gap-1.5">
+                        <Sunset className="w-3.5 h-3.5 text-teal-600" />
+                        กะบ่าย (Afternoon)
+                      </span>
+                      <span className="text-[10px] text-teal-800 font-mono">สายหลัง {type.afternoonShift?.startTime}</span>
+                    </div>
+                    <div className="text-sm font-bold font-mono text-slate-800 tabular-nums">
+                      {type.afternoonShift?.startTime} - {type.afternoonShift?.endTime} น.
+                    </div>
+                  </div>
+
+                  {/* Night Shift */}
+                  <div className="p-2.5 rounded-lg border border-indigo-200/80 bg-indigo-500/[0.04] space-y-1">
+                    <div className="flex items-center justify-between text-indigo-900 font-semibold text-[11px]">
+                      <span className="flex items-center gap-1.5">
+                        <Moon className="w-3.5 h-3.5 text-indigo-600" />
+                        กะดึก (Night)
+                      </span>
+                      <span className="text-[10px] text-indigo-700">เวรข้ามคืน</span>
+                    </div>
+                    <div className="text-sm font-bold font-mono text-slate-800 tabular-nums">
+                      {type.nightShift?.startTime} - {type.nightShift?.endTime} น.
+                    </div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+              </div>
+            );
+          })
+        )}
+      </div>
 
-      {/* TAB 3: PER-PERSON OVERRIDES - Section 19 */}
-      {activeTab === 'overrides' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <h3 className="text-sm font-bold text-slate-800">
-                การกำหนดกะแยกรายบุคคล (Per-Person Shift Overrides)
+      {/* Add / Edit Personnel Type Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-xl w-full p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-teal-700" />
+                {modalMode === 'ADD' ? 'เพิ่มประเภทบุคลากรและเวลากะใหม่' : `แก้ไขเวลากะ: ${formName}`}
               </h3>
-              <p className="text-xs text-slate-500">
-                Override เวลากะสำหรับเจ้าหน้าที่รายบุคคล (ลำดับความสำคัญระดับ 2 รองจาก Roster แต่สูงกว่ากลุ่ม)
-              </p>
-            </div>
-            {isAdmin && (
-              <button
-                onClick={() => {
-                  setIsNewOverride(true);
-                  const firstShift = state.shifts[0];
-                  setEditingOverride({
-                    id: 0,
-                    personId: state.personnel[0]?.personId || 1,
-                    shiftId: firstShift?.id || 1,
-                    startTime: firstShift?.startTime || '08:15',
-                    endTime: firstShift?.endTime || '16:00',
-                    effectiveFrom: '2026-10-01',
-                    effectiveTo: '',
-                    isActive: true,
-                    note: ''
-                  });
-                }}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition-colors"
+              <button 
+                onClick={() => setIsModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               >
-                <Plus className="w-4 h-4" />
-                <span>+ กำหนดกะรายบุคคลใหม่</span>
-              </button>
-            )}
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-                <tr>
-                  <th className="py-2.5 px-3">FINGLE_ID</th>
-                  <th className="py-2.5 px-3">ชื่อ - สกุล</th>
-                  <th className="py-2.5 px-3">หน่วยงาน</th>
-                  <th className="py-2.5 px-3">กะที่ Override</th>
-                  <th className="py-2.5 px-3">เวลาที่กำหนด</th>
-                  <th className="py-2.5 px-3">ช่วงวันที่มีผล</th>
-                  <th className="py-2.5 px-3">หมายเหตุ</th>
-                  <th className="py-2.5 px-3 text-right">การจัดการ</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {state.personOverrides.map((override, overrideIdx) => {
-                  const person = state.personnel.find(p => p.personId === override.personId);
-                  const shift = state.shifts.find(s => s.id === override.shiftId);
-
-                  return (
-                    <tr key={`${override.id}-${overrideIdx}`} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
-                        {person?.fingleId}
-                      </td>
-                      <td className="py-2.5 px-3 font-medium text-slate-900">
-                        {person?.hrFullname}
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-600">
-                        {person?.hrDepName}
-                      </td>
-                      <td className="py-2.5 px-3 font-medium text-teal-800">
-                        [{shift?.shiftCode}] {shift?.shiftName}
-                      </td>
-                      <td className="py-2.5 px-3 font-mono font-bold text-slate-900">
-                        {override.startTime} – {override.endTime}
-                      </td>
-                      <td className="py-2.5 px-3 font-mono text-slate-600">
-                        {override.effectiveFrom} {override.effectiveTo ? `ถึง ${override.effectiveTo}` : '(ไม่มีกำหนด)'}
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-500 italic">
-                        {override.note || '-'}
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        {isAdmin && (
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => {
-                                setIsNewOverride(false);
-                                setEditingOverride({ ...override });
-                              }}
-                              className="text-teal-700 hover:text-teal-900 font-semibold cursor-pointer"
-                            >
-                              แก้ไข
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (confirm('ต้องการลบ Override กะของบุคคลนี้ใช่หรือไม่?')) {
-                                  attendanceStore.removePersonShiftOverride(override.id, state.currentUser);
-                                }
-                              }}
-                              className="text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
-                            >
-                              ลบ
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 4: MONTHLY ROSTER MATRIX - Section 16.3 & 19 */}
-      {activeTab === 'roster' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-0.5">
-              <h3 className="text-sm font-bold text-slate-800">
-                ตารางเวรรายเดือน (Monthly Personnel Roster Matrix)
-              </h3>
-              <p className="text-xs text-slate-500">
-                คลิกที่ช่องวันที่เพื่อกำหนดกะประจำวัน (ลำดับความสำคัญสูงสุดระดับ 1)
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 px-3 py-1.5 rounded-lg">
-                <CalendarCheck className="w-4 h-4 text-teal-600" />
-                <span>เดือน:</span>
-                <input
-                  type="month"
-                  value={selectedMonth}
-                  onChange={(e) => setSelectedMonth(e.target.value)}
-                  className="font-mono text-slate-900 focus:outline-none cursor-pointer"
-                />
-              </div>
-
-              {/* Shift Badges Legend */}
-              <div className="hidden lg:flex items-center gap-2 text-xs text-slate-600">
-                {state.shifts.map(s => (
-                  <span key={s.id} className="flex items-center gap-1 font-mono text-[11px]">
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: s.color }}></span>
-                    <span>{s.shiftCode}: {s.startTime}-{s.endTime}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Roster Grid Matrix */}
-          <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto shadow-xs">
-            <table className="text-left text-xs border-collapse">
-              <thead className="bg-slate-100 text-slate-700 font-semibold sticky top-0">
-                <tr>
-                  <th className="py-2.5 px-3 border-r border-b border-slate-200 sticky left-0 bg-slate-100 z-10 min-w-44">
-                    บุคลากร (HR Person)
-                  </th>
-                  {days.map(d => (
-                    <th 
-                      key={d.dayNum} 
-                      className={`py-2 px-1 text-center border-r border-b border-slate-200 min-w-10 ${
-                        d.isWeekend ? 'bg-amber-50 text-amber-900 font-bold' : ''
-                      }`}
-                    >
-                      <div className="text-[10px]">{d.dayNum}</div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 font-sans">
-                {state.personnel.map((person, pIdx) => {
-                  return (
-                    <tr key={`${person.personId}-${pIdx}`} className="hover:bg-slate-50/50">
-                      <td className="py-2 px-3 border-r border-slate-200 sticky left-0 bg-white z-10">
-                        <div className="font-semibold text-slate-800 text-xs truncate max-w-44">
-                          {person.hrFullname}
-                        </div>
-                        <div className="text-[10px] text-slate-500 truncate max-w-44">
-                          Fingle #{person.fingleId} · {person.hrDepSubName || person.hrDepName}
-                        </div>
-                      </td>
-
-                      {days.map(d => {
-                        const personDayRosters = state.roster.filter(
-                          r => r.personId === person.personId && r.workDate === d.dateStr
-                        );
-                        const assignedShifts = personDayRosters
-                          .map(r => state.shifts.find(s => s.id === r.shiftId))
-                          .filter((s): s is NonNullable<typeof s> => s !== undefined);
-
-                        return (
-                          <td 
-                            key={`${person.personId}-${d.dateStr}`}
-                            className={`p-0.5 text-center border-r border-slate-100 ${d.isWeekend ? 'bg-amber-50/30' : ''}`}
-                          >
-                            <button
-                              disabled={!isAdmin}
-                              onClick={() => {
-                                if (!isAdmin) return;
-                                // Cycle through shifts: None -> M -> A -> N -> MA -> None
-                                const currentId = personDayRosters[0]?.shiftId || 0;
-                                const nextId = currentId === 4 ? 1 : currentId === 0 ? 1 : currentId + 1;
-                                attendanceStore.setRosterShift(person.personId, d.dateStr, nextId, 'เวรประจำวัน', state.currentUser);
-                              }}
-                              className={`min-w-8 h-8 px-1 rounded text-[10px] font-mono font-bold transition-all flex items-center justify-center mx-auto cursor-pointer ${
-                                assignedShifts.length > 0
-                                  ? 'text-white shadow-xs' 
-                                  : 'text-slate-300 hover:bg-slate-100 hover:text-slate-600'
-                              }`}
-                              style={{
-                                backgroundColor: assignedShifts.length === 1 
-                                  ? assignedShifts[0].color 
-                                  : assignedShifts.length > 1 
-                                  ? '#7c3aed' 
-                                  : 'transparent'
-                              }}
-                              title={
-                                assignedShifts.length > 0 
-                                  ? assignedShifts.map(s => `${s.shiftName} (${s.startTime}-${s.endTime})`).join(', ') 
-                                  : 'คลิกเพื่อกำหนดกะ'
-                              }
-                            >
-                              {assignedShifts.length > 1 
-                                ? assignedShifts.map(s => s.shiftCode).join('+')
-                                : assignedShifts.length === 1 
-                                ? assignedShifts[0].shiftCode 
-                                : '-'}
-                            </button>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-[11px] text-slate-500 italic">
-            * สิทธิ์ ADMIN: คลิกที่ช่องวันที่เพื่อเปลี่ยนกะเวร [M = เช้า, A = บ่าย, N = ดึก, MA = เช้าควบบ่าย] ระบบจะบันทึกลง attendance_person_roster ทันที
-          </p>
-        </div>
-      )}
-
-      {/* MODAL: Edit Shift Form */}
-      {editingShift && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleSaveShift} className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <h3 className="text-base font-bold text-slate-900">
-                {isNewShift ? 'เพิ่มกะการทำงานใหม่' : `แก้ไขกะ [${editingShift.shiftCode}] ${editingShift.shiftName}`}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setEditingShift(null)}
-                className="text-slate-400 hover:text-slate-600 font-bold"
-              >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">รหัสกะ (shift_code):</label>
-                <input
-                  type="text"
-                  required
-                  value={editingShift.shiftCode}
-                  onChange={(e) => setEditingShift({ ...editingShift, shiftCode: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono uppercase"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">ชื่อกะ (shift_name):</label>
-                <input
-                  type="text"
-                  required
-                  value={editingShift.shiftName}
-                  onChange={(e) => setEditingShift({ ...editingShift, shiftName: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">เวลาเริ่ม (start_time):</label>
-                <input
-                  type="time"
-                  required
-                  value={editingShift.startTime}
-                  onChange={(e) => setEditingShift({ ...editingShift, startTime: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">เวลาสิ้นสุด (end_time):</label>
-                <input
-                  type="time"
-                  required
-                  value={editingShift.endTime}
-                  onChange={(e) => setEditingShift({ ...editingShift, endTime: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">ผ่อนผันสาย (นาที):</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={editingShift.lateGraceMinutes}
-                  onChange={(e) => setEditingShift({ ...editingShift, lateGraceMinutes: Number(e.target.value) })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">สแกนซ้ำไม่นับ (นาที):</label>
-                <input
-                  type="number"
-                  min="1"
-                  value={editingShift.duplicateScanMin}
-                  onChange={(e) => setEditingShift({ ...editingShift, duplicateScanMin: Number(e.target.value) })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">หน้าต่างเข้าก่อน (นาที):</label>
-                <input
-                  type="number"
-                  value={editingShift.inWindowBeforeMin}
-                  onChange={(e) => setEditingShift({ ...editingShift, inWindowBeforeMin: Number(e.target.value) })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">หน้าต่างออกหลัง (นาที):</label>
-                <input
-                  type="number"
-                  value={editingShift.outWindowAfterMin}
-                  onChange={(e) => setEditingShift({ ...editingShift, outWindowAfterMin: Number(e.target.value) })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setEditingShift(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
-              >
-                ยกเลิก
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg shadow-sm cursor-pointer"
-              >
-                บันทึกการเปลี่ยนแปลง
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL: Edit Group Form - Section 17.4 */}
-      {editingGroup && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleSaveGroup} className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  {isNewGroup ? 'สร้างกลุ่มบุคลากรใหม่' : `แก้ไขกลุ่ม: ${editingGroup.groupName}`}
-                </h3>
-                <p className="text-xs text-slate-500">กำหนดเวลากะ เช้า/บ่าย/ดึก เฉพาะกลุ่มนี้</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingGroup(null)}
-                className="text-slate-400 hover:text-slate-600 font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">ชื่อกลุ่มบุคลากร:</label>
+            <form onSubmit={handleSaveType} className="space-y-4">
+              {/* Basic Information */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    ชื่อประเภทบุคลากร <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     type="text"
                     required
-                    value={editingGroup.groupName}
-                    onChange={(e) => setEditingGroup({ ...editingGroup, groupName: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5"
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    placeholder="เช่น ข้าราชการ, ลูกจ้างรายวัน"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-600"
                   />
                 </div>
-
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">ประเภทกลุ่ม:</label>
-                  <select
-                    value={editingGroup.groupKind}
-                    onChange={(e) => setEditingGroup({ ...editingGroup, groupKind: e.target.value as any })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 cursor-pointer"
-                  >
-                    <option value="PERSON_TYPE">ตามประเภทบุคลากร HR</option>
-                    <option value="CUSTOM">กลุ่มกำหนดเอง (เลือกสมาชิกรายคน)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Copy Settings Button - Section 17.4 */}
-              <div className="flex items-center justify-between p-2.5 bg-slate-100 rounded-lg">
-                <span className="text-slate-600 font-medium">คัดลอกการตั้งค่าเวลาจากกลุ่มอื่น:</span>
-                <div className="flex items-center gap-2">
-                  <select
-                    id="sourceGroupSelect"
-                    className="bg-white border border-slate-300 rounded px-2 py-1 text-xs"
-                    defaultValue=""
-                  >
-                    <option value="" disabled>-- เลือกกลุ่มต้นทาง --</option>
-                    {state.groups.filter(g => g.id !== editingGroup.id).map(g => (
-                      <option key={g.id} value={g.id}>{g.groupName}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const sel = document.getElementById('sourceGroupSelect') as HTMLSelectElement;
-                      if (sel && sel.value) handleCopyGroupSettings(Number(sel.value));
-                    }}
-                    className="px-2.5 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded font-medium cursor-pointer"
-                  >
-                    คัดลอก
-                  </button>
-                </div>
-              </div>
-
-              {/* Shift Times Editor for this Group */}
-              <div className="space-y-2 pt-2">
-                <h4 className="font-bold text-slate-800">เวลากะของกลุ่มนี้ (Override):</h4>
-                <div className="space-y-2">
-                  {state.shifts.map(shift => {
-                    const currentOverride = editingGroup.shiftOverrides[shift.id] || {
-                      startTime: shift.startTime,
-                      endTime: shift.endTime,
-                      lateGraceMinutes: shift.lateGraceMinutes
-                    };
-
-                    return (
-                      <div key={shift.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 grid grid-cols-4 gap-2 items-center">
-                        <div className="font-semibold text-slate-800 font-mono">
-                          [{shift.shiftCode}] {shift.shiftName}
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-slate-500 block">เวลาเริ่ม:</label>
-                          <input
-                            type="time"
-                            value={currentOverride.startTime}
-                            onChange={(e) => {
-                              setEditingGroup({
-                                ...editingGroup,
-                                shiftOverrides: {
-                                  ...editingGroup.shiftOverrides,
-                                  [shift.id]: {
-                                    ...currentOverride,
-                                    startTime: e.target.value
-                                  }
-                                }
-                              });
-                            }}
-                            className="bg-white border border-slate-300 rounded px-2 py-1 w-full font-mono"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-slate-500 block">เวลาออก:</label>
-                          <input
-                            type="time"
-                            value={currentOverride.endTime}
-                            onChange={(e) => {
-                              setEditingGroup({
-                                ...editingGroup,
-                                shiftOverrides: {
-                                  ...editingGroup.shiftOverrides,
-                                  [shift.id]: {
-                                    ...currentOverride,
-                                    endTime: e.target.value
-                                  }
-                                }
-                              });
-                            }}
-                            className="bg-white border border-slate-300 rounded px-2 py-1 w-full font-mono"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-slate-500 block">ผ่อนผัน (นาที):</label>
-                          <input
-                            type="number"
-                            min="0"
-                            value={currentOverride.lateGraceMinutes ?? shift.lateGraceMinutes}
-                            onChange={(e) => {
-                              setEditingGroup({
-                                ...editingGroup,
-                                shiftOverrides: {
-                                  ...editingGroup.shiftOverrides,
-                                  [shift.id]: {
-                                    ...currentOverride,
-                                    lateGraceMinutes: Number(e.target.value)
-                                  }
-                                }
-                              });
-                            }}
-                            className="bg-white border border-slate-300 rounded px-2 py-1 w-full font-mono"
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setEditingGroup(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
-              >
-                ยกเลิก
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg shadow-sm cursor-pointer"
-              >
-                บันทึกกลุ่ม
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL: Edit Person Override Form (สเปกข้อ 19) */}
-      {editingOverride && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleSaveOverride} className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  {isNewOverride ? 'กำหนดกะพิเศษรายบุคคลใหม่ (Add Override)' : 'แก้ไขกะพิเศษรายบุคคล'}
-                </h3>
-                <p className="text-xs text-slate-500">
-                  กำหนดเวลากะเฉพาะบุคคล มีลำดับความสำคัญระดับ 2 (เหนือกว่าเวลากลุ่ม)
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingOverride(null)}
-                className="text-slate-400 hover:text-slate-600 font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              {/* Personnel Selector */}
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">เลือกบุคลากร (HR Person):</label>
-                <select
-                  disabled={!isNewOverride}
-                  value={editingOverride.personId}
-                  onChange={(e) => setEditingOverride({ ...editingOverride, personId: Number(e.target.value) })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 cursor-pointer disabled:opacity-70"
-                >
-                  {state.personnel.map(p => (
-                    <option key={p.personId} value={p.personId}>
-                      Fingle #{p.fingleId} - {p.hrFullname} ({p.hrDepSubName || p.hrDepName})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Shift Selector */}
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">กะที่ต้องการ Override:</label>
-                <select
-                  value={editingOverride.shiftId}
-                  onChange={(e) => {
-                    const selectedShift = state.shifts.find(s => s.id === Number(e.target.value));
-                    setEditingOverride({ 
-                      ...editingOverride, 
-                      shiftId: Number(e.target.value),
-                      startTime: selectedShift?.startTime || editingOverride.startTime,
-                      endTime: selectedShift?.endTime || editingOverride.endTime
-                    });
-                  }}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 cursor-pointer"
-                >
-                  {state.shifts.map(s => (
-                    <option key={s.id} value={s.id}>
-                      [{s.shiftCode}] {s.shiftName} (เวลามาตรฐาน: {s.startTime} - {s.endTime})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Times */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">เวลาเริ่มเฉพาะบุคคล:</label>
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    รหัสย่อ (Code)
+                  </label>
                   <input
-                    type="time"
-                    required
-                    value={editingOverride.startTime}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, startTime: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">เวลาออกเฉพาะบุคคล:</label>
-                  <input
-                    type="time"
-                    required
-                    value={editingOverride.endTime}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, endTime: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
+                    type="text"
+                    value={formCode}
+                    onChange={(e) => setFormCode(e.target.value)}
+                    placeholder="เช่น GOV, DAILY"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-600 uppercase font-mono"
                   />
                 </div>
               </div>
 
-              {/* Effective Dates */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">วันที่มีผลเริ่ม:</label>
-                  <input
-                    type="date"
-                    required
-                    value={editingOverride.effectiveFrom}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, effectiveFrom: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                  />
+              {/* 3 Shifts Matrix Form */}
+              <div className="space-y-3 pt-1">
+                <div className="text-xs font-bold text-slate-800">
+                  กำหนดเวลาปฏิบัติงาน 3 กะ (เช้า / บ่าย / ดึก):
                 </div>
-                <div className="space-y-1">
-                  <label className="font-semibold text-slate-700">วันสิ้นสุด (เว้นว่าง = ไม่มีกำหนด):</label>
-                  <input
-                    type="date"
-                    value={editingOverride.effectiveTo || ''}
-                    onChange={(e) => setEditingOverride({ ...editingOverride, effectiveTo: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 font-mono"
-                  />
+
+                {/* กะเช้า */}
+                <div className="p-3 rounded-lg border border-amber-200/90 bg-amber-500/[0.04] text-xs space-y-2">
+                  <div className="font-semibold text-amber-900 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Sun className="w-3.5 h-3.5 text-amber-600" />
+                      1. กะเช้า (Morning Shift)
+                    </span>
+                    <span className="text-[10px] text-amber-700 font-mono">สายทันทีหลังเวลาเข้า</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-slate-600 mb-1 font-medium">เวลาเข้างาน</label>
+                      <input
+                        type="time"
+                        required
+                        value={formMorning.startTime}
+                        onChange={(e) => setFormMorning({ ...formMorning, startTime: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-600 mb-1 font-medium">เวลาออกงาน</label>
+                      <input
+                        type="time"
+                        required
+                        value={formMorning.endTime}
+                        onChange={(e) => setFormMorning({ ...formMorning, endTime: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* กะบ่าย */}
+                <div className="p-3 rounded-lg border border-teal-200/90 bg-teal-500/[0.04] text-xs space-y-2">
+                  <div className="font-semibold text-teal-900 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Sunset className="w-3.5 h-3.5 text-teal-600" />
+                      2. กะบ่าย (Afternoon Shift)
+                    </span>
+                    <span className="text-[10px] text-teal-700 font-mono">สแกนช่วง 13:00 - 19:59</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-slate-600 mb-1 font-medium">เวลาเข้างาน</label>
+                      <input
+                        type="time"
+                        required
+                        value={formAfternoon.startTime}
+                        onChange={(e) => setFormAfternoon({ ...formAfternoon, startTime: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-600 mb-1 font-medium">เวลาออกงาน</label>
+                      <input
+                        type="time"
+                        required
+                        value={formAfternoon.endTime}
+                        onChange={(e) => setFormAfternoon({ ...formAfternoon, endTime: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* กะดึก */}
+                <div className="p-3 rounded-lg border border-indigo-200/90 bg-indigo-500/[0.04] text-xs space-y-2">
+                  <div className="font-semibold text-indigo-900 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Moon className="w-3.5 h-3.5 text-indigo-600" />
+                      3. กะดึก (Night Shift)
+                    </span>
+                    <span className="text-[10px] text-indigo-700 font-mono">เวรข้ามคืน</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-slate-600 mb-1 font-medium">เวลาเข้างาน</label>
+                      <input
+                        type="time"
+                        required
+                        value={formNight.startTime}
+                        onChange={(e) => setFormNight({ ...formNight, startTime: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-600 mb-1 font-medium">เวลาออกงาน</label>
+                      <input
+                        type="time"
+                        required
+                        value={formNight.endTime}
+                        onChange={(e) => setFormNight({ ...formNight, endTime: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Note */}
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">หมายเหตุ / เหตุผล:</label>
+              {/* Status Toggle */}
+              <div className="flex items-center gap-2 pt-1">
                 <input
-                  type="text"
-                  placeholder="เช่น กะพิเศษตรวจคลินิกเฉพาะกิจ, ผู้บริหาร, ฯลฯ"
-                  value={editingOverride.note || ''}
-                  onChange={(e) => setEditingOverride({ ...editingOverride, note: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5"
+                  type="checkbox"
+                  id="formActive"
+                  checked={formIsActive}
+                  onChange={(e) => setFormIsActive(e.target.checked)}
+                  className="rounded border-slate-300 text-teal-700 focus:ring-teal-600 cursor-pointer"
                 />
+                <label htmlFor="formActive" className="text-xs text-slate-700 cursor-pointer font-medium">
+                  เปิดใช้งานประเภทบุคลากรนี้ในระบบ
+                </label>
               </div>
-            </div>
 
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setEditingOverride(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
-              >
-                ยกเลิก
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg shadow-sm cursor-pointer"
-              >
-                บันทึกกะรายบุคคล
-              </button>
-            </div>
-          </form>
+              {/* Modal Actions */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-3.5 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium rounded-lg cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="px-4 py-1.5 text-xs font-semibold text-white bg-teal-800 hover:bg-teal-900 active:bg-teal-950 rounded-lg shadow-2xs transition-all duration-150 cursor-pointer"
+                >
+                  {isProcessing ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

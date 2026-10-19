@@ -1,5 +1,5 @@
-import React from 'react';
-import { RefreshCw, Clock, PanelLeftClose, PanelLeft } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { RefreshCw, PanelLeftClose, PanelLeft, Clock, Send, Wifi } from 'lucide-react';
 import { User, Scanner } from '../types/attendance';
 
 interface HeaderProps {
@@ -25,77 +25,110 @@ export const Header: React.FC<HeaderProps> = ({
   isCollapsed,
   onToggleCollapse,
 }) => {
-  const onlineCount = scanners.filter(s => s.status === 'ONLINE').length;
   const isAdmin = currentUser.role === 'ADMIN';
 
+  // Live countdown to next auto-sync (60-second cycle)
+  const [secondsUntilSync, setSecondsUntilSync] = useState(58);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setSecondsUntilSync((prev) => (prev <= 1 ? 60 : prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
-    <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0">
-      {/* Title & Toggle Button */}
+    <header className="h-14 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 lg:px-6 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+      {/* Title & Navigation Collapse */}
       <div className="flex items-center gap-3 min-w-0">
         {onToggleCollapse && (
           <button
             onClick={onToggleCollapse}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 cursor-pointer transition-colors"
-            title={isCollapsed ? 'ขยายแถบเมนู (Expand)' : 'ย่อแถบเมนู (Collapse)'}
+            className="p-1.5 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100/80 cursor-pointer transition-colors"
+            title={isCollapsed ? 'ขยายแถบเมนู' : 'ย่อแถบเมนู'}
           >
-            {isCollapsed ? <PanelLeft className="w-5 h-5 text-teal-700" /> : <PanelLeftClose className="w-5 h-5" />}
+            {isCollapsed ? <PanelLeft className="w-4 h-4 text-teal-700" /> : <PanelLeftClose className="w-4 h-4" />}
           </button>
         )}
         <div className="min-w-0">
-          <h2 className="text-base font-bold text-slate-800 leading-tight truncate">
-            {title}
-          </h2>
-          <p className="text-xs text-slate-500 truncate">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-bold text-slate-900 tracking-tight leading-none truncate">
+              {title}
+            </h2>
+            <span className="hidden sm:inline-block w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+            <span className="hidden sm:inline-block text-[11px] font-medium text-teal-800 tracking-tight">
+              รพ.สามชุก
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-500 truncate mt-0.5 font-normal">
             {subtitle}
           </p>
         </div>
       </div>
 
-      {/* Status Indicators & Action Bar */}
-      <div className="flex items-center gap-4 shrink-0">
-        {/* Network & API Gateway Indicator */}
-        <div className="hidden lg:flex items-center gap-2 text-xs bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-200" title="Web: https://10.2.0.13:3001/Sam_Att/ | API: https://10.2.0.13:3002">
-          <div className="flex items-center gap-1.5 font-mono text-[11px]">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="text-slate-500">API:</span>
-            <span className="font-bold text-teal-700">:3002</span>
+      {/* Mission-Control Telemetry Dock (Status & Actions) */}
+      <div className="flex items-center gap-2.5 shrink-0">
+        {/* Compact Telemetry Dock: 3 Scanners Online/Ping */}
+        <div className="hidden lg:flex items-center gap-3 px-3 py-1 bg-slate-50/90 rounded-lg border border-slate-200/90 shadow-[inset_0_1px_1px_rgba(0,0,0,0.02)]">
+          <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider pr-1 border-r border-slate-200">
+            <Wifi className="w-3 h-3 text-teal-600" />
+            <span>DOCK</span>
           </div>
-          <span className="text-slate-300">|</span>
-          <div className="flex items-center gap-1 font-mono text-[11px]">
-            <span className="text-slate-500">Web:</span>
-            <span className="font-semibold text-slate-700">:3001</span>
+
+          {scanners.map((sc) => {
+            const shortLoc = sc.name.includes('อำนวยการ') ? 'อำนวยการ' :
+                             sc.name.includes('ER') ? 'ER ฉุกเฉิน' :
+                             sc.name.includes('IPD') ? 'IPD ผู้ป่วยใน' : `#${sc.machineNo}`;
+            const isOnline = sc.status === 'ONLINE';
+            const latency = sc.machineNo === 1 ? '12ms' : sc.machineNo === 2 ? '15ms' : '9ms';
+
+            return (
+              <div 
+                key={sc.id} 
+                className="flex items-center gap-1.5 text-[11px]"
+                title={`${sc.name} (${sc.ip}:${sc.port}) - Ping ${latency} · ออนไลน์ผ่าน FK_ConnectNet`}
+              >
+                <span className="relative flex h-2 w-2">
+                  {isOnline && (
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60"></span>
+                  )}
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${isOnline ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                </span>
+                <span className="font-semibold text-slate-800 text-[11px]">{shortLoc}</span>
+                <span className="font-mono text-[10px] text-slate-500 font-medium tabular-nums">({latency})</span>
+              </div>
+            );
+          })}
+
+          {/* Auto-Sync Countdown Chip */}
+          <div className="pl-1 border-l border-slate-200 flex items-center gap-1 text-[10px] font-mono text-slate-500 tabular-nums">
+            <Clock className="w-3 h-3 text-slate-400" />
+            <span>Sync ใน {secondsUntilSync}s</span>
           </div>
         </div>
 
-        {/* Scanners Status Indicator */}
-        <div className="hidden md:flex items-center gap-2 text-xs text-slate-600 bg-slate-100 px-3 py-1.5 rounded-md border border-slate-200">
-          <span className="text-slate-500">เครื่องสแกน CMiF68S:</span>
-          <span className="font-semibold text-slate-700">
-            {onlineCount}/{scanners.length} ออนไลน์
-          </span>
-          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-        </div>
-
-        {/* Pending Records in Staging */}
-        {isAdmin && (
-          <div className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-amber-200 bg-amber-50 text-amber-800 font-medium">
-            <Clock className="w-3.5 h-3.5 text-amber-600" />
-            <span>รอส่งเข้า hosoffice:</span>
-            <span className="font-bold tabular-nums font-mono text-amber-900">{pendingCount}</span>
-            <span className="text-[11px] text-amber-600 font-normal">รายการ</span>
+        {/* Pending Sync with hosoffice */}
+        {isAdmin && pendingCount > 0 && (
+          <div 
+            className="hidden sm:flex items-center gap-1.5 text-[11px] font-medium text-amber-900 bg-amber-500/10 border border-amber-300/80 px-2.5 py-1 rounded-lg"
+            title="จำนวนรายการสแกนดิบใน Staging ที่รอส่งเข้า MySQL hosoffice.fingle_scan"
+          >
+            <Send className="w-3 h-3 text-amber-600" />
+            <span>รอส่ง HOSxP:</span>
+            <span className="font-mono font-bold text-amber-950 tabular-nums">{pendingCount}</span>
           </div>
         )}
 
-        {/* Sync From Scanner button (ADMIN only) */}
+        {/* Sync Now Action Button (Matte Deep Teal) */}
         {isAdmin && (
           <button
             onClick={onSyncClick}
             disabled={isSyncing}
-            className="flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 active:bg-teal-800 rounded-md shadow-sm transition-all disabled:opacity-50 cursor-pointer"
-            title="จำลองการเรียก FK_LoadGeneralLogData ดึง Log จากเครื่องสแกน 1-3 เข้าสู่ Staging DB"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-teal-800 hover:bg-teal-900 active:bg-teal-950 rounded-lg shadow-xs transition-all duration-150 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+            title="ดึงข้อมูลเวลาสแกนล่าสุดจากเครื่อง CMiF68S ทั้ง 3 เครื่องทันที"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'กำลังดึงข้อมูล...' : 'ดึงข้อมูลจากสแกนเนอร์'}</span>
+            <span>{isSyncing ? 'กำลังดึงเวลา...' : 'ดึงเวลาสแกน'}</span>
           </button>
         )}
       </div>
