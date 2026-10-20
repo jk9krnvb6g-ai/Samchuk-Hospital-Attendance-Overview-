@@ -607,11 +607,56 @@ class ApiClientService {
   }
 
   /**
-   * ดึงข้อมูลสแกน (attendance_raw_scan) จาก MySQL โดยตรง
+   * ดึงข้อมูลสแกน (attendance_raw_scan) จาก MySQL โดยตรง (รองรับค้นหา, ช่วงวันที่, หรือจำกัดจำนวน)
    */
-  public async getRawScansFromDb(limit: number = 200) {
+  public async getRawScansFromDb(params?: number | {
+    limit?: number;
+    search?: string;
+    fingleId?: number;
+    personId?: number;
+    date?: string;
+    month?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    machineNo?: number | string;
+    pushStatus?: string;
+  }) {
     try {
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans?limit=${limit}`);
+      let queryStr = '';
+      if (typeof params === 'number') {
+        queryStr = `limit=${params}`;
+      } else if (params && typeof params === 'object') {
+        const qp = new URLSearchParams();
+        if (params.limit) qp.set('limit', String(params.limit));
+        if (params.search) qp.set('search', params.search);
+        if (params.fingleId) qp.set('fingleId', String(params.fingleId));
+        if (params.personId) qp.set('personId', String(params.personId));
+        if (params.date) qp.set('date', params.date);
+        if (params.month) qp.set('month', params.month);
+        if (params.dateFrom) qp.set('dateFrom', params.dateFrom);
+        if (params.dateTo) qp.set('dateTo', params.dateTo);
+        if (params.machineNo) qp.set('machineNo', String(params.machineNo));
+        if (params.pushStatus) qp.set('pushStatus', params.pushStatus);
+        queryStr = qp.toString();
+      } else {
+        queryStr = 'limit=5000';
+      }
+
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans?${queryStr}`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ลบรายการสแกนดิบ 1 รายการจาก MySQL (กรณีสแกนทดสอบหรือข้อมูลซ้ำ)
+   */
+  public async deleteRawScanFromDb(id: number | string) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/${id}`, {
+        method: 'DELETE'
+      });
       return await res.json();
     } catch (err: unknown) {
       return { success: false, message: err instanceof Error ? err.message : 'Failed' };
@@ -679,19 +724,6 @@ class ApiClientService {
     }
   }
 
-  /**
-   * ลบข้อมูลสแกน 1 รายการจาก MySQL
-   */
-  public async deleteRawScanFromDb(id: number) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/${id}`, {
-        method: 'DELETE'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
-  }
 
   /**
    * ล้างข้อมูลสแกนทั้งหมดใน MySQL

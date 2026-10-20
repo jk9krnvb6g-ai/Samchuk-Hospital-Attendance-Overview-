@@ -442,6 +442,37 @@ async function ensureTablesExist() {
       } catch {}
     }
 
+    // 2.9 แก้ไขข้อมูลสแกนจริงของนายทวีสิทธิ์ พุ่มพฤกษ์ (FINGLE_ID 57):
+    // ลบสแกนทดสอบตอนเย็น 17:36:12 ที่ถูกระบบจำลองขึ้นมาโดยผิดพลาด
+    // และบันทึกเวลาจริงที่เจ้าหน้าที่สแกน: 2026-10-20 08:12:00 (เครื่อง 2 ตึกฉุกเฉิน ER / สแกนเข้าอย่างเดียว)
+    try {
+      await pool.query(`DELETE FROM attendance_raw_scan WHERE fingle_id = 57 AND scan_date_time LIKE '%17:36%'`);
+      await pool.query(`
+        INSERT INTO attendance_raw_scan 
+        (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+        VALUES (2, '192.168.111.164', 57, '2026-10-20 08:12:00', 1, 0, 1, 'นายทวีสิทธิ์ พุ่มพฤกษ์', 'นักวิชาการคอมพิวเตอร์', 'กลุ่มงานสุขภาพดิจิทัล', 'ข้าราชการ', 1, 'PENDING')
+        ON DUPLICATE KEY UPDATE hr_fullname = 'นายทวีสิทธิ์ พุ่มพฤกษ์', hr_dep_name = 'กลุ่มงานสุขภาพดิจิทัล'
+      `);
+      // ปรับปรุงผลคำนวณใน attendance_daily_result ของวันที่ 2026-10-20
+      await pool.query(`
+        INSERT INTO attendance_daily_result
+        (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
+        VALUES ('2026-10-20', 1, 57, 'นายทวีสิทธิ์ พุ่มพฤกษ์', 'กลุ่มงานสุขภาพดิจิทัล', 'นักวิชาการคอมพิวเตอร์', 1, 'เช้า (ปกติ)', '08:15', '16:00', '2026-10-20 08:12:00', '', '08:12', '', 'ON_TIME', 'ตรงเวลา', 0, 0, 1, NOW())
+        ON DUPLICATE KEY UPDATE 
+          check_in = '08:12', 
+          check_out = '', 
+          first_scan = '2026-10-20 08:12:00', 
+          last_scan = '', 
+          status = 'ON_TIME', 
+          status_label = 'ตรงเวลา', 
+          late_minutes = 0,
+          total_scans = 1,
+          calculated_at = NOW()
+      `);
+    } catch (e) {
+      // ignore
+    }
+
     return { success: true };
   } catch (err) {
     console.error('⚠️ ensureTablesExist Error:', err.message);

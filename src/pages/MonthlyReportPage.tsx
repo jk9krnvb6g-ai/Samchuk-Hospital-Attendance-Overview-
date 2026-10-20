@@ -26,6 +26,7 @@ import {
   DailyPersonReport 
 } from '../services/attendanceStore';
 import { CustomSyncModal } from '../components/CustomSyncModal';
+import { PersonAttendanceDrillDownModal } from '../components/PersonAttendanceDrillDownModal';
 
 interface MonthlyReportPageProps {
   state: StoreState;
@@ -34,6 +35,13 @@ interface MonthlyReportPageProps {
 export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) => {
   // Mode selection: DAILY, MONTHLY, YEARLY, CUSTOM
   const [reportMode, setReportMode] = useState<AttendanceReportMode>('MONTHLY');
+  
+  // Person Drill Down Modal
+  const [personDrillDown, setPersonDrillDown] = useState<{
+    isOpen: boolean;
+    personId?: number;
+    fingleId?: number;
+  }>({ isOpen: false });
   
   // Date states
   const [selectedDay, setSelectedDay] = useState<string>('2026-10-14');
@@ -504,104 +512,178 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
         </p>
       </div>
 
-      {/* Dynamic Summary KPI Strip */}
+      {/* Dynamic Summary KPI Strip with Click-to-Drill-Down */}
       {reportMode === 'DAILY' ? (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 print:grid-cols-4">
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ALL')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer shadow-xs ${
+              statusFilter === 'ALL'
+                ? 'bg-teal-50/80 border-teal-500 ring-2 ring-teal-500/20'
+                : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+            }`}
+          >
             <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-              <span>เจ้าหน้าที่ทั้งหมด</span>
+              <span className="font-semibold">เจ้าหน้าที่ทั้งหมด</span>
               <Users className="w-4 h-4 text-slate-400" />
             </div>
             <div className="text-2xl font-bold text-slate-800 font-mono tabular-nums">
               {filteredDaily.length} <span className="text-xs font-normal text-slate-500">ท่าน</span>
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">ในหน่วยงานที่เลือก</div>
-          </div>
+            <div className="text-[11px] text-teal-700 font-medium mt-0.5">
+              คลิกเพื่อดูทั้งหมด ({dailyData.length} ท่าน)
+            </div>
+          </button>
 
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter(statusFilter === 'ON_TIME' ? 'ALL' : 'ON_TIME')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer shadow-xs ${
+              statusFilter === 'ON_TIME'
+                ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20'
+                : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/30'
+            }`}
+          >
             <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-              <span>ปกติ (ตรงเวลา)</span>
+              <span className="font-semibold">ปกติ (ตรงเวลา)</span>
               <CheckCircle className="w-4 h-4 text-emerald-600" />
             </div>
             <div className="text-2xl font-bold text-emerald-700 font-mono tabular-nums">
               {dailyOnTime} <span className="text-xs font-normal text-emerald-600">ท่าน</span>
             </div>
-            <div className="text-[11px] text-emerald-600 font-medium mt-0.5">
-              มาปฏิบัติงานรวม {dailyPresent} ท่าน
+            <div className="text-[11px] text-emerald-700 font-medium mt-0.5">
+              {statusFilter === 'ON_TIME' ? '✓ กำลังกรองเฉพาะตรงเวลา' : 'คลิกเพื่อกรองเฉพาะตรงเวลา'}
             </div>
-          </div>
+          </button>
 
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter(statusFilter === 'LATE' ? 'ALL' : 'LATE')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer shadow-xs ${
+              statusFilter === 'LATE'
+                ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/20'
+                : 'bg-white border-slate-200 hover:border-amber-300 hover:bg-amber-50/30'
+            }`}
+          >
             <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-              <span>มาสาย</span>
+              <span className="font-semibold">มาสาย (LATE)</span>
               <AlertCircle className="w-4 h-4 text-amber-500" />
             </div>
             <div className="text-2xl font-bold text-amber-700 font-mono tabular-nums">
               {dailyLate} <span className="text-xs font-normal text-amber-600">ท่าน</span>
             </div>
             <div className="text-[11px] text-amber-700 font-medium mt-0.5 font-mono">
-              หลังเกณฑ์เวลา 08:15 น.
+              {statusFilter === 'LATE' ? '✓ กำลังกรองเฉพาะคนสาย' : 'คลิกดูรายชื่อคนมาสาย'}
             </div>
-          </div>
+          </button>
 
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter(statusFilter === 'NO_SCAN' ? 'ALL' : 'NO_SCAN')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer shadow-xs ${
+              statusFilter === 'NO_SCAN'
+                ? 'bg-rose-50 border-rose-500 ring-2 ring-rose-500/20'
+                : 'bg-white border-slate-200 hover:border-rose-300 hover:bg-rose-50/30'
+            }`}
+          >
             <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-              <span>ไม่พบสแกน / ขาด</span>
+              <span className="font-semibold">ไม่พบสแกน / ขาด</span>
               <Clock className="w-4 h-4 text-rose-500" />
             </div>
             <div className="text-2xl font-bold text-rose-700 font-mono tabular-nums">
               {dailyNoScan} <span className="text-xs font-normal text-rose-600">ท่าน</span>
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">ไม่มีบันทึกสแกนในวันนี้</div>
-          </div>
+            <div className="text-[11px] text-rose-700 font-medium mt-0.5">
+              {statusFilter === 'NO_SCAN' ? '✓ กำลังกรองไม่พบสแกน' : 'คลิกดูคนที่ยังไม่สแกน'}
+            </div>
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 print:grid-cols-4">
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ALL')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer shadow-xs ${
+              statusFilter === 'ALL'
+                ? 'bg-teal-50/80 border-teal-500 ring-2 ring-teal-500/20'
+                : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+            }`}
+          >
             <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-              <span>เจ้าหน้าที่ในรายงาน</span>
+              <span className="font-semibold">เจ้าหน้าที่ในรายงาน</span>
               <Users className="w-4 h-4 text-slate-400" />
             </div>
             <div className="text-2xl font-bold text-slate-800 font-mono tabular-nums">
               {filteredSummary.length} <span className="text-xs font-normal text-slate-500">ท่าน</span>
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">ในหน่วยงานที่เลือก</div>
-          </div>
+            <div className="text-[11px] text-teal-700 font-medium mt-0.5">
+              คลิกเพื่อดูทั้งหมด ({summaryData.length} ท่าน)
+            </div>
+          </button>
 
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter(statusFilter === 'WORKED' ? 'ALL' : 'WORKED')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer shadow-xs ${
+              statusFilter === 'WORKED'
+                ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20'
+                : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/30'
+            }`}
+          >
             <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-              <span>รวมวันปฏิบัติงานจริง</span>
+              <span className="font-semibold">รวมวันปฏิบัติงานจริง</span>
               <CheckCircle className="w-4 h-4 text-emerald-600" />
             </div>
             <div className="text-2xl font-bold text-emerald-700 font-mono tabular-nums">
               {totalDaysWorked.toLocaleString()} <span className="text-xs font-normal text-emerald-600">วัน</span>
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">นับเฉพาะวันที่มีสแกน IN/OUT</div>
-          </div>
+            <div className="text-[11px] text-slate-500 mt-0.5">
+              {statusFilter === 'WORKED' ? '✓ กำลังกรองคนมีวันทำงาน' : 'คลิกกรองเฉพาะผู้มีสแกน'}
+            </div>
+          </button>
 
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter(statusFilter === 'LATE' ? 'ALL' : 'LATE')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer shadow-xs ${
+              statusFilter === 'LATE'
+                ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/20'
+                : 'bg-white border-slate-200 hover:border-amber-300 hover:bg-amber-50/30'
+            }`}
+          >
             <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-              <span>สถิติมาสายรวม</span>
+              <span className="font-semibold">สถิติมาสายรวม</span>
               <AlertCircle className="w-4 h-4 text-amber-500" />
             </div>
             <div className="text-2xl font-bold text-amber-700 font-mono tabular-nums">
               {totalLateCount.toLocaleString()} <span className="text-xs font-normal text-amber-600">ครั้ง</span>
             </div>
             <div className="text-[11px] text-amber-700 font-medium mt-0.5 font-mono">
-              รวมสายทั้งสิ้น {totalLateMinutes.toLocaleString()} นาที
+              {statusFilter === 'LATE' ? '✓ รวมสาย ' + totalLateMinutes.toLocaleString() + ' นาที' : 'คลิกกรองเฉพาะผู้มีประวัติสาย'}
             </div>
-          </div>
+          </button>
 
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter(statusFilter === 'OT' ? 'ALL' : 'OT')}
+            className={`p-4 rounded-xl border text-left transition-all cursor-pointer shadow-xs ${
+              statusFilter === 'OT'
+                ? 'bg-teal-50 border-teal-500 ring-2 ring-teal-500/20'
+                : 'bg-white border-slate-200 hover:border-teal-300 hover:bg-teal-50/30'
+            }`}
+          >
             <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-              <span>รวมชั่วโมง OT ทั้งสิ้น</span>
+              <span className="font-semibold">รวมชั่วโมง OT ทั้งสิ้น</span>
               <Award className="w-4 h-4 text-teal-600" />
             </div>
             <div className="text-2xl font-bold text-teal-700 font-mono tabular-nums">
               {totalOtHours.toFixed(1)} <span className="text-xs font-normal text-teal-600">ชม.</span>
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">สำหรับส่งฝ่ายการเงินเบิกจ่าย</div>
-          </div>
+            <div className="text-[11px] text-teal-700 font-medium mt-0.5">
+              {statusFilter === 'OT' ? '✓ กำลังกรองเฉพาะคนมี OT' : 'คลิกกรองเฉพาะผู้มี OT'}
+            </div>
+          </button>
         </div>
       )}
 
@@ -693,15 +775,25 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
               </thead>
               <tbody className="divide-y divide-slate-100 font-sans">
                 {filteredDaily.map((row) => (
-                  <tr key={`daily-${row.personId}`} className="hover:bg-slate-50">
+                  <tr 
+                    key={`daily-${row.personId}`} 
+                    onClick={() => setPersonDrillDown({ isOpen: true, personId: row.personId, fingleId: row.fingleId })}
+                    className="hover:bg-teal-50/70 transition-colors cursor-pointer group"
+                    title="คลิกเพื่อดูประวัติการสแกนและปฏิทินเวลาของเจ้าหน้าที่ท่านนี้แบบเจาะลึก"
+                  >
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
-                      {row.fingleId}
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 group-hover:bg-teal-100 group-hover:text-teal-900 border border-slate-200 transition-colors">
+                        {row.fingleId}
+                      </span>
                     </td>
                     <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap text-[11px]">
                       {row.hrCid}
                     </td>
                     <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">
-                      {row.hrFullname}
+                      <div className="flex items-center gap-1.5">
+                        <span className="group-hover:text-teal-800 transition-colors">{row.hrFullname}</span>
+                        <span className="opacity-0 group-hover:opacity-100 text-[10px] text-teal-600 font-normal transition-opacity">🔍</span>
+                      </div>
                       <div className="text-[10px] text-slate-500 font-normal">{row.hrPersonTypeName}</div>
                     </td>
                     <td className="py-2.5 px-3 text-slate-600">
@@ -772,15 +864,25 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
               </thead>
               <tbody className="divide-y divide-slate-100 font-sans">
                 {filteredSummary.map((row, rowIdx) => (
-                  <tr key={`${row.personId}-${rowIdx}`} className="hover:bg-slate-50">
+                  <tr 
+                    key={`${row.personId}-${rowIdx}`} 
+                    onClick={() => setPersonDrillDown({ isOpen: true, personId: row.personId, fingleId: row.fingleId })}
+                    className="hover:bg-teal-50/70 transition-colors cursor-pointer group"
+                    title="คลิกเพื่อดูประวัติการสแกนและปฏิทินเวลาของเจ้าหน้าที่ท่านนี้แบบเจาะลึก"
+                  >
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
-                      {row.fingleId}
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 group-hover:bg-teal-100 group-hover:text-teal-900 border border-slate-200 transition-colors">
+                        {row.fingleId}
+                      </span>
                     </td>
                     <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap text-[11px]">
                       {row.hrCid}
                     </td>
                     <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">
-                      {row.hrFullname}
+                      <div className="flex items-center gap-1.5">
+                        <span className="group-hover:text-teal-800 transition-colors">{row.hrFullname}</span>
+                        <span className="opacity-0 group-hover:opacity-100 text-[10px] text-teal-600 font-normal transition-opacity">🔍</span>
+                      </div>
                       <div className="text-[10px] text-slate-500 font-normal">{row.hrPersonTypeName}</div>
                     </td>
                     <td className="py-2.5 px-3 text-slate-600">
@@ -840,6 +942,17 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
         onSyncComplete={(msg) => {
           setActionMsg({ type: 'success', text: msg });
         }}
+      />
+
+      {/* Employee Attendance Drill-Down Modal (Requirement 1 & 4) */}
+      <PersonAttendanceDrillDownModal
+        isOpen={personDrillDown.isOpen}
+        onClose={() => setPersonDrillDown(prev => ({ ...prev, isOpen: false }))}
+        personId={personDrillDown.personId}
+        fingleId={personDrillDown.fingleId}
+        month={selectedMonth}
+        date={selectedDay}
+        rawScans={state.rawScans}
       />
     </div>
   );

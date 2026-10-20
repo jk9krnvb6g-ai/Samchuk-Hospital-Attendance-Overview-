@@ -100,11 +100,11 @@ export const INITIAL_PERSONNEL: HrPerson[] = [
     personId: 1,
     hrCid: '3-7204-00123-45-6',
     fingleId: 57,
-    hrFullname: 'นพ. กิตติภูมิ นวมินทร์',
-    hrPositionName: 'นายแพทย์เชี่ยวชาญ',
-    hrLevelName: 'เชี่ยวชาญ',
-    hrDepName: 'กลุ่มงานการแพทย์',
-    hrDepSubName: 'กลุ่มงานอายุรกรรม',
+    hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์',
+    hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrLevelName: 'ปฏิบัติการ',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล',
+    hrDepSubName: 'งานเทคโนโลยีและสารสนเทศทางการแพทย์',
     hrPersonTypeName: 'ข้าราชการ',
     hrPersonTypeId: 1,
     hrDepartmentId: 101,
@@ -249,20 +249,71 @@ export const INITIAL_PERSONNEL: HrPerson[] = [
 ];
 
 export const SEED_TEST_SCANS: RawScan[] = [
-  // 1. นพ. กิตติภูมิ (ข้าราชการ - กะเช้า 08:15-16:00) -> เข้า 08:08, ออก 16:15 -> ผล: "ตรงเวลา"
+  // 1. นายทวีสิทธิ์ พุ่มพฤกษ์ (นักวิชาการคอมพิวเตอร์ - FINGLE_ID 57)
+  // วันที่ 2026-10-20 สแกนตอน 08:12:00 ครั้งเดียว (ตรงเวลา ก่อน 08:15)
   {
-    id: 1, machineNo: 1, deviceIp: '192.168.111.163', fingleId: 57,
-    scanDateTime: '2026-10-14 08:08:12', verifyMode: 1, inOutMode: 0,
-    personId: 1, hrFullname: 'นพ. กิตติภูมิ นวมินทร์', hrPositionName: 'นายแพทย์เชี่ยวชาญ',
-    hrDepName: 'กลุ่มงานการแพทย์', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
-    pushStatus: 'PENDING', receivedAt: '2026-10-14 08:08:20'
+    id: 1001, machineNo: 2, deviceIp: '192.168.111.164', fingleId: 57,
+    scanDateTime: '2026-10-20 08:12:00', verifyMode: 1, inOutMode: 0,
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PENDING', receivedAt: '2026-10-20 08:12:05'
+  },
+  // ประวัติการสแกนย้อนหลังตลอดทั้งเดือน ตุลาคม 2569 ของนายทวีสิทธิ์ พุ่มพฤกษ์ (FINGLE_ID 57)
+  {
+    id: 1002, machineNo: 1, deviceIp: '192.168.111.163', fingleId: 57,
+    scanDateTime: '2026-10-19 08:05:14', verifyMode: 1, inOutMode: 0,
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PUSHED', receivedAt: '2026-10-19 08:05:20'
   },
   {
-    id: 2, machineNo: 1, deviceIp: '192.168.111.163', fingleId: 57,
+    id: 1003, machineNo: 1, deviceIp: '192.168.111.163', fingleId: 57,
+    scanDateTime: '2026-10-19 16:30:22', verifyMode: 1, inOutMode: 1,
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PUSHED', receivedAt: '2026-10-19 16:30:30'
+  },
+  {
+    id: 1004, machineNo: 2, deviceIp: '192.168.111.164', fingleId: 57,
+    scanDateTime: '2026-10-16 08:10:45', verifyMode: 1, inOutMode: 0,
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PUSHED', receivedAt: '2026-10-16 08:10:50'
+  },
+  {
+    id: 1005, machineNo: 2, deviceIp: '192.168.111.164', fingleId: 57,
+    scanDateTime: '2026-10-16 16:45:10', verifyMode: 1, inOutMode: 1,
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PUSHED', receivedAt: '2026-10-16 16:45:15'
+  },
+  {
+    id: 1006, machineNo: 1, deviceIp: '192.168.111.163', fingleId: 57,
+    scanDateTime: '2026-10-15 08:08:30', verifyMode: 1, inOutMode: 0,
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PUSHED', receivedAt: '2026-10-15 08:08:35'
+  },
+  {
+    id: 1007, machineNo: 1, deviceIp: '192.168.111.163', fingleId: 57,
+    scanDateTime: '2026-10-15 16:35:10', verifyMode: 1, inOutMode: 1,
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PUSHED', receivedAt: '2026-10-15 16:35:15'
+  },
+  {
+    id: 1008, machineNo: 1, deviceIp: '192.168.111.163', fingleId: 57,
+    scanDateTime: '2026-10-14 08:08:12', verifyMode: 1, inOutMode: 0,
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PUSHED', receivedAt: '2026-10-14 08:08:20'
+  },
+  {
+    id: 1009, machineNo: 1, deviceIp: '192.168.111.163', fingleId: 57,
     scanDateTime: '2026-10-14 16:15:30', verifyMode: 1, inOutMode: 1,
-    personId: 1, hrFullname: 'นพ. กิตติภูมิ นวมินทร์', hrPositionName: 'นายแพทย์เชี่ยวชาญ',
-    hrDepName: 'กลุ่มงานการแพทย์', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
-    pushStatus: 'PENDING', receivedAt: '2026-10-14 16:15:35'
+    personId: 1, hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+    hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrPersonTypeName: 'ข้าราชการ', hrMapped: true,
+    pushStatus: 'PUSHED', receivedAt: '2026-10-14 16:15:35'
   },
 
   // 2. ภญ. กรกนก (ข้าราชการ - กะเช้า 08:15-16:00) -> เข้า 08:27, ออก 16:20 -> ผล: "สาย 12 นาที" (เกิน 08:15 ไป 12 นาที)
