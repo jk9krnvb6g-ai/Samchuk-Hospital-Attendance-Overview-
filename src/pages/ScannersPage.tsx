@@ -29,6 +29,7 @@ import {
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { Scanner } from '../types/attendance';
 import { apiClient } from '../services/apiClient';
+import { CustomSyncModal } from '../components/CustomSyncModal';
 
 interface ScannersPageProps {
   state: StoreState;
@@ -68,6 +69,7 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
 
   // Scanner CRUD Modal State
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState<boolean>(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
   const [deleteConfirmScanner, setDeleteConfirmScanner] = useState<Scanner | null>(null);
 
@@ -440,6 +442,15 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
               </button>
             </>
           )}
+
+          <button
+            onClick={() => setIsSyncModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition-colors"
+            title="กำหนดเครื่องสแกนและช่วงเวลา/วัน/เดือน/ปี ที่ต้องการดึงข้อมูล"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>⚡ ดึงข้อมูลตามเงื่อนไข (กำหนดเครื่อง/วันที่)</span>
+          </button>
 
           <button
             onClick={onSync}
@@ -1554,6 +1565,19 @@ public static extern int FK_ConnectNet(int anMachineNo, string astrIpAddress, in
           </div>
         </div>
       )}
+
+      {/* Custom Sync Modal */}
+      <CustomSyncModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        onSyncComplete={(msg) => {
+          setTestResult({
+            machineNo: 1,
+            success: true,
+            message: msg
+          });
+        }}
+      />
     </div>
   );
 };

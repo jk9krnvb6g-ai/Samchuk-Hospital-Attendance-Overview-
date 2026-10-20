@@ -11,6 +11,7 @@ import {
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { PushStatus, RawScan } from '../types/attendance';
 import { QuickMapModal } from '../components/QuickMapModal';
+import { CustomSyncModal } from '../components/CustomSyncModal';
 
 interface RawScansPageProps {
   state: StoreState;
@@ -30,6 +31,7 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [machineFilter, setMachineFilter] = useState<string>('ALL');
   const [selectedDate, setSelectedDate] = useState<string>('');
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   
   // Quick Map State
   const [quickMapScan, setQuickMapScan] = useState<RawScan | null>(null);
@@ -145,15 +147,26 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
           </button>
 
           {isAdmin && (
-            <button
-              onClick={onSync}
-              disabled={isSyncing}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
-              title="ดึงข้อมูลจากเครื่องสแกนและบันทึกลง MySQL attendance_raw_scan ทันที"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'กำลังดึง...' : '⚡ ดึง Log เข้า MySQL'}</span>
-            </button>
+            <>
+              <button
+                onClick={() => setIsSyncModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer"
+                title="เลือกเครื่องสแกนและกำหนดช่วงเวลา/วัน/เดือน/ปี ที่ต้องการดึงข้อมูล"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>⚡ ดึงข้อมูลตามเงื่อนไข (กำหนดเครื่อง/วันที่)</span>
+              </button>
+
+              <button
+                onClick={onSync}
+                disabled={isSyncing}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer"
+                title="ดึงข้อมูลจากเครื่องสแกนและบันทึกลง MySQL attendance_raw_scan ทันที"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'กำลังดึง...' : 'ดึงด่วน'}</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -335,13 +348,15 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
         />
       )}
 
-      {/* Success Notification Alert */}
-      {mapSuccessNotice && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 bg-emerald-900 text-white text-xs px-5 py-3 rounded-xl shadow-xl border border-emerald-700 flex items-center gap-3">
-          <CheckCircle className="w-4 h-4 text-emerald-400" />
-          <span>{mapSuccessNotice}</span>
-        </div>
-      )}
+      {/* Custom Sync Modal */}
+      <CustomSyncModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        onSyncComplete={(msg) => {
+          setMapSuccessNotice(`✓ ${msg}`);
+          setTimeout(() => setMapSuccessNotice(null), 6000);
+        }}
+      />
     </div>
   );
 };

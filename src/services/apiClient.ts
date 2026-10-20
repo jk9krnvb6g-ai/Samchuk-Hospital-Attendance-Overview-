@@ -359,18 +359,48 @@ class ApiClientService {
   /**
    * นำเข้าข้อมูลประวัติสแกนดิบจากตาราง hosoffice.fingle_scan เข้าสู่ attendance_raw_scan
    */
-  public async importScansFromHosoffice(limit: number = 5000) {
+  public async importScansFromHosoffice(options: number | { limit?: number; dateFrom?: string; dateTo?: string; month?: string; year?: string } = 5000) {
     try {
+      const payload = typeof options === 'number' ? { limit: options } : options;
       const res = await fetch(`${this.customBaseUrl}/api/scans/import-from-hosoffice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ limit })
+        body: JSON.stringify(payload)
       });
       return await res.json();
     } catch (err: unknown) {
       return {
         success: false,
         message: this.getFriendlyFetchError(err, 'Backend API (Hosoffice Import)')
+      };
+    }
+  }
+
+  /**
+   * ดึงข้อมูลสแกนแบบกำหนดเอง (Custom Scanner Sync: เลือกเครื่องสแกน, วันที่, ช่วงเวลา, รายเดือน, รายปี)
+   */
+  public async syncScannersCustom(payload: {
+    machineNos?: number[] | 'ALL';
+    mode?: 'TODAY' | 'DATE' | 'RANGE' | 'MONTH' | 'YEAR';
+    date?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    month?: string;
+    year?: string;
+    allPersonnel?: boolean;
+    recalculate?: boolean;
+  }) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/scanners/sync-custom`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: this.getFriendlyFetchError(err, 'Backend API (Custom Scanner Sync)')
       };
     }
   }

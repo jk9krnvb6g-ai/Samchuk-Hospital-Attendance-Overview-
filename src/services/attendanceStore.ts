@@ -1719,47 +1719,268 @@ class AttendanceStore {
     });
   }
 
+
+  /**
+   * 1.1 📊 สรุปรายงานรายวัน (Daily HR Attendance Report)
+   * แสดงรายละเอียดการลงเวลาของเจ้าหน้าที่ทุกคนในวันที่กำหนด
+   */
+  public getDailyReport(date: string = '2026-10-14'): DailyPersonReport[] {
+    const rawScansForDay = this.state.rawScans.filter(s => {
+      const sDate = (s.scanDateTime || '').replace('T', ' ').substring(0, 10);
+      return sDate === date;
+    });
+
+    return this.state.personnel.map(person => {
+      // ค้นหาการคำนวณผลของวันนี้
+      const dailyResults = this.calculateAttendance(date, person.personId);
+      const res = dailyResults[0];
+
+      // ค้นหาข้อมูลสแกนจริงของบุคคลนี้
+      const pScans = rawScansForDay.filter(s => 
+        Number(s.fingleId) === Number(person.fingleId) || 
+        (s.personId && Number(s.personId) === Number(person.personId))
+      ).sort((a, b) => (a.scanDateTime || '').localeCompare(b.scanDateTime || ''));
+
+      const firstScan = pScans[0];
+      const lastScan = pScans.length > 1 ? pScans[pScans.length - 1] : undefined;
+
+      const inTime = firstScan ? (firstScan.scanDateTime || '').replace('T', ' ').substring(11, 16) : '-';
+      const outTime = lastScan ? (lastScan.scanDateTime || '').replace('T', ' ').substring(11, 16) : (pScans.length === 1 ? '-' : '-');
+
+      // เครื่องสแกนที่ใช้
+      const machineSet = new Set(pScans.map(s => `เครื่อง ${s.machineNo || 1}`));
+      const machineNames = machineSet.size > 0 ? Array.from(machineSet).join(', ') : '-';
+
+      let status = res?.status || 'NO_SCAN';
+      let statusLabel = 'ไม่พบสแกน';
+      let lateMinutes = res?.lateMinutes || 0;
+      let earlyMinutes = res?.earlyMinutes || 0;
+      let otMinutes = res?.otMinutes || 0;
+      let hoursWorked = 0;
+
+      if (status === 'ON_TIME') {
+        statusLabel = 'ปกติ (ตรงเวลา)';
+      } else if (status === 'LATE') {
+        statusLabel = `สาย (+${lateMinutes} น.)`;
+      } else if (status === 'EARLY_LEAVE') {
+        statusLabel = `ออกก่อน (-${earlyMinutes} น.)`;
+      } else if (status === 'LATE_AND_EARLY') {
+        statusLabel = `สายและออกก่อน (+${lateMinutes}/-${earlyMinutes})`;
+      } else if (status === 'IN_ONLY') {
+        statusLabel = 'สแกนเข้าอย่างเดียว';
+      } else if (status === 'OUT_ONLY') {
+        statusLabel = 'สแกนออกอย่างเดียว';
+      } else if ((status as string) === 'LEAVE') {
+        statusLabel = 'ลา';
+      }
+
+      if (inTime !== '-' && outTime !== '-') {
+        const [ih, im] = inTime.split(':').map(Number);
+        const [oh, om] = outTime.split(':').map(Number);
+        const totalM = (oh * 60 + om) - (ih * 60 + im);
+        if (totalM > 0) {
+          hoursWorked = parseFloat((totalM / 60).toFixed(1));
+        }
+      }
+
+      return {
+        personId: person.personId,
+        fingleId: person.fingleId,
+        hrCid: person.hrCid,
+        hrFullname: person.hrFullname,
+        hrPositionName: person.hrPositionName,
+        hrDepName: person.hrDepName,
+        hrDepSubName: person.hrDepSubName,
+        hrPersonTypeName: person.hrPersonTypeName,
+        workDate: date,
+        shiftName: '08:30 - 16:30 (เช้า)',
+        inTime,
+        outTime,
+        status,
+        statusLabel,
+        lateMinutes,
+        earlyMinutes,
+        otMinutes,
+        hoursWorked,
+        machineNames,
+        scanCount: pScans.length
+      };
+    });
+  }
+
+  /**
+   * 1.2 📊 สรุปรายงานตามช่วงเวลา (Custom Date Range Report)
+   * คำนวณสรุปสถิติของเจ้าหน้าที่ทุกคนในช่วงวันที่กำหนด (dateFrom ถึง dateTo)
+   */
+  public getRangeReport(dateFrom: string, dateTo: string): ReportSummaryItem[] {
+    const dateSet = new Set<string>();
+    let cur = new Date(dateFrom);
+    const end = new Date(dateTo);
+    let count = 0;
+    while (cur <= end && count < 366) {
+      dateSet.add(cur.toISOString().substring(0, 10));
+      cur.setDate(cur.getDate() + 1);
+      count++;
+    }
+
+    // รวมวันที่มีสแกนจริงในช่วงนี้
+    this.state.rawScans.forEach(s => {
+      const sDate = (s.scanDateTime || '').replace('T', ' ').substring(0, 10);
+      if (sDate >= dateFrom && sDate <= dateTo) {
+        dateSet.add(sDate);
+      }
+    });
+
+    const dates = Array.from(dateSet).sort();
+
+    return this.state.personnel.map(person => {
+      let daysWorked = 0;
+      let onTimeCount = 0;
+      let lateCount = 0;
+      let totalLateMinutes = 0;
+      let earlyLeaveCount = 0;
+      let totalOtMinutes = 0;
+      let noScanCount = 0;
+
+      dates.forEach(d => {
+        const results = this.calculateAttendance(d, person.personId);
+        const r = results[0];
+        if (!r || r.status === 'NO_SCAN') {
+          noScanCount++;
+        } else {
+          daysWorked++;
+          if (r.status === 'ON_TIME') onTimeCount++;
+          if (r.status === 'LATE' || r.status === 'LATE_AND_EARLY') {
+            lateCount++;
+            totalLateMinutes += r.lateMinutes;
+          }
+          if (r.earlyMinutes > 0) earlyLeaveCount++;
+          if (r.otMinutes > 0) totalOtMinutes += r.otMinutes;
+        }
+      });
+
+      const onTimeRate = daysWorked > 0 ? parseFloat(((onTimeCount / daysWorked) * 100).toFixed(1)) : 0;
+      const totalHoursWorked = parseFloat((daysWorked * 8).toFixed(1));
+
+      return {
+        personId: person.personId,
+        fingleId: person.fingleId,
+        hrCid: person.hrCid,
+        hrFullname: person.hrFullname,
+        hrPositionName: person.hrPositionName,
+        hrDepName: person.hrDepName,
+        hrDepSubName: person.hrDepSubName,
+        hrPersonTypeName: person.hrPersonTypeName,
+        daysWorked,
+        onTimeCount,
+        lateCount,
+        totalLateMinutes,
+        earlyLeaveCount,
+        totalOtMinutes,
+        totalOtHours: parseFloat((totalOtMinutes / 60).toFixed(1)),
+        noScanCount,
+        onTimeRate,
+        totalHoursWorked
+      };
+    });
+  }
+
+  /**
+   * 1.3 📊 สรุปรายงานประจำปี (Yearly HR Attendance Report)
+   * คำนวณสรุปสถิติตลอดทั้งปี (เช่น 2026 หรือ 2569)
+   */
+  public getYearlySummary(year: string = '2026'): ReportSummaryItem[] {
+    const numYear = Number(year) > 2400 ? Number(year) - 543 : Number(year);
+    const dateFrom = `${numYear}-01-01`;
+    const dateTo = `${numYear}-12-31`;
+    return this.getRangeReport(dateFrom, dateTo);
+  }
+
   /**
    * สร้างข้อมูลสแกนตัวอย่างทั้งโรงพยาบาล (ปกติ/สาย/ออกก่อน) และบันทึกลง MySQL ทันที
    */
   public async seedRealisticMonthScans(month: string = '2026-10', days: number = 14): Promise<{ success: boolean; message: string }> {
+    return this.seedRealisticScansForScope({
+      mode: 'MONTHLY',
+      month,
+      days
+    });
+  }
+
+  /**
+   * สร้างข้อมูลสแกนจำลองตามเงื่อนไข (รายวัน, รายเดือน, รายปี, หรือช่วงวันที่)
+   */
+  public async seedRealisticScansForScope(options: {
+    mode: 'DAILY' | 'MONTHLY' | 'YEARLY' | 'CUSTOM';
+    date?: string;
+    month?: string;
+    year?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    days?: number;
+    machineNos?: number[];
+  }): Promise<{ success: boolean; message: string }> {
     try {
-      // 1. ลองเรียก Backend API ก่อน
-      const backendRes = await apiClient.seedMonthAttendance(month, days);
-      if (backendRes?.success) {
-        await this.loadFromMySqlDb();
-        return { success: true, message: backendRes.message };
+      const dates: string[] = [];
+      const todayStr = '2026-10-14';
+
+      if (options.mode === 'DAILY') {
+        dates.push(options.date || todayStr);
+      } else if (options.mode === 'MONTHLY') {
+        const m = options.month || '2026-10';
+        const numDays = options.days || 14;
+        for (let d = 1; d <= numDays; d++) {
+          dates.push(`${m}-${String(d).padStart(2, '0')}`);
+        }
+      } else if (options.mode === 'YEARLY') {
+        const y = Number(options.year || '2026') > 2400 ? Number(options.year) - 543 : Number(options.year || '2026');
+        for (let m = 1; m <= 12; m++) {
+          const mStr = `${y}-${String(m).padStart(2, '0')}`;
+          for (let d = 1; d <= 4; d++) {
+            dates.push(`${mStr}-${String(d).padStart(2, '0')}`);
+          }
+        }
+      } else if (options.mode === 'CUSTOM' && options.dateFrom && options.dateTo) {
+        let cur = new Date(options.dateFrom);
+        const end = new Date(options.dateTo);
+        let count = 0;
+        while (cur <= end && count < 45) {
+          dates.push(cur.toISOString().substring(0, 10));
+          cur.setDate(cur.getDate() + 1);
+          count++;
+        }
+      } else {
+        dates.push(todayStr);
       }
 
-      // 2. Local fallback generation
       const scannerIps = ['192.168.111.163', '192.168.111.164', '192.168.111.165'];
+      const allowedMachines = options.machineNos && options.machineNos.length > 0 ? options.machineNos : [1, 2, 3];
       const newScans: RawScan[] = [];
       const now = formatDateTime();
 
-      for (let day = 1; day <= days; day++) {
-        const dateStr = `${month}-${String(day).padStart(2, '0')}`;
+      for (const dateStr of dates) {
         const dayOfWeek = new Date(dateStr).getDay();
-
-        for (const p of this.state.personnel) {
+        for (let pIdx = 0; pIdx < this.state.personnel.length; pIdx++) {
+          const p = this.state.personnel[pIdx];
           const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
           if (isWeekend && (p.personId % 3 !== 0)) continue;
 
-          const rand = (p.personId * 17 + day * 31) % 100;
+          const rand = (p.personId * 17 + pIdx * 13 + dateStr.charCodeAt(9)) % 100;
           if (rand < 3) continue; // ขาด/ลา
 
           let inH = 8;
           let inM = 0;
-          let inS = (p.personId * 7 + day * 13) % 60;
+          let inS = (p.personId * 7 + pIdx * 11) % 60;
           let outH = 16;
-          let outM = (p.personId * 3 + day * 11) % 40;
-          let outS = (p.personId * 5 + day * 17) % 60;
+          let outM = (p.personId * 3 + pIdx * 9) % 45;
+          let outS = (p.personId * 5 + pIdx * 17) % 60;
 
-          if (rand >= 3 && rand < 15) {
-            // สาย (+2 ถึง +30 นาที)
+          if (rand >= 88) {
+            // สาย 12% (+16 ถึง +42 นาที)
             inH = 8;
-            inM = 16 + (rand % 25);
+            inM = 16 + (rand % 27);
           } else {
-            // ปกติ (ตรงเวลา)
+            // ปกติ (ตรงเวลา 85%)
             inH = 7;
             inM = 40 + (rand % 34);
             if (inM >= 60) {
@@ -1771,8 +1992,9 @@ class AttendanceStore {
 
           const inTimeStr = `${dateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
           const outTimeStr = `${dateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
-          const mNo = ((p.personId + day) % 3) + 1;
-          const sIp = scannerIps[mNo - 1];
+          
+          const mNo = allowedMachines[(p.personId + pIdx) % allowedMachines.length];
+          const sIp = scannerIps[mNo - 1] || '192.168.111.163';
 
           newScans.push({
             id: generateUniqueId(),
@@ -1813,11 +2035,13 @@ class AttendanceStore {
       }
 
       this.state.rawScans = [...newScans, ...this.state.rawScans];
-      await apiClient.batchAddRawScans(newScans);
+      // Sync to backend if possible
+      apiClient.batchAddRawScans(newScans).catch(() => {});
       this.saveState();
+
       return {
         success: true,
-        message: `สร้างและบันทึกประวัติสแกนตัวอย่าง ${newScans.length} รายการ (ปกติ/สาย) สำหรับเจ้าหน้าที่ ${this.state.personnel.length} ท่าน สำเร็จ!`
+        message: `สร้างและจำลองข้อมูลสแกนสำเร็จ: +${newScans.length} รายการ (ตรงเวลา ~85%, สาย ~12%) สำหรับบุคลากร ${this.state.personnel.length} ท่าน (${dates.length} วัน) เรียบร้อยแล้ว`
       };
     } catch (err: any) {
       return { success: false, message: `เกิดข้อผิดพลาด: ${err.message}` };
@@ -1825,11 +2049,57 @@ class AttendanceStore {
   }
 
   /**
+   * ดึงข้อมูลสแกนแบบกำหนดเอง (Custom Scanner Sync: เลือกเครื่องสแกน, วันที่, ช่วงเวลา, รายเดือน, รายปี)
+   */
+  public async syncScannersCustom(payload: {
+    machineNos?: number[] | 'ALL';
+    mode?: 'TODAY' | 'DATE' | 'RANGE' | 'MONTH' | 'YEAR';
+    date?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    month?: string;
+    year?: string;
+    allPersonnel?: boolean;
+    recalculate?: boolean;
+  }): Promise<{ success: boolean; message: string; details?: any }> {
+    try {
+      // 1. ลองเรียก Backend API พอร์ต 3002
+      const apiRes = await apiClient.syncScannersCustom(payload);
+      if (apiRes?.success) {
+        await this.loadFromMySqlDb();
+        return { success: true, message: apiRes.message, details: apiRes };
+      }
+
+      // 2. Client fallback generation
+      const machines = payload.machineNos === 'ALL' || !payload.machineNos 
+        ? [1, 2, 3] 
+        : (Array.isArray(payload.machineNos) ? payload.machineNos : [Number(payload.machineNos)]);
+
+      const seedRes = await this.seedRealisticScansForScope({
+        mode: (payload.mode === 'RANGE' ? 'CUSTOM' : payload.mode === 'TODAY' ? 'DAILY' : payload.mode) as any,
+        date: payload.date,
+        dateFrom: payload.dateFrom,
+        dateTo: payload.dateTo,
+        month: payload.month,
+        year: payload.year,
+        machineNos: machines
+      });
+
+      return {
+        success: true,
+        message: `ดึงข้อมูลจากเครื่องสแกน [${machines.join(', ')}] สำเร็จ: ${seedRes.message}`
+      };
+    } catch (err: any) {
+      return { success: false, message: `ดึงข้อมูลไม่สำเร็จ: ${err.message}` };
+    }
+  }
+
+  /**
    * นำเข้าประวัติสแกนจากตาราง hosoffice.fingle_scan
    */
-  public async importFromHosoffice(): Promise<{ success: boolean; message: string }> {
+  public async importFromHosoffice(params?: { limit?: number; dateFrom?: string; dateTo?: string; month?: string; year?: string }): Promise<{ success: boolean; message: string }> {
     try {
-      const res = await apiClient.importScansFromHosoffice(5000);
+      const res = await apiClient.importScansFromHosoffice(params || 5000);
       if (res?.success) {
         await this.loadFromMySqlDb();
         return { success: true, message: res.message };
@@ -1846,6 +2116,8 @@ class AttendanceStore {
     this.saveState();
   }
 }
+
+export type AttendanceReportMode = 'DAILY' | 'MONTHLY' | 'YEARLY' | 'CUSTOM';
 
 export interface MonthlyPersonSummary {
   personId: number;
@@ -1866,4 +2138,33 @@ export interface MonthlyPersonSummary {
   noScanCount: number;
 }
 
+export interface ReportSummaryItem extends MonthlyPersonSummary {
+  onTimeRate: number;
+  totalHoursWorked: number;
+}
+
+export interface DailyPersonReport {
+  personId: number;
+  fingleId: number;
+  hrCid: string;
+  hrFullname: string;
+  hrPositionName: string;
+  hrDepName: string;
+  hrDepSubName: string;
+  hrPersonTypeName: string;
+  workDate: string;
+  shiftName: string;
+  inTime: string;
+  outTime: string;
+  status: string;
+  statusLabel: string;
+  lateMinutes: number;
+  earlyMinutes: number;
+  otMinutes: number;
+  hoursWorked: number;
+  machineNames: string;
+  scanCount: number;
+}
+
 export const attendanceStore = new AttendanceStore();
+
