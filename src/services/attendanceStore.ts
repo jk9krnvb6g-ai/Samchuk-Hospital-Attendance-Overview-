@@ -58,6 +58,74 @@ export function getDayType(dateStr: string): { id: number; name: string } {
   return dayTypes[day] || { id: 1, name: 'อาทิตย์' };
 }
 
+export function getStatusBadgeInfo(status: DailyResult['status'], lateMinutes = 0, earlyMinutes = 0): {
+  label: string;
+  shortLabel: string;
+  colorClass: string;
+  bgClass: string;
+  borderClass: string;
+} {
+  switch (status) {
+    case 'ON_TIME':
+      return {
+        label: 'ปกติ (ตรงเวลา)',
+        shortLabel: 'ปกติ',
+        colorClass: 'text-emerald-700 font-bold',
+        bgClass: 'bg-emerald-50 text-emerald-800',
+        borderClass: 'border-emerald-200'
+      };
+    case 'LATE':
+      return {
+        label: `สาย ${lateMinutes > 0 ? `+${lateMinutes} นาที` : ''}`,
+        shortLabel: 'สาย',
+        colorClass: 'text-amber-800 font-bold',
+        bgClass: 'bg-amber-50 text-amber-900',
+        borderClass: 'border-amber-300'
+      };
+    case 'LATE_AND_EARLY':
+      return {
+        label: `สาย (${lateMinutes}น.) & ออกก่อน (${earlyMinutes}น.)`,
+        shortLabel: 'สาย & ออกก่อน',
+        colorClass: 'text-rose-700 font-bold',
+        bgClass: 'bg-rose-50 text-rose-900',
+        borderClass: 'border-rose-200'
+      };
+    case 'EARLY_LEAVE':
+      return {
+        label: `ออกก่อนเวลา (${earlyMinutes} นาที)`,
+        shortLabel: 'ออกก่อน',
+        colorClass: 'text-rose-700 font-bold',
+        bgClass: 'bg-rose-50 text-rose-900',
+        borderClass: 'border-rose-200'
+      };
+    case 'IN_ONLY':
+      return {
+        label: 'สแกนเข้า (รอสแกนออก)',
+        shortLabel: 'รอสแกนออก',
+        colorClass: 'text-sky-700 font-semibold',
+        bgClass: 'bg-sky-50 text-sky-800',
+        borderClass: 'border-sky-200'
+      };
+    case 'OUT_ONLY':
+      return {
+        label: 'สแกนออกอย่างเดียว',
+        shortLabel: 'สแกนออก',
+        colorClass: 'text-purple-700 font-semibold',
+        bgClass: 'bg-purple-50 text-purple-800',
+        borderClass: 'border-purple-200'
+      };
+    case 'NO_SCAN':
+    default:
+      return {
+        label: 'ไม่พบสแกน',
+        shortLabel: 'ไม่พบสแกน',
+        colorClass: 'text-slate-400',
+        bgClass: 'bg-slate-50 text-slate-500',
+        borderClass: 'border-slate-200'
+      };
+  }
+}
+
 export function formatDateTime(d: Date = new Date()): string {
   const pad = (n: number) => n.toString().padStart(2, '0');
   const year = d.getFullYear();
@@ -798,10 +866,36 @@ class AttendanceStore {
         return tName === typeName || typeName.includes(tName) || tName.includes(typeName);
       }) || this.state.personnelTypes?.find(t => t.isActive) || this.state.personnelTypes?.[0] || DEFAULT_PERSONNEL_TYPES[0];
 
-      // 2. ข้อมูลสแกนทั้งหมดของคนนี้ในวันที่ระบุ เรียงตามเวลา
-      const scans = this.state.rawScans.filter(
-        r => r.fingleId === p.fingleId && r.scanDateTime.startsWith(date)
-      ).sort((a, b) => a.scanDateTime.localeCompare(b.scanDateTime));
+      // 2. ข้อมูลสแกนทั้งหมดของคนนี้ในวันที่ระบุ เรียงตามเวลา (รองรับทั้ง FINGLE_ID, PersonId, ชื่อ และรูปแบบวันที่หลากหลาย)
+      const targetFingle = Number(p.fingleId);
+      const targetPersonId = Number(p.personId);
+      const targetName = (p.hrFullname || '').trim().toLowerCase();
+
+      const scans = this.state.rawScans.filter(r => {
+        // ก. จับคู่ตัวบุคคล (Person Identity)
+        const rFingle = Number(r.fingleId);
+        const rPersonId = Number(r.personId);
+        const rName = (r.hrFullname || '').trim().toLowerCase();
+
+        const personMatched = (
+          (targetFingle > 0 && rFingle > 0 && rFingle === targetFingle) ||
+          (targetPersonId > 0 && rPersonId > 0 && rPersonId === targetPersonId) ||
+          (targetName && rName && (rName === targetName || rName.includes(targetName) || targetName.includes(rName)))
+        );
+        if (!personMatched) return false;
+
+        // ข. จับคู่วันที่ (Date Matching - รองรับ YYYY-MM-DD, T, พ.ศ. 2569, DD/MM/YYYY)
+        const rawDt = (r.scanDateTime || '').replace('T', ' ').trim();
+        if (rawDt.startsWith(date)) return true;
+        // รองรับ พ.ศ. เช่น 2026-10-14 เทียบกับ 2569-10-14
+        const beDate = date.replace(/^(\d{4})/, (_, y) => String(Number(y) + 543));
+        if (rawDt.startsWith(beDate)) return true;
+        // รองรับ DD/MM/YYYY
+        const [y, m, d] = date.split('-');
+        if (y && m && d && rawDt.startsWith(`${d}/${m}/${y}`)) return true;
+
+        return false;
+      }).sort((a, b) => (a.scanDateTime || '').localeCompare(b.scanDateTime || ''));
 
       if (scans.length === 0) {
         // กรณีไม่มีการสแกนนิ้วเลยในวันนั้น
@@ -1555,12 +1649,28 @@ class AttendanceStore {
 
   // 1. 📊 สรุปรายงานประจำเดือนสำหรับฝ่ายบุคคล/การเงิน (Monthly HR Attendance Report)
   public getMonthlySummary(yearMonth: string = '2026-10'): MonthlyPersonSummary[] {
-    const daysUpToNow = 14; // Today is 2026-10-14
-    const dates: string[] = [];
-    for (let day = 1; day <= daysUpToNow; day++) {
-      const pad = day.toString().padStart(2, '0');
-      dates.push(`${yearMonth}-${pad}`);
+    const today = new Date();
+    const currentYearMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+    let maxDays = 31;
+    if (yearMonth === currentYearMonth) {
+      maxDays = Math.min(31, Math.max(14, today.getDate()));
     }
+
+    const dateSet = new Set<string>();
+    for (let day = 1; day <= maxDays; day++) {
+      const pad = day.toString().padStart(2, '0');
+      dateSet.add(`${yearMonth}-${pad}`);
+    }
+
+    // รวมวันที่ที่มีข้อมูลสแกนจริงในงวดเดือนนั้น
+    this.state.rawScans.forEach(s => {
+      const sDate = (s.scanDateTime || '').replace('T', ' ').substring(0, 10);
+      if (sDate.startsWith(yearMonth)) {
+        dateSet.add(sDate);
+      }
+    });
+
+    const dates = Array.from(dateSet).sort();
 
     return this.state.personnel.map(person => {
       let daysWorked = 0;
@@ -1607,6 +1717,127 @@ class AttendanceStore {
         noScanCount
       };
     });
+  }
+
+  /**
+   * สร้างข้อมูลสแกนตัวอย่างทั้งโรงพยาบาล (ปกติ/สาย/ออกก่อน) และบันทึกลง MySQL ทันที
+   */
+  public async seedRealisticMonthScans(month: string = '2026-10', days: number = 14): Promise<{ success: boolean; message: string }> {
+    try {
+      // 1. ลองเรียก Backend API ก่อน
+      const backendRes = await apiClient.seedMonthAttendance(month, days);
+      if (backendRes?.success) {
+        await this.loadFromMySqlDb();
+        return { success: true, message: backendRes.message };
+      }
+
+      // 2. Local fallback generation
+      const scannerIps = ['192.168.111.163', '192.168.111.164', '192.168.111.165'];
+      const newScans: RawScan[] = [];
+      const now = formatDateTime();
+
+      for (let day = 1; day <= days; day++) {
+        const dateStr = `${month}-${String(day).padStart(2, '0')}`;
+        const dayOfWeek = new Date(dateStr).getDay();
+
+        for (const p of this.state.personnel) {
+          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+          if (isWeekend && (p.personId % 3 !== 0)) continue;
+
+          const rand = (p.personId * 17 + day * 31) % 100;
+          if (rand < 3) continue; // ขาด/ลา
+
+          let inH = 8;
+          let inM = 0;
+          let inS = (p.personId * 7 + day * 13) % 60;
+          let outH = 16;
+          let outM = (p.personId * 3 + day * 11) % 40;
+          let outS = (p.personId * 5 + day * 17) % 60;
+
+          if (rand >= 3 && rand < 15) {
+            // สาย (+2 ถึง +30 นาที)
+            inH = 8;
+            inM = 16 + (rand % 25);
+          } else {
+            // ปกติ (ตรงเวลา)
+            inH = 7;
+            inM = 40 + (rand % 34);
+            if (inM >= 60) {
+              inH = 8;
+              inM -= 60;
+              if (inM > 14) inM = 14;
+            }
+          }
+
+          const inTimeStr = `${dateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
+          const outTimeStr = `${dateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+          const mNo = ((p.personId + day) % 3) + 1;
+          const sIp = scannerIps[mNo - 1];
+
+          newScans.push({
+            id: generateUniqueId(),
+            machineNo: mNo,
+            deviceIp: sIp,
+            fingleId: p.fingleId,
+            scanDateTime: inTimeStr,
+            verifyMode: 1,
+            inOutMode: 0,
+            personId: p.personId,
+            hrFullname: p.hrFullname,
+            hrPositionName: p.hrPositionName,
+            hrDepName: p.hrDepName,
+            hrPersonTypeName: p.hrPersonTypeName,
+            hrMapped: true,
+            pushStatus: 'PENDING',
+            receivedAt: now
+          });
+
+          newScans.push({
+            id: generateUniqueId(),
+            machineNo: mNo,
+            deviceIp: sIp,
+            fingleId: p.fingleId,
+            scanDateTime: outTimeStr,
+            verifyMode: 1,
+            inOutMode: 1,
+            personId: p.personId,
+            hrFullname: p.hrFullname,
+            hrPositionName: p.hrPositionName,
+            hrDepName: p.hrDepName,
+            hrPersonTypeName: p.hrPersonTypeName,
+            hrMapped: true,
+            pushStatus: 'PENDING',
+            receivedAt: now
+          });
+        }
+      }
+
+      this.state.rawScans = [...newScans, ...this.state.rawScans];
+      await apiClient.batchAddRawScans(newScans);
+      this.saveState();
+      return {
+        success: true,
+        message: `สร้างและบันทึกประวัติสแกนตัวอย่าง ${newScans.length} รายการ (ปกติ/สาย) สำหรับเจ้าหน้าที่ ${this.state.personnel.length} ท่าน สำเร็จ!`
+      };
+    } catch (err: any) {
+      return { success: false, message: `เกิดข้อผิดพลาด: ${err.message}` };
+    }
+  }
+
+  /**
+   * นำเข้าประวัติสแกนจากตาราง hosoffice.fingle_scan
+   */
+  public async importFromHosoffice(): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await apiClient.importScansFromHosoffice(5000);
+      if (res?.success) {
+        await this.loadFromMySqlDb();
+        return { success: true, message: res.message };
+      }
+      return { success: false, message: res.message || 'นำเข้าไม่สำเร็จ' };
+    } catch (err: any) {
+      return { success: false, message: `เกิดข้อผิดพลาด: ${err.message}` };
+    }
   }
 
   public resetAllToDemo() {

@@ -337,6 +337,44 @@ class ApiClientService {
     }
   }
 
+  /**
+   * สั่งให้ Backend สร้างและบันทึกประวัติการสแกนนิ้วประจำเดือน (ปกติ/สาย/ออกก่อน) สำหรับบุคลากรทุกคน
+   */
+  public async seedMonthAttendance(month: string = '2026-10', days: number = 14) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/attendance/seed-month`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ month, days })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: this.getFriendlyFetchError(err, 'Backend API (Seed Month)')
+      };
+    }
+  }
+
+  /**
+   * นำเข้าข้อมูลประวัติสแกนดิบจากตาราง hosoffice.fingle_scan เข้าสู่ attendance_raw_scan
+   */
+  public async importScansFromHosoffice(limit: number = 5000) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/scans/import-from-hosoffice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit })
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: this.getFriendlyFetchError(err, 'Backend API (Hosoffice Import)')
+      };
+    }
+  }
+
   private getFriendlyFetchError(err: unknown, serviceName: string = 'Backend API'): string {
     const rawMsg = err instanceof Error ? err.message : 'Failed';
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';

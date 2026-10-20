@@ -44,37 +44,60 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
     );
   }
 
-  const fingleId = person ? person.fingleId : 0;
+  const fingleId = person ? Number(person.fingleId) : 0;
+  const personId = person ? Number(person.personId) : 0;
+  const personName = (person.hrFullname || '').trim().toLowerCase();
 
-  // Generate date list for the selected month (days 1 to 14 up to current date)
-  const daysInMonth = 31;
-  const todayStr = '2026-10-14';
+  // Raw scans for this person in staging database (รองรับทั้ง FINGLE_ID, PersonId, ชื่อ)
+  const myRawScans = state.rawScans.filter(s => {
+    const sFid = Number(s.fingleId);
+    const sPid = Number(s.personId);
+    const sName = (s.hrFullname || '').trim().toLowerCase();
+    return (
+      (fingleId > 0 && sFid > 0 && sFid === fingleId) ||
+      (personId > 0 && sPid > 0 && sPid === personId) ||
+      (personName && sName && (sName === personName || sName.includes(personName) || personName.includes(sName)))
+    );
+  });
 
-  const monthDates: string[] = [];
-  for (let day = 1; day <= daysInMonth; day++) {
-    const pad = day.toString().padStart(2, '0');
-    monthDates.push(`${selectedMonth}-${pad}`);
+  // Generate date list for the selected month (คำนวณวันที่มีสแกน หรือวันปัจจุบัน)
+  const today = new Date();
+  const currentYearMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  let maxDays = 31;
+  if (selectedMonth === currentYearMonth) {
+    maxDays = Math.min(31, Math.max(14, today.getDate()));
   }
 
-  // Calculate daily attendance for this person for all past days up to today
+  const dateSet = new Set<string>();
+  for (let day = 1; day <= maxDays; day++) {
+    const pad = day.toString().padStart(2, '0');
+    dateSet.add(`${selectedMonth}-${pad}`);
+  }
+  // รวมทุกวันที่มีสแกนของบุคคลนี้
+  myRawScans.forEach(s => {
+    const sDate = (s.scanDateTime || '').replace('T', ' ').substring(0, 10);
+    if (sDate.startsWith(selectedMonth)) {
+      dateSet.add(sDate);
+    }
+  });
+
+  const monthDates = Array.from(dateSet).sort();
+
+  // Calculate daily attendance for this person for all active dates
   const attendanceHistory: DailyResult[] = [];
   monthDates.forEach(dateStr => {
-    if (dateStr <= todayStr) {
-      const results = attendanceStore.calculateAttendance(dateStr, person.personId);
-      if (results.length > 0) {
-        attendanceHistory.push(...results);
-      }
+    const results = attendanceStore.calculateAttendance(dateStr, person.personId);
+    if (results.length > 0) {
+      attendanceHistory.push(...results);
     }
   });
 
   // Today's attendance
+  const todayStr = '2026-10-14';
   const todayResult = attendanceHistory.find(r => r.workDate === todayStr);
   const todayInScan = todayResult?.rawScanIds && todayResult.rawScanIds.length > 0
     ? state.rawScans.find(s => s.id === todayResult.rawScanIds[0])
     : undefined;
-
-  // Raw scans for this person in staging database
-  const myRawScans = state.rawScans.filter(s => s.fingleId === fingleId || s.personId === person.personId);
 
   // Compute monthly stats
   const daysWorked = attendanceHistory.filter(r => r.status !== 'NO_SCAN').length;
@@ -294,7 +317,7 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-            <span>เข้างานตรงเวลา</span>
+            <span>เข้างานปกติ (ตรงเวลา)</span>
             <Sparkles className="w-4 h-4 text-teal-600" />
           </div>
           <div className="text-2xl font-bold text-teal-700 font-mono tabular-nums">
@@ -432,27 +455,32 @@ export const MyAttendancePage: React.FC<MyAttendancePageProps> = ({ state }) => 
                         </td>
                         <td className="py-2.5 px-3">
                           {item.status === 'ON_TIME' && (
-                            <span className="inline-flex items-center gap-1 text-emerald-700 font-bold">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> ตรงเวลา
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 font-bold border border-emerald-200 text-[11px]">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> ปกติ (ตรงเวลา)
                             </span>
                           )}
                           {item.status === 'LATE' && (
-                            <span className="inline-flex items-center gap-1 text-amber-700 font-bold">
-                              <AlertCircle className="w-3.5 h-3.5" /> สาย
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-900 font-bold border border-amber-300 text-[11px]">
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-600" /> สาย
+                            </span>
+                          )}
+                          {item.status === 'IN_ONLY' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-800 font-medium border border-sky-200 text-[11px]">
+                              <Clock className="w-3.5 h-3.5 text-sky-600" /> รอสแกนออก
                             </span>
                           )}
                           {item.status === 'EARLY_LEAVE' && (
-                            <span className="inline-flex items-center gap-1 text-rose-700 font-bold">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-800 font-bold border border-rose-200 text-[11px]">
                               ออกก่อนเวลา
                             </span>
                           )}
                           {item.status === 'LATE_AND_EARLY' && (
-                            <span className="inline-flex items-center gap-1 text-rose-700 font-bold">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-900 font-bold border border-rose-200 text-[11px]">
                               สาย &amp; ออกก่อน
                             </span>
                           )}
                           {item.status === 'NO_SCAN' && (
-                            <span className="text-slate-400">
+                            <span className="text-slate-400 text-[11px]">
                               ไม่พบสแกน
                             </span>
                           )}

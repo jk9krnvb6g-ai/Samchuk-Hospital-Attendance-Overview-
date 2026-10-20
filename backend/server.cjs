@@ -81,6 +81,7 @@ function getDbPool() {
       password: activeDbConfig.password,
       database: activeDbConfig.database,
       charset: 'utf8mb4',
+      dateStrings: true,
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
@@ -112,6 +113,7 @@ function getHosofficePool() {
       password: hosPass,
       database: hosDb,
       charset: 'utf8mb4',
+      dateStrings: true,
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
@@ -2118,6 +2120,222 @@ app.post('/api/attendance/recalculate', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: `คำนวณผลไม่สำเร็จ: ${err.message}` });
+  }
+});
+
+// 4.12.3 นำเข้าประวัติสแกนจากตาราง hosoffice.fingle_scan เข้าสู่ attendance_raw_scan
+app.post('/api/scans/import-from-hosoffice', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const poolAtt = getDbPool();
+    const poolHos = getHosofficePool();
+    const limit = parseInt(req.body?.limit, 10) || 5000;
+
+    // 1. ดึงข้อมูล fingle_scan จาก hosoffice
+    const [scans] = await poolHos.query(`
+      SELECT fingle_id, scan_date_time, machine_no, in_out_mode, verify_mode 
+      FROM fingle_scan 
+      ORDER BY scan_date_time DESC 
+      LIMIT ?
+    `, [limit]);
+
+    if (!scans || scans.length === 0) {
+      return res.json({
+        success: true,
+        importedCount: 0,
+        message: 'ไม่พบรายการในตาราง hosoffice.fingle_scan สำหรับนำเข้า'
+      });
+    }
+
+    // 2. ดึงข้อมูลบุคลากรเพื่อ map
+    const [personnel] = await poolHos.query(`
+      SELECT 
+        hp.ID as id,
+        hp.FINGLE_ID as fingle_id,
+        CONCAT(COALESCE(hf.HR_PREFIX_NAME, ''), hp.HR_FNAME, ' ', hp.HR_LNAME) as hr_fullname,
+        COALESCE(ht.HR_POSITION_NAME, '') as hr_position_name,
+        COALESCE(hd.HR_DEPARTMENT_NAME, '') as hr_dep_name,
+        COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') as hr_person_type_name
+      FROM hr_person hp
+      LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+      LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+      LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+      LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+    `);
+
+    const personMap = new Map();
+    for (const p of personnel) {
+      if (p.fingle_id) personMap.set(Number(p.fingle_id), p);
+      if (p.id) personMap.set(Number(p.id), p);
+    }
+
+    let inserted = 0;
+    let duplicates = 0;
+    const affectedDates = new Set();
+
+    for (const s of scans) {
+      const fid = Number(s.fingle_id);
+      const p = personMap.get(fid);
+      const sTime = s.scan_date_time instanceof Date 
+        ? s.scan_date_time.toISOString().replace('T', ' ').substring(0, 19)
+        : String(s.scan_date_time);
+      const datePart = sTime.substring(0, 10);
+      if (datePart) affectedDates.add(datePart);
+
+      try {
+        const [r] = await poolAtt.query(`
+          INSERT INTO attendance_raw_scan
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'PUSHED')
+          ON DUPLICATE KEY UPDATE hr_mapped = 1
+        `, [
+          s.machine_no || 1,
+          '10.2.0.201',
+          fid,
+          sTime,
+          s.verify_mode || 1,
+          s.in_out_mode || 0,
+          p?.id || null,
+          p?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
+          p?.hr_position_name || '',
+          p?.hr_dep_name || '',
+          p?.hr_person_type_name || 'ข้าราชการ'
+        ]);
+        if (r.affectedRows > 0) inserted++;
+        else duplicates++;
+      } catch (e) {
+        duplicates++;
+      }
+    }
+
+    res.json({
+      success: true,
+      totalRead: scans.length,
+      importedCount: inserted,
+      duplicates,
+      datesCount: affectedDates.size,
+      message: `นำเข้าข้อมูลสแกนจาก ${hosofficeDbName}.fingle_scan สำเร็จ (นำเข้าใหม่ +${inserted} รายการ, ซ้ำเดิม ${duplicates} รายการ)`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `นำเข้าจาก HosOffice ล้มเหลว: ${err.message}` });
+  }
+});
+
+// 4.12.4 สร้างและบันทึกประวัติสแกนตัวอย่างประจำเดือนให้บุคลากรทุกคน (ปกติ/สาย/ออกก่อน) ตรงตามเวลาจริง
+app.post('/api/attendance/seed-month', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const poolAtt = getDbPool();
+    const poolHos = getHosofficePool();
+    const yearMonth = req.body?.month || '2026-10';
+    const daysCount = parseInt(req.body?.days, 10) || 14;
+
+    // ดึงบุคลากรทั้งหมดจาก hosoffice หรือ default
+    let personnel = [];
+    try {
+      const [rows] = await poolHos.query(`
+        SELECT 
+          hp.ID as id,
+          hp.FINGLE_ID as fingle_id,
+          CONCAT(COALESCE(hf.HR_PREFIX_NAME, ''), hp.HR_FNAME, ' ', hp.HR_LNAME) as hr_fullname,
+          COALESCE(ht.HR_POSITION_NAME, 'เจ้าหน้าที่') as hr_position_name,
+          COALESCE(hd.HR_DEPARTMENT_NAME, 'โรงพยาบาลสามชุก') as hr_dep_name,
+          COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') as hr_person_type_name
+        FROM hr_person hp
+        LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+        LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+        LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+        LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+        LIMIT 500
+      `);
+      personnel = rows;
+    } catch {}
+
+    if (personnel.length === 0) {
+      personnel = [
+        { id: 1, fingle_id: 79, hr_fullname: 'นางสาวกฤษณา กลิ่นมณฑา', hr_position_name: 'พยาบาลวิชาชีพ', hr_dep_name: 'กลุ่มงานการพยาบาล', hr_person_type_name: 'ข้าราชการ' },
+        { id: 2, fingle_id: 57, hr_fullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hr_position_name: 'นักวิชาการคอมพิวเตอร์', hr_dep_name: 'งานสุขภาพดิจิทัล', hr_person_type_name: 'ข้าราชการ' },
+        { id: 3, fingle_id: 87, hr_fullname: 'นางสาวกมลรัตน์ สดคมขำ', hr_position_name: 'พนักงานบริการ', hr_dep_name: 'งานผู้ป่วยอุบัติเหตุ', hr_person_type_name: 'พนักงานกระทรวงสาธารณสุข' },
+        { id: 4, fingle_id: 142, hr_fullname: 'นายเอกสิทธิ์ ทับแสงศรี', hr_position_name: 'พนักงานบริการ', hr_dep_name: 'งานสุขาภิบาล', hr_person_type_name: 'พนักงานกระทรวงสาธารณสุข' },
+        { id: 5, fingle_id: 6, hr_fullname: 'นายเอกภพ สว่างศรี', hr_position_name: 'พนักงานขับรถยนต์', hr_dep_name: 'งานยานพาหนะ', hr_person_type_name: 'พนักงานกระทรวงสาธารณสุข' }
+      ];
+    }
+
+    let totalScansCreated = 0;
+    const scannerIps = ['192.168.111.163', '192.168.111.164', '192.168.111.165'];
+
+    for (let day = 1; day <= daysCount; day++) {
+      const dateStr = `${yearMonth}-${String(day).padStart(2, '0')}`;
+      const dayOfWeek = new Date(dateStr).getDay(); // 0 = Sun, 6 = Sat
+
+      for (const p of personnel) {
+        // เสาร์-อาทิตย์ ทำงาน 30% (เวรพยาบาล/ฉุกเฉิน)
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        if (isWeekend && (p.id % 3 !== 0)) continue;
+
+        // รูปแบบการลงเวลา:
+        // ~85% ตรงเวลา (ปกติ): 07:45 - 08:14
+        // ~12% มาสาย: 08:16 - 08:45
+        // ~3% ขาด/ลา (ไม่มีสแกน)
+        const rand = (p.id * 17 + day * 31) % 100;
+        if (rand < 3) continue; // ขาด/ลา
+
+        let inH = 8;
+        let inM = 0;
+        let inS = (p.id * 7 + day * 13) % 60;
+        let outH = 16;
+        let outM = (p.id * 3 + day * 11) % 40; // 16:00 - 16:39
+        let outS = (p.id * 5 + day * 17) % 60;
+
+        if (rand >= 3 && rand < 15) {
+          // สาย (LATE) เกิน 08:15 ไป 2-30 นาที
+          inH = 8;
+          inM = 16 + (rand % 25);
+        } else {
+          // ปกติ (ตรงเวลา) ก่อน 08:15
+          inH = 7;
+          inM = 40 + (rand % 34); // 07:40 - 08:13
+          if (inM >= 60) {
+            inH = 8;
+            inM -= 60;
+            if (inM > 14) inM = 14;
+          }
+        }
+
+        const inTimeStr = `${dateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
+        const outTimeStr = `${dateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+        const mNo = ((p.id + day) % 3) + 1;
+        const sIp = scannerIps[mNo - 1];
+
+        // IN scan
+        await poolAtt.query(`
+          INSERT INTO attendance_raw_scan
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+          VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, 1, 'PENDING')
+          ON DUPLICATE KEY UPDATE hr_mapped = 1
+        `, [mNo, sIp, p.fingle_id || p.id, inTimeStr, p.id, p.hr_fullname, p.hr_position_name, p.hr_dep_name, p.hr_person_type_name]);
+        totalScansCreated++;
+
+        // OUT scan
+        await poolAtt.query(`
+          INSERT INTO attendance_raw_scan
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+          VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, 1, 'PENDING')
+          ON DUPLICATE KEY UPDATE hr_mapped = 1
+        `, [mNo, sIp, p.fingle_id || p.id, outTimeStr, p.id, p.hr_fullname, p.hr_position_name, p.hr_dep_name, p.hr_person_type_name]);
+        totalScansCreated++;
+      }
+    }
+
+    res.json({
+      success: true,
+      personnelCount: personnel.length,
+      daysCount,
+      totalScansCreated,
+      message: `สร้างและบันทึกประวัติการสแกนนิ้วประจำงวดเดือน ${yearMonth} (1-${daysCount} ต.ค.) สำหรับเจ้าหน้าที่ ${personnel.length} ท่าน (รวม +${totalScansCreated} สแกน) ลง MySQL สำเร็จแล้ว! พร้อมคำนวณสถานะ ปกติ/สาย ให้ทุกคนทันที`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `สร้างข้อมูลจำลองล้มเหลว: ${err.message}` });
   }
 });
 

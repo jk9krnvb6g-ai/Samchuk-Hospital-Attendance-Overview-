@@ -8,7 +8,8 @@ import {
   AlertCircle, 
   Award,
   CheckCircle,
-  Hospital
+  Hospital,
+  Sparkles
 } from 'lucide-react';
 import { StoreState, attendanceStore, MonthlyPersonSummary } from '../services/attendanceStore';
 
@@ -21,12 +22,48 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
   const [selectedType, setSelectedType] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [actionMsg, setActionMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Fetch monthly summary from attendanceStore
   const summaryData: MonthlyPersonSummary[] = attendanceStore.getMonthlySummary(selectedMonth);
 
   const departments = Array.from(new Set(state.personnel.map(p => p.hrDepName)));
   const personTypes = Array.from(new Set(state.personnel.map(p => p.hrPersonTypeName)));
+
+  const handleSeedMonthScans = async () => {
+    setIsProcessing(true);
+    setActionMsg(null);
+    try {
+      const res = await attendanceStore.seedRealisticMonthScans(selectedMonth, 14);
+      if (res.success) {
+        setActionMsg({ type: 'success', text: res.message });
+      } else {
+        setActionMsg({ type: 'error', text: res.message });
+      }
+    } catch (e: any) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleImportHosoffice = async () => {
+    setIsProcessing(true);
+    setActionMsg(null);
+    try {
+      const res = await attendanceStore.importFromHosoffice();
+      if (res.success) {
+        setActionMsg({ type: 'success', text: res.message });
+      } else {
+        setActionMsg({ type: 'error', text: res.message });
+      }
+    } catch (e: any) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   // Filtered summaries
   const filteredData = summaryData.filter(item => {
@@ -116,7 +153,7 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold">
             <Calendar className="w-4 h-4 text-teal-600" />
             <span>ประจำเดือน:</span>
@@ -129,22 +166,64 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
           </div>
 
           <button
+            onClick={handleSeedMonthScans}
+            disabled={isProcessing}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-lg shadow-xs cursor-pointer transition-colors disabled:opacity-50"
+            title="สร้างข้อมูลสแกนนิ้วตัวอย่างงวดเดือนนี้ (ปกติ/สาย) สำหรับเจ้าหน้าที่ทุกคนและคำนวณทันที"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-slate-950" />
+            <span>{isProcessing ? 'กำลังประมวลผล...' : '🧪 สร้างข้อมูลสแกน (ปกติ/สาย)'}</span>
+          </button>
+
+          <button
+            onClick={handleImportHosoffice}
+            disabled={isProcessing}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition-colors disabled:opacity-50"
+            title="ดึงประวัติสแกนจากตาราง fingle_scan ใน HosOffice เข้าสู่ระบบ"
+          >
+            <span>⚡ ดึงจาก HosOffice</span>
+          </button>
+
+          <button
             onClick={handleExportCsv}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition-colors"
           >
             <Download className="w-4 h-4 text-emerald-600" />
-            <span>ส่งออก Excel / CSV</span>
+            <span>ส่งออก CSV</span>
           </button>
 
           <button
             onClick={handlePrint}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition-colors"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition-colors"
           >
             <Printer className="w-4 h-4" />
-            <span>พิมพ์รายงาน (Print)</span>
+            <span>พิมพ์</span>
           </button>
         </div>
       </div>
+
+      {actionMsg && (
+        <div className={`p-3 rounded-xl border text-xs font-medium flex items-center justify-between ${
+          actionMsg.type === 'success' 
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-900' 
+            : 'bg-rose-50 border-rose-200 text-rose-900'
+        }`}>
+          <span>{actionMsg.text}</span>
+          <button onClick={() => setActionMsg(null)} className="text-slate-400 hover:text-slate-600 cursor-pointer">✕</button>
+        </div>
+      )}
+
+      {totalDaysWorked === 0 && (
+        <div className="p-4 bg-amber-50/80 border border-amber-300 rounded-xl text-xs text-amber-900 flex items-start gap-3 shadow-xs">
+          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <div className="font-bold">ยังไม่พบข้อมูลสแกนในงวดเดือน {selectedMonth} บนระบบ</div>
+            <div className="text-amber-800 leading-relaxed">
+              หากในฐานข้อมูลยังไม่มีประวัติสแกน หรือเครื่องสแกนยังไม่ได้ส่งข้อมูล คุณสามารถกดปุ่ม <strong>"🧪 สร้างข้อมูลสแกน (ปกติ/สาย)"</strong> ด้านบนเพื่อสร้างข้อมูลสแกนตัวอย่างจำลอง (ตรงเวลา ~85%, สาย ~12%) สำหรับบุคลากรทั้ง {state.personnel.length} ท่าน และคำนวณผลสถานะทันที หรือกดปุ่ม <strong>"⚡ ดึงจาก HosOffice"</strong> เพื่อนำเข้าข้อมูลจากตาราง fingle_scan
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Printable Report Header (Visible on print) */}
       <div className="hidden print:block text-center space-y-1 mb-6 border-b border-slate-400 pb-4">
@@ -259,8 +338,8 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
                 <th className="py-2.5 px-3">ชื่อ - สกุล</th>
                 <th className="py-2.5 px-3">ตำแหน่ง / หน่วยงานย่อย</th>
                 <th className="py-2.5 px-3 text-center">วันทำงาน (วัน)</th>
-                <th className="py-2.5 px-3 text-center">ตรงเวลา</th>
-                <th className="py-2.5 px-3 text-center">สาย (ครั้ง)</th>
+                <th className="py-2.5 px-3 text-center text-emerald-800 font-bold">ปกติ / ตรงเวลา</th>
+                <th className="py-2.5 px-3 text-center text-amber-800 font-bold">มาสาย (ครั้ง)</th>
                 <th className="py-2.5 px-3 text-center">รวมเวลาสาย</th>
                 <th className="py-2.5 px-3 text-center">ออกก่อน</th>
                 <th className="py-2.5 px-3 text-center font-bold text-teal-800">รวม OT (ชม.)</th>

@@ -14,7 +14,8 @@ import {
   Filter,
   UserCheck,
   TrendingUp,
-  AlertTriangle
+  AlertTriangle,
+  Sparkles
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { DailyResult } from '../types/attendance';
@@ -214,15 +215,36 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
                 <span>{isRecalculating ? 'กำลังคำนวณ...' : 'คำนวณใหม่'}</span>
               </button>
 
+              {/* Seed Scans Demo Button */}
+              <button
+                onClick={async () => {
+                  setIsRecalculating(true);
+                  try {
+                    const res = await attendanceStore.seedRealisticMonthScans(selectedDate.substring(0, 7), 14);
+                    setSaveDbMsg({ type: res.success ? 'success' : 'error', text: res.message });
+                  } catch (e: any) {
+                    setSaveDbMsg({ type: 'error', text: e.message });
+                  } finally {
+                    setIsRecalculating(false);
+                  }
+                }}
+                disabled={isRecalculating}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 text-xs font-bold rounded-lg shadow-2xs cursor-pointer disabled:opacity-50 transition-all duration-150"
+                title="สร้างข้อมูลสแกนตัวอย่างทั้งโรงพยาบาล (ปกติ/สาย) และคำนวณทันที"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-slate-950" />
+                <span>🧪 สร้างสแกน (ปกติ/สาย)</span>
+              </button>
+
               {/* Save MySQL (Matte Slate) */}
               <button
                 onClick={handleSaveToMySQL}
                 disabled={isSavingDb}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 active:bg-black text-white text-xs font-semibold rounded-lg shadow-2xs cursor-pointer disabled:opacity-50 transition-all duration-150"
-                title="บันทึกผลลงตาราง attendance_daily_result ใน MySQL"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 active:bg-slate-950 text-white text-xs font-semibold rounded-lg shadow-2xs cursor-pointer disabled:opacity-50 transition-all duration-150"
+                title="บันทึกผลการคำนวณสถานะ ปกติ/สาย ลงตาราง attendance_daily_result ใน MySQL"
               >
-                <Database className="w-3.5 h-3.5 text-teal-300" />
-                <span>{isSavingDb ? 'บันทึก...' : 'บันทึก MySQL'}</span>
+                <Database className="w-3.5 h-3.5 text-teal-400" />
+                <span>{isSavingDb ? 'กำลังบันทึก...' : 'บันทึกลง MySQL'}</span>
               </button>
             </>
           )}
@@ -367,7 +389,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
               }`}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <span>ตรงเวลา ({onTimeCount})</span>
+              <span>ปกติ / ตรงเวลา ({onTimeCount})</span>
             </button>
             <button
               onClick={() => setStatusFilter('IN_ONLY')}
@@ -582,9 +604,9 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
                       {/* สถานะการลงเวลา (ตรงเวลา / สาย +Xm) */}
                       <td className="py-2.5 px-3.5 whitespace-nowrap">
                         {isOnTime && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold text-emerald-800 bg-emerald-500/10 border border-emerald-500/20">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-300">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-                            <span>ตรงเวลา</span>
+                            <span>ปกติ (ตรงเวลา)</span>
                           </span>
                         )}
                         {isLate && (
