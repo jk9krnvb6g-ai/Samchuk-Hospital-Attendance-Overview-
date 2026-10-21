@@ -327,8 +327,8 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
         HostIp: "10.2.0.13",
         FrontendPort: 3001,
         FrontendUrl: "http://10.2.0.13:3001/Sam_Att/",
-        ApiPort: 3002,
-        ApiUrl: "http://10.2.0.13:3002"
+        ApiPort: 3005,
+        ApiUrl: "http://10.2.0.13:3005"
       }
     };
 
@@ -1300,8 +1300,8 @@ public static extern int FK_ConnectNet(int anMachineNo, string astrIpAddress, in
                       HostIp: "10.2.0.13",
                       FrontendPort: 3001,
                       FrontendUrl: "http://10.2.0.13:3001/Sam_Att/",
-                      ApiPort: 3002,
-                      ApiUrl: "http://10.2.0.13:3002"
+                      ApiPort: 3005,
+                      ApiUrl: "http://10.2.0.13:3005"
                     }
                   }, null, 2), 'appsettings')}
                   className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs rounded font-medium flex items-center gap-1 cursor-pointer transition-colors"
@@ -1334,8 +1334,8 @@ public static extern int FK_ConnectNet(int anMachineNo, string astrIpAddress, in
     HostIp: "10.2.0.13",
     FrontendPort: 3001,
     FrontendUrl: "http://10.2.0.13:3001/Sam_Att/",
-    ApiPort: 3002,
-    ApiUrl: "http://10.2.0.13:3002"
+    ApiPort: 3005,
+    ApiUrl: "http://10.2.0.13:3005"
   }
 }, null, 2)}
                 </pre>

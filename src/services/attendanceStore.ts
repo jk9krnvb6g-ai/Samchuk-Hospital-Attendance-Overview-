@@ -1990,11 +1990,36 @@ class AttendanceStore {
             }
           }
 
-          const inTimeStr = `${dateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
-          const outTimeStr = `${dateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+          let inTimeStr = `${dateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
+          let outTimeStr = `${dateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
           
           const mNo = allowedMachines[(p.personId + pIdx) % allowedMachines.length];
           const sIp = scannerIps[mNo - 1] || '192.168.111.163';
+
+          // กรณีพิเศษ: นายทวีสิทธิ์ พุ่มพฤกษ์ (fingleId: 57)
+          if (p.fingleId === 57 && dateStr === '2026-10-20') {
+            inTimeStr = '2026-10-20 08:12:00';
+            // สแกนเช้าเวลา 08:12:00 ครั้งเดียวเท่านั้น
+            newScans.push({
+              id: generateUniqueId(),
+              machineNo: 2,
+              deviceIp: '192.168.111.164',
+              fingleId: 57,
+              scanDateTime: '2026-10-20 08:12:00',
+              verifyMode: 1,
+              inOutMode: 0,
+              personId: p.personId,
+              hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์',
+              hrPositionName: 'นักวิชาการคอมพิวเตอร์',
+              hrDepName: 'กลุ่มงานสุขภาพดิจิทัล',
+              hrPersonTypeName: 'ข้าราชการ',
+              hrMapped: true,
+              pushStatus: 'PUSHED',
+              receivedAt: now
+            });
+            // ไม่สร้างสแกนออก 17:36 เพราะเจ้าหน้าที่สแกนเข้าครั้งเดียวในตอนเช้า
+            continue;
+          }
 
           newScans.push({
             id: generateUniqueId(),
@@ -2014,23 +2039,26 @@ class AttendanceStore {
             receivedAt: now
           });
 
-          newScans.push({
-            id: generateUniqueId(),
-            machineNo: mNo,
-            deviceIp: sIp,
-            fingleId: p.fingleId,
-            scanDateTime: outTimeStr,
-            verifyMode: 1,
-            inOutMode: 1,
-            personId: p.personId,
-            hrFullname: p.hrFullname,
-            hrPositionName: p.hrPositionName,
-            hrDepName: p.hrDepName,
-            hrPersonTypeName: p.hrPersonTypeName,
-            hrMapped: true,
-            pushStatus: 'PENDING',
-            receivedAt: now
-          });
+          // สแกนออก (เฉพาะวันที่ผ่านมาแล้ว หรือไม่ใช่สแกนเข้าอย่างเดียว)
+          if (dateStr !== '2026-10-20') {
+            newScans.push({
+              id: generateUniqueId(),
+              machineNo: mNo,
+              deviceIp: sIp,
+              fingleId: p.fingleId,
+              scanDateTime: outTimeStr,
+              verifyMode: 1,
+              inOutMode: 1,
+              personId: p.personId,
+              hrFullname: p.hrFullname,
+              hrPositionName: p.hrPositionName,
+              hrDepName: p.hrDepName,
+              hrPersonTypeName: p.hrPersonTypeName,
+              hrMapped: true,
+              pushStatus: 'PENDING',
+              receivedAt: now
+            });
+          }
         }
       }
 

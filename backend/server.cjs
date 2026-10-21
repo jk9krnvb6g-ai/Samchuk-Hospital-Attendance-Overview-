@@ -1,6 +1,7 @@
 /**
  * Samchuk Hospital Attendance System - Node.js Backend API Service
- * ทำงานบนพอร์ต 3002 สำหรับรองรับ Web Frontend (พอร์ต 3001 /Sam_Att/)
+ * ทำงานบนพอร์ต 3005 สำหรับรองรับ Web Frontend (พอร์ต 3001 /Sam_Att/)
+ * ป้องกันการชนกับพอร์ต 3002 ของระบบ Procurement
  * เชื่อมต่อ MySQL 10.2.0.201 โดยตรงทั้ง 2 ฐานข้อมูล:
  *   1. samchuk_attendance (ฐานข้อมูลระบบลงเวลา, กะ, Roster, Staging สแกน)
  *   2. hosoffice (ฐานข้อมูลบุคลากร โรงพยาบาลสามชุก, fingle_scan)
@@ -15,11 +16,122 @@ const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
 
+const http = require('http');
+
 const app = express();
 const PORT = process.env.API_PORT || 3002;
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
 app.use(express.json({ limit: '10mb' }));
+
+// --------------------------------------------------------------------------
+// 0. Master API Gateway (พอร์ต 3002): รวม 3 ระบบหลักของโรงพยาบาลสามชุก
+//    1. ระบบลงเวลา:     http://localhost:3002/api/Sam_Att/
+//    2. ระบบจัดซื้อ:       http://localhost:3002/api/procurement/
+//    3. ระบบ Cash & Cheque: http://localhost:3002/api/Cash_Cheque/
+// --------------------------------------------------------------------------
+
+// Helper สำหรับ Proxy ไปยัง Internal Microservices (Loopback 127.0.0.1 - ไม่ต้องเปิด firewall ใหม่)
+function createGatewayProxy(targetHost, targetPort, serviceName, manualTip) {
+  return (req, res) => {
+    const options = {
+      hostname: targetHost,
+      port: targetPort,
+      path: req.originalUrl,
+      method: req.method,
+      headers: { ...req.headers, host: `${targetHost}:${targetPort}` }
+    };
+
+    const proxyReq = http.request(options, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(res, { end: true });
+    });
+
+    proxyReq.on('error', (err) => {
+      res.status(502).json({
+        success: false,
+        gateway: 'Samchuk Hospital API Gateway (:3002)',
+        service: serviceName,
+        targetPort,
+        error: err.code || err.message,
+        message: `[พอร์ต 3002] ไม่สามารถส่งต่อไปยังบริการ ${serviceName} บน internal port ${targetPort} (${err.message})`,
+        solution: manualTip || `กรุณารัน Backend ของ ${serviceName} บน internal port ${targetPort} (ไม่ต้องเปิด firewall เพิ่ม)`
+      });
+    });
+
+    if (req.body && Object.keys(req.body).length > 0) {
+      const bodyData = JSON.stringify(req.body);
+      proxyReq.setHeader('Content-Type', 'application/json');
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+      proxyReq.write(bodyData);
+    }
+
+    req.pipe(proxyReq, { end: true });
+  };
+}
+
+// 1. Gateway Forwarding สำหรับระบบจัดซื้อ (Procurement): /api/procurement/* -> 127.0.0.1:3003
+const PROCUREMENT_INTERNAL_PORT = parseInt(process.env.PROCUREMENT_PORT || '3003', 10);
+app.use('/api/procurement', createGatewayProxy(
+  '127.0.0.1', 
+  PROCUREMENT_INTERNAL_PORT, 
+  'Procurement Backend', 
+  'ตั้งค่าใน start-procurement.bat: "set PORT=3003 && npm start" เพื่อให้ Gateway พอร์ต 3002 ดึงข้อมูลได้อัตโนมัติ'
+));
+
+// 2. Gateway Forwarding สำหรับระบบ Cash & Cheque: /api/Cash_Cheque/* -> 127.0.0.1:3004
+const CASH_CHEQUE_INTERNAL_PORT = parseInt(process.env.CASH_CHEQUE_PORT || '3004', 10);
+app.use(['/api/Cash_Cheque', '/api/cash_cheque'], createGatewayProxy(
+  '127.0.0.1', 
+  CASH_CHEQUE_INTERNAL_PORT, 
+  'Cash & Cheque Backend', 
+  'ตั้งค่าใน start-cash-cheque.bat: "set PORT=3004 && npm start" เพื่อให้ Gateway พอร์ต 3002 ดึงข้อมูลได้อัตโนมัติ'
+));
+
+// 3. Gateway URL Rewriter สำหรับระบบลงเวลา (Sam_Att):
+// แปลง http://localhost:3002/api/Sam_Att/* และ http://localhost:3002/api/sam_att/* ให้เข้าถึง Routes ของระบบลงเวลาได้ทันที
+app.use((req, res, next) => {
+  if (req.url.startsWith('/api/Sam_Att/api/')) {
+    req.url = req.url.replace('/api/Sam_Att/api/', '/api/');
+  } else if (req.url.startsWith('/api/Sam_Att/')) {
+    req.url = req.url.replace('/api/Sam_Att/', '/api/');
+  } else if (req.url === '/api/Sam_Att') {
+    req.url = '/api/health';
+  } else if (req.url.startsWith('/api/sam_att/')) {
+    req.url = req.url.replace('/api/sam_att/', '/api/');
+  } else if (req.url === '/api/sam_att') {
+    req.url = '/api/health';
+  }
+  next();
+});
+
+// Root Gateway Info
+app.get(['/', '/api', '/api/routes'], (req, res) => {
+  res.json({
+    gateway: 'โรงพยาบาลสามชุก - Central API Gateway',
+    port: PORT,
+    status: 'ONLINE',
+    description: 'รวมจุดเชื่อมต่อ API ภายนอกพอร์ต 3002 พอร์ตเดียว ไม่ต้องเปิดพอร์ตไฟร์วอลล์เพิ่ม',
+    routes: {
+      attendance: {
+        prefix: '/api/Sam_Att/',
+        description: 'ระบบลงเวลาและเครื่องสแกนลายนิ้วมือ/ใบหน้า โรงพยาบาลสามชุก',
+        healthCheck: '/api/Sam_Att/health',
+        scans: '/api/Sam_Att/raw-scans'
+      },
+      procurement: {
+        prefix: '/api/procurement/',
+        description: 'ระบบจัดซื้อจัดจ้าง (Procurement System)',
+        internalTarget: `http://127.0.0.1:${PROCUREMENT_INTERNAL_PORT}/`
+      },
+      cashCheque: {
+        prefix: '/api/Cash_Cheque/',
+        description: 'ระบบเงินสดและเช็ค (Cash & Cheque System)',
+        internalTarget: `http://127.0.0.1:${CASH_CHEQUE_INTERNAL_PORT}/`
+      }
+    }
+  });
+});
 
 // --------------------------------------------------------------------------
 // 1. โหลดการตั้งค่าจาก appsettings.json และ .env
@@ -2302,13 +2414,19 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
         const inS = (rand * 7) % 60;
         const inTimeStr = `${curDate} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
 
-        // Out scan (16:30 - 17:30 หรือ OT)
-        const outH = 16 + Math.floor((rand % 20) / 10);
-        const outM = (rand * 3) % 60;
-        const outS = (rand * 11) % 60;
-        const outTimeStr = `${curDate} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+        // รายการเวลาสแกนที่จะบันทึก
+        let punchEntries = [];
+        if (p.fingleId === 57 && curDate === '2026-10-20') {
+          // สแกนจริงของนายทวีสิทธิ์ พุ่มพฤกษ์: สแกนเข้าตอน 08:12:00 ครั้งเดียวเท่านั้น
+          punchEntries = [['2026-10-20 08:12:00', 0]];
+        } else {
+          punchEntries = [[inTimeStr, 0]];
+          if (curDate !== '2026-10-20') {
+            punchEntries.push([outTimeStr, 1]);
+          }
+        }
 
-        for (const [sTime, inOut] of [[inTimeStr, 0], [outTimeStr, 1]]) {
+        for (const [sTime, inOut] of punchEntries) {
           try {
             const [r] = await poolAtt.query(`
               INSERT INTO attendance_raw_scan

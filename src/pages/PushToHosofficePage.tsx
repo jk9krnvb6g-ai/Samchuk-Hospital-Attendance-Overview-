@@ -148,7 +148,7 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
     setIsPushing(true);
     setPushErrorMessage(null);
     try {
-      // 1. เรียกผ่าน Backend API พอร์ต 3002 เพื่อบันทึกลง MySQL fingle_scan และ attendance_raw_scan
+      // 1. เรียกผ่าน Backend API พอร์ต 3005 เพื่อบันทึกลง MySQL fingle_scan และ attendance_raw_scan
       try {
         await apiClient.pushBatch({
           dateFrom: dateFrom || undefined,
@@ -159,7 +159,7 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
           performedBy: state.currentUser.username
         });
       } catch (apiErr) {
-        console.warn('API :3002 notice, proceeding with store push:', apiErr);
+        console.warn('API :3005 notice, proceeding with store push:', apiErr);
       }
 
       // 2. เรียก store เพื่ออัปเดต state และบันทึกประวัติ Batch
@@ -234,7 +234,7 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
               </div>
               <p className="text-xs text-slate-600 leading-relaxed">
                 <strong>กฎความปลอดภัย (Spec v2):</strong> ระบบจะ<strong>ไม่มี</strong>การส่งข้อมูลเข้า <code className="px-1.5 py-0.5 bg-amber-100 rounded font-mono font-bold text-amber-900">hosoffice.fingle_scan</code> อัตโนมัติเด็ดขาด 
-                โดย Background Service (พอร์ต 3002) จะดึงข้อมูลจากเครื่องสแกน 1-3 มาเก็บไว้ใน <code className="px-1.5 py-0.5 bg-slate-100 rounded font-mono text-slate-800">attendance_raw_scan</code> (Staging DB) เท่านั้น 
+                โดย Background Service (พอร์ต 3005) จะดึงข้อมูลจากเครื่องสแกน 1-3 มาเก็บไว้ใน <code className="px-1.5 py-0.5 bg-slate-100 rounded font-mono text-slate-800">attendance_raw_scan</code> (Staging DB) เท่านั้น 
                 การส่งเข้า hosoffice จะเกิดขึ้นเมื่อ ADMIN ได้ตรวจสอบความถูกต้องและกดยืนยันส่งด้วยตนเองเท่านั้น
               </p>
               <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-slate-600 font-medium">

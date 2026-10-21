@@ -47,9 +47,9 @@ export const resolveDefaultApiUrl = (): string => {
   }
   if (typeof window !== 'undefined') {
     const host = window.location.hostname || 'localhost';
-    return `http://${host}:3002`;
+    return `http://${host}:3002/api/Sam_Att`;
   }
-  return 'http://localhost:3002';
+  return 'http://localhost:3002/api/Sam_Att';
 };
 
 export const DEFAULT_API_URL = resolveDefaultApiUrl();
@@ -66,12 +66,16 @@ class ApiClientService {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(STORAGE_API_KEY);
       if (saved && saved.trim()) {
-        if (saved.startsWith('https://') && saved.includes(':3002')) {
-          this.customBaseUrl = saved.replace('https://', 'http://');
-          localStorage.setItem(STORAGE_API_KEY, this.customBaseUrl);
-        } else {
-          this.customBaseUrl = saved.trim();
+        let normalized = saved.trim().replace('https://', 'http://');
+        // เปลี่ยนพอร์ต 3005 เป็น 3002 และใส่ prefix /api/Sam_Att
+        if (normalized.includes(':3005')) {
+          normalized = normalized.replace(':3005', ':3002');
         }
+        if (!normalized.includes('/api/Sam_Att')) {
+          normalized = normalized.replace(/\/+$/, '') + '/api/Sam_Att';
+        }
+        this.customBaseUrl = normalized;
+        localStorage.setItem(STORAGE_API_KEY, this.customBaseUrl);
       } else {
         this.customBaseUrl = resolveDefaultApiUrl();
       }
@@ -125,7 +129,7 @@ class ApiClientService {
   }
 
   /**
-   * ทดสอบการเชื่อมต่อ API บนพอร์ต 3002 (GET /api/health)
+   * ทดสอบการเชื่อมต่อ API บนพอร์ต 3005 (GET /api/health)
    */
   public async checkHealth(): Promise<{ online: boolean; latencyMs: number; data?: ApiHealthResponse; error?: string }> {
     const start = performance.now();
@@ -410,9 +414,9 @@ class ApiClientService {
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
     if (rawMsg.toLowerCase().includes('failed to fetch') || rawMsg.toLowerCase().includes('networkerror')) {
       if (isHttps) {
-        return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (เกิดจากบราวเซอร์บล็อก Mixed Content เพราะเข้าเว็บด้วย HTTPS) -> กรุณาเปลี่ยน URL หน้าเว็บเป็น http://10.2.0.13:3001/Sam_Att/ (ใช้ http:// แทน https://)`;
+        return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3005 ได้ (เกิดจากบราวเซอร์บล็อก Mixed Content เพราะเข้าเว็บด้วย HTTPS) -> กรุณาเปลี่ยน URL หน้าเว็บเป็น http://10.2.0.13:3001/Sam_Att/ (ใช้ http:// แทน https://)`;
       }
-      return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (${rawMsg}) -> กรุณาตรวจสอบว่าได้รันคำสั่ง call start-backend.bat บนเซิร์ฟเวอร์แล้วหรือไม่ และ Windows Firewall เปิดพอร์ต 3002 หรือยัง`;
+      return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3005 ได้ (${rawMsg}) -> กรุณาตรวจสอบว่าได้รันคำสั่ง call start-backend.bat บนเซิร์ฟเวอร์แล้วหรือไม่ และ Windows Firewall เปิดพอร์ต 3005 หรือยัง`;
     }
     return `ไม่สามารถติดต่อ ${serviceName} ได้ (${rawMsg})`;
   }
