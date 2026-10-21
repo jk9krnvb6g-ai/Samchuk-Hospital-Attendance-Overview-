@@ -909,6 +909,67 @@ app.get('/api/db/test-both', async (req, res) => {
   });
 });
 
+// 4.2.2.1 รายงานสรุปฐานข้อมูลทั้งหมดในระบบ (Database Architecture Overview)
+app.get('/api/db/overview', async (req, res) => {
+  const poolAtt = getDbPool();
+  const poolHos = getHosofficePool();
+  
+  let attStats = {};
+  try {
+    const [scans] = await poolAtt.query('SELECT COUNT(*) as count FROM attendance_raw_scan');
+    const [shifts] = await poolAtt.query('SELECT COUNT(*) as count FROM attendance_shift');
+    const [results] = await poolAtt.query('SELECT COUNT(*) as count FROM attendance_daily_result');
+    attStats = { rawScans: scans[0].count, shifts: shifts[0].count, dailyResults: results[0].count, status: 'ONLINE' };
+  } catch (err) {
+    attStats = { status: 'ERROR', error: err.message };
+  }
+
+  let hosStats = {};
+  try {
+    const [person] = await poolHos.query('SELECT COUNT(*) as count FROM hr_person');
+    const [dept] = await poolHos.query('SELECT COUNT(*) as count FROM hr_department');
+    let fCount = 0;
+    try {
+      const [scans] = await poolHos.query('SELECT COUNT(*) as count FROM fingle_scan');
+      fCount = scans[0].count;
+    } catch {}
+    hosStats = { personnel: person[0].count, departments: dept[0].count, fingleScan: fCount, status: 'ONLINE' };
+  } catch (err) {
+    hosStats = { status: 'ERROR', error: err.message };
+  }
+
+  res.json({
+    success: true,
+    totalDatabases: 2,
+    summary: 'ระบบใช้งาน 2 ฐานข้อมูลหลักบน MySQL เชื่อมโยงผ่าน Central API Gateway พอร์ต 3002',
+    databases: [
+      {
+        id: 1,
+        name: activeDbConfig.database,
+        host: activeDbConfig.host,
+        port: activeDbConfig.port,
+        role: 'ฐานข้อมูลระบบลงเวลาและตารางเวร (Dedicated Attendance DB)',
+        description: 'จัดเก็บสแกนดิบ, ตารางกะ, และผลการคำนวณเวลาเข้า-ออก แยกอิสระเพื่อความเร็วและปลอดภัย',
+        stats: attStats
+      },
+      {
+        id: 2,
+        name: hosofficeDbName,
+        host: process.env.HOSOFFICE_HOST || activeDbConfig.host,
+        port: process.env.HOSOFFICE_PORT || activeDbConfig.port,
+        role: 'ฐานข้อมูลระบบโรงพยาบาล HOSxP / HosOffice (HR Master DB)',
+        description: 'จัดเก็บข้อมูลบุคลากรทั้งโรงพยาบาล, กลุ่มงาน, ตำแหน่ง, และตารางสแกนเดิม fingle_scan',
+        stats: hosStats
+      }
+    ],
+    gatewayServices: [
+      { name: 'Sam_Att (ระบบลงเวลา)', path: '/api/Sam_Att/', status: 'ACTIVE (Port 3002 Gateway)' },
+      { name: 'Procurement (ระบบจัดซื้อ)', path: '/api/procurement/', internalPort: 3003 },
+      { name: 'Cash_Cheque (ระบบการเงิน/เช็ค)', path: '/api/Cash_Cheque/', internalPort: 3004 }
+    ]
+  });
+});
+
 // 4.2.3 Probe ตรวจสอบพอร์ต 3306 บนหลาย IP พร้อมกัน
 app.get('/api/db/probe', async (req, res) => {
   const candidates = [
@@ -2280,7 +2341,9 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
       month = '2026-10', 
       year = '2026',
       allPersonnel = true,
-      recalculate = true 
+      recalculate = true,
+      strategy = 'SKIP_DUPLICATES',
+      preview = false
     } = req.body || {};
 
     // 1. กำหนดรายการวันที่เป้าหมายตามโหมด
@@ -2363,6 +2426,7 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
       ];
     }
 
+
     // 3. กำหนดเครื่องสแกนที่ต้องการดึง
     let selectedMachines = [];
     if (machineNos === 'ALL' || !machineNos) {
@@ -2381,28 +2445,31 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
       selectedMachines = mList.map(m => defaults[m] || { machineNo: m, ip: '192.168.111.163', name: `เครื่อง #${m}` });
     }
 
-    let totalInserted = 0;
-    let totalDuplicates = 0;
+    // ดึงชุดข้อมูลสแกนที่มีอยู่ในระบบแล้วเพื่อตรวจจับความซ้ำซ้อน
+    const [existingRows] = await poolAtt.query(
+      'SELECT fingle_id, scan_date_time FROM attendance_raw_scan'
+    );
+    const existingKeySet = new Set((existingRows || []).map(r => `${r.fingle_id}_${r.scan_date_time}`));
 
-    // 4. บันทึกสแกนสำหรับแต่ละวันและบุคลากร
+    let totalFound = 0;
+    let newItems = [];
+    let duplicateItems = [];
+
+    // สร้างและตรวจสอบรายการสแกน
     for (const curDate of dateList) {
       for (let i = 0; i < personnelList.length; i++) {
         const p = personnelList[i];
-        // เลือกเครื่องสแกนตามการกระจาย
         const sc = selectedMachines[(p.personId + i) % selectedMachines.length];
 
-        // กำหนดเวลาสแกนแบบสมจริง: 85% ตรงเวลา (07:45 - 08:14), 12% มาสาย (08:16 - 08:45), 3% ขาด
         const rand = (p.personId * 17 + i * 13 + curDate.charCodeAt(9)) % 100;
-        if (rand < 3) continue; // ขาด/ไม่พบสแกน
+        if (rand < 3) continue;
 
         let inH = 8;
         let inM = 0;
         if (rand >= 88) {
-          // สาย
           inH = 8;
           inM = 16 + (rand % 30);
         } else {
-          // ตรงเวลา
           if (rand % 2 === 0) {
             inH = 7;
             inM = 45 + (rand % 15);
@@ -2414,10 +2481,13 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
         const inS = (rand * 7) % 60;
         const inTimeStr = `${curDate} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
 
-        // รายการเวลาสแกนที่จะบันทึก
+        const outH = 16 + Math.floor((rand % 20) / 10);
+        const outM = (rand * 3) % 60;
+        const outS = (rand * 11) % 60;
+        const outTimeStr = `${curDate} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+
         let punchEntries = [];
         if (p.fingleId === 57 && curDate === '2026-10-20') {
-          // สแกนจริงของนายทวีสิทธิ์ พุ่มพฤกษ์: สแกนเข้าตอน 08:12:00 ครั้งเดียวเท่านั้น
           punchEntries = [['2026-10-20 08:12:00', 0]];
         } else {
           punchEntries = [[inTimeStr, 0]];
@@ -2427,44 +2497,103 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
         }
 
         for (const [sTime, inOut] of punchEntries) {
-          try {
-            const [r] = await poolAtt.query(`
-              INSERT INTO attendance_raw_scan
-              (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
-              VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, 'PENDING')
-              ON DUPLICATE KEY UPDATE hr_fullname = VALUES(hr_fullname)
-            `, [
-              sc.machineNo,
-              sc.ip,
-              p.fingleId,
-              sTime,
-              inOut,
-              p.personId,
-              p.fullname,
-              p.position,
-              p.department,
-              p.personType
-            ]);
-            if (r.affectedRows > 0) totalInserted++;
-            else totalDuplicates++;
-          } catch {
-            totalDuplicates++;
+          totalFound++;
+          const key = `${p.fingleId}_${sTime}`;
+          const isDup = existingKeySet.has(key);
+          const itemPayload = {
+            machineNo: sc.machineNo,
+            deviceIp: sc.ip,
+            fingleId: p.fingleId,
+            scanDateTime: sTime,
+            inOutMode: inOut,
+            personId: p.personId,
+            fullname: p.fullname,
+            position: p.position,
+            department: p.department,
+            personType: p.personType
+          };
+
+          if (isDup) {
+            duplicateItems.push(itemPayload);
+          } else {
+            newItems.push(itemPayload);
           }
         }
+      }
+    }
+
+    // กรณีเป็นโหมดตรวจสอบตัวอย่างก่อน (Preview Mode) ไม่ทำการเขียนลง DB
+    if (preview) {
+      return res.json({
+        success: true,
+        preview: true,
+        totalFound,
+        newCount: newItems.length,
+        duplicateCount: duplicateItems.length,
+        strategy,
+        sampleNew: newItems.slice(0, 5),
+        sampleDuplicates: duplicateItems.slice(0, 5),
+        message: `ตรวจสอบล่วงหน้าพบข้อมูลทั้งหมด ${totalFound} รายการ: เป็นข้อมูลใหม่ +${newItems.length} รายการ | มีในระบบแล้ว (ซ้ำ) ${duplicateItems.length} รายการ`
+      });
+    }
+
+    // บันทึกจริงตามกลยุทธ์ที่เลือก
+    let totalInserted = 0;
+    let totalUpdated = 0;
+    let totalSkipped = 0;
+
+    const itemsToProcess = strategy === 'SKIP_DUPLICATES' ? newItems : [...newItems, ...duplicateItems];
+    totalSkipped = strategy === 'SKIP_DUPLICATES' ? duplicateItems.length : 0;
+
+    for (const item of itemsToProcess) {
+      try {
+        if (strategy === 'OVERWRITE') {
+          const [r] = await poolAtt.query(`
+            INSERT INTO attendance_raw_scan
+            (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, 'PENDING')
+            ON DUPLICATE KEY UPDATE 
+              in_out_mode = VALUES(in_out_mode),
+              hr_fullname = VALUES(hr_fullname),
+              hr_position_name = VALUES(hr_position_name),
+              hr_dep_name = VALUES(hr_dep_name)
+          `, [
+            item.machineNo, item.deviceIp, item.fingleId, item.scanDateTime, item.inOutMode,
+            item.personId, item.fullname, item.position, item.department, item.personType
+          ]);
+          if (r.affectedRows === 1) totalInserted++;
+          else totalUpdated++;
+        } else {
+          // SKIP_DUPLICATES (INSERT IGNORE)
+          const [r] = await poolAtt.query(`
+            INSERT IGNORE INTO attendance_raw_scan
+            (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, 'PENDING')
+          `, [
+            item.machineNo, item.deviceIp, item.fingleId, item.scanDateTime, item.inOutMode,
+            item.personId, item.fullname, item.position, item.department, item.personType
+          ]);
+          if (r.affectedRows > 0) totalInserted++;
+          else totalSkipped++;
+        }
+      } catch (err) {
+        totalSkipped++;
       }
     }
 
     res.json({
       success: true,
       mode,
-      datesCount: dateList.length,
-      dates: dateList.slice(0, 5),
-      machineCount: selectedMachines.length,
-      machines: selectedMachines.map(m => m.name),
-      personnelCount: personnelList.length,
+      strategy,
+      totalFound,
       totalInserted,
-      totalDuplicates,
-      message: `ดึงข้อมูลสแกนสำเร็จ: บันทึกข้อมูลใหม่ +${totalInserted} รายการ จาก ${selectedMachines.map(m => m.name).join(', ')} ในช่วง ${dateList[0]} ถึง ${dateList[dateList.length - 1]} (${dateList.length} วัน) เรียบร้อยแล้ว`
+      totalUpdated,
+      totalSkipped,
+      datesCount: dateList.length,
+      machines: selectedMachines.map(m => m.name),
+      message: strategy === 'SKIP_DUPLICATES'
+        ? `ดึงเฉพาะข้อมูลใหม่สำเร็จ: บันทึกข้อมูลใหม่ +${totalInserted} รายการ (ข้ามรายการซ้ำ ${totalSkipped} รายการ ไม่ทับของเดิม)`
+        : `อัปเดตข้อมูลสำเร็จ: บันทึกใหม่ +${totalInserted} รายการ และอัปเดตทับข้อมูลเดิม ${totalUpdated} รายการ`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: `เกิดข้อผิดพลาดในการดึงข้อมูล: ${err.message}` });
@@ -2477,7 +2606,7 @@ app.post('/api/scans/import-from-hosoffice', async (req, res) => {
     await ensureTablesExist();
     const poolAtt = getDbPool();
     const poolHos = getHosofficePool();
-    const { limit = 5000, dateFrom, dateTo, month, year } = req.body || {};
+    const { limit = 5000, dateFrom, dateTo, month, year, strategy = 'SKIP_DUPLICATES', preview = false } = req.body || {};
 
     // 1. ตรวจสอบคอลัมน์จาก information_schema เพื่อความปลอดภัยสูงสุด (ไม่ทำให้เกิด Unknown column)
     let cols = new Set();
@@ -2618,9 +2747,8 @@ app.post('/api/scans/import-from-hosoffice', async (req, res) => {
       if (p.id) personMap.set(Number(p.id), p);
     }
 
-    let inserted = 0;
-    let duplicates = 0;
     const affectedDates = new Set();
+    const candidates = [];
 
     for (const s of scans) {
       const getVal = (possibleNames) => {
@@ -2657,39 +2785,105 @@ app.post('/api/scans/import-from-hosoffice', async (req, res) => {
       const vMode = Number(getVal(['verify_mode', 'verifymode'])) || 1;
       const p = personMap.get(fid);
 
+      const itemPayload = {
+        machineNo: mNo,
+        deviceIp: '10.2.0.201',
+        fingleId: fid,
+        scanDateTime: sTimeStr,
+        verifyMode: vMode,
+        inOutMode: inOut,
+        personId: p?.id || null,
+        fullname: p?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
+        position: p?.hr_position_name || '',
+        department: p?.hr_dep_name || '',
+        personType: p?.hr_person_type_name || 'ข้าราชการ'
+      };
+
+      candidates.push(itemPayload);
+    }
+
+    // ตรวจสอบความซ้ำกับ attendance_raw_scan ที่มีอยู่แล้ว
+    const [existingRows] = await poolAtt.query('SELECT fingle_id, scan_date_time FROM attendance_raw_scan');
+    const existingKeySet = new Set((existingRows || []).map(r => `${r.fingle_id}_${r.scan_date_time}`));
+
+    const newItems = [];
+    const duplicateItems = [];
+    for (const c of candidates) {
+      if (existingKeySet.has(`${c.fingleId}_${c.scanDateTime}`)) {
+        duplicateItems.push(c);
+      } else {
+        newItems.push(c);
+      }
+    }
+
+    // หากเปิดโหมด Preview
+    if (preview) {
+      return res.json({
+        success: true,
+        preview: true,
+        totalFound: candidates.length,
+        newCount: newItems.length,
+        duplicateCount: duplicateItems.length,
+        strategy,
+        sampleNew: newItems.slice(0, 5),
+        sampleDuplicates: duplicateItems.slice(0, 5),
+        message: `ตรวจสอบตาราง ${hosofficeDbName}.fingle_scan พบทั้งหมด ${candidates.length} รายการ: เป็นข้อมูลใหม่ +${newItems.length} รายการ | มีในระบบแล้ว (ซ้ำ) ${duplicateItems.length} รายการ`
+      });
+    }
+
+    let inserted = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    const itemsToProcess = strategy === 'SKIP_DUPLICATES' ? newItems : [...newItems, ...duplicateItems];
+    skipped = strategy === 'SKIP_DUPLICATES' ? duplicateItems.length : 0;
+
+    for (const c of itemsToProcess) {
       try {
-        const [r] = await poolAtt.query(`
-          INSERT INTO attendance_raw_scan
-          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'PUSHED')
-          ON DUPLICATE KEY UPDATE hr_mapped = 1
-        `, [
-          mNo,
-          '10.2.0.201',
-          fid,
-          sTimeStr,
-          vMode,
-          inOut,
-          p?.id || null,
-          p?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
-          p?.hr_position_name || '',
-          p?.hr_dep_name || '',
-          p?.hr_person_type_name || 'ข้าราชการ'
-        ]);
-        if (r.affectedRows > 0) inserted++;
-        else duplicates++;
-      } catch (e) {
-        duplicates++;
+        if (strategy === 'OVERWRITE') {
+          const [r] = await poolAtt.query(`
+            INSERT INTO attendance_raw_scan
+            (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'PUSHED')
+            ON DUPLICATE KEY UPDATE 
+              in_out_mode = VALUES(in_out_mode),
+              verify_mode = VALUES(verify_mode),
+              hr_fullname = VALUES(hr_fullname)
+          `, [
+            c.machineNo, c.deviceIp, c.fingleId, c.scanDateTime, c.verifyMode, c.inOutMode,
+            c.personId, c.fullname, c.position, c.department, c.personType
+          ]);
+          if (r.affectedRows === 1) inserted++;
+          else updated++;
+        } else {
+          // SKIP_DUPLICATES
+          const [r] = await poolAtt.query(`
+            INSERT IGNORE INTO attendance_raw_scan
+            (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'PUSHED')
+          `, [
+            c.machineNo, c.deviceIp, c.fingleId, c.scanDateTime, c.verifyMode, c.inOutMode,
+            c.personId, c.fullname, c.position, c.department, c.personType
+          ]);
+          if (r.affectedRows > 0) inserted++;
+          else skipped++;
+        }
+      } catch {
+        skipped++;
       }
     }
 
     res.json({
       success: true,
-      totalRead: scans.length,
+      strategy,
+      totalRead: candidates.length,
       importedCount: inserted,
-      duplicates,
+      updatedCount: updated,
+      duplicates: skipped,
       datesCount: affectedDates.size,
-      message: `นำเข้าข้อมูลสแกนจาก ${hosofficeDbName}.fingle_scan สำเร็จ (นำเข้าใหม่ +${inserted} รายการ, ซ้ำเดิม ${duplicates} รายการ)`
+      message: strategy === 'SKIP_DUPLICATES'
+        ? `นำเข้าเฉพาะข้อมูลใหม่จาก HosOffice สำเร็จ: บันทึกข้อมูลใหม่ +${inserted} รายการ (ข้ามรายการซ้ำ ${skipped} รายการ ไม่ทับของเดิม)`
+        : `อัปเดตข้อมูลจาก HosOffice สำเร็จ: บันทึกใหม่ +${inserted} รายการ และอัปเดตทับข้อมูลเดิม ${updated} รายการ`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: `นำเข้าจาก HosOffice ล้มเหลว: ${err.message}` });

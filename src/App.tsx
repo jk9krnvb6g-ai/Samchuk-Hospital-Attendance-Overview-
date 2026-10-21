@@ -29,14 +29,16 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  // Background auto-sync simulation (every 60s as specified in Section 7)
+  // ปิดการ Sync อัตโนมัติตามคำขอของผู้ใช้งาน (Manual Sync Only)
+  // ไม่รัน Background Interval สุ่มดึงหรือทับข้อมูลอีกต่อไป
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (storeState.autoSyncEnabled) {
+    if (storeState.autoSyncEnabled) {
+      // หากผู้ใช้จงใจเปิดเองในภายหลัง ถึงจะเปิดใช้งาน
+      const timer = setInterval(() => {
         attendanceStore.triggerScannerSync();
-      }
-    }, 60000);
-    return () => clearInterval(timer);
+      }, 300000); // 5 นาที (หากเปิดใช้งาน)
+      return () => clearInterval(timer);
+    }
   }, [storeState.autoSyncEnabled]);
 
   // Handle manual sync action (ดึงสแกนดิบจากเครื่องและบันทึกลง MySQL ทันที)

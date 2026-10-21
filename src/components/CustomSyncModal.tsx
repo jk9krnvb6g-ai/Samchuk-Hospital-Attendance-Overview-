@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Cpu, 
@@ -10,9 +10,16 @@ import {
   Database,
   Layers,
   ChevronRight,
-  Filter
+  Filter,
+  Eye,
+  ShieldCheck,
+  Check,
+  HelpCircle,
+  Server,
+  Activity
 } from 'lucide-react';
 import { attendanceStore } from '../services/attendanceStore';
+import { apiClient } from '../services/apiClient';
 
 interface CustomSyncModalProps {
   isOpen: boolean;
@@ -38,8 +45,34 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
   const [year, setYear] = useState<string>('2026');
   const [syncSource, setSyncSource] = useState<'SCANNERS' | 'HOSOFFICE'>('SCANNERS');
   
+  // การจัดการข้อมูลซ้ำ: 'SKIP_DUPLICATES' (ดึงเฉพาะข้อมูลใหม่) vs 'OVERWRITE' (ทับข้อมูลเดิม)
+  const [strategy, setStrategy] = useState<'SKIP_DUPLICATES' | 'OVERWRITE'>('SKIP_DUPLICATES');
+
+  // ข้อมูลตรวจสอบล่วงหน้า (Preview)
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [previewData, setPreviewData] = useState<{
+    totalFound: number;
+    newCount: number;
+    duplicateCount: number;
+    sampleNew?: any[];
+    sampleDuplicates?: any[];
+    message?: string;
+  } | null>(null);
+
+  // ข้อมูลฐานข้อมูล (Database Overview)
+  const [showDbInfo, setShowDbInfo] = useState(false);
+  const [dbOverview, setDbOverview] = useState<any>(null);
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [resultMsg, setResultMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      apiClient.getDatabaseOverview().then(data => {
+        if (data) setDbOverview(data);
+      }).catch(() => {});
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -53,6 +86,62 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
 
   const selectAllMachines = () => setSelectedMachines([1, 2, 3]);
 
+  // ฟังก์ชันตรวจสอบข้อมูลล่วงหน้า (Preview)
+  const handlePreview = async () => {
+    if (syncSource === 'SCANNERS' && selectedMachines.length === 0) {
+      setResultMsg({ type: 'error', text: 'กรุณาเลือกเครื่องสแกนนิ้วอย่างน้อย 1 เครื่อง' });
+      return;
+    }
+
+    setIsPreviewing(true);
+    setResultMsg(null);
+    setPreviewData(null);
+
+    try {
+      if (syncSource === 'HOSOFFICE') {
+        const res = await attendanceStore.importFromHosoffice({
+          dateFrom: timeMode === 'RANGE' ? dateFrom : undefined,
+          dateTo: timeMode === 'RANGE' ? dateTo : undefined,
+          month: timeMode === 'MONTH' ? month : undefined,
+          year: timeMode === 'YEAR' ? year : undefined,
+          strategy,
+          preview: true
+        });
+
+        if (res.details?.preview || res.details?.totalFound !== undefined) {
+          setPreviewData(res.details);
+        } else {
+          setResultMsg({ type: 'success', text: res.message });
+        }
+      } else {
+        const res = await attendanceStore.syncScannersCustom({
+          machineNos: selectedMachines,
+          mode: timeMode,
+          date: singleDate,
+          dateFrom,
+          dateTo,
+          month,
+          year,
+          allPersonnel: true,
+          recalculate: false,
+          strategy,
+          preview: true
+        });
+
+        if (res.details?.preview || res.details?.totalFound !== undefined) {
+          setPreviewData(res.details);
+        } else {
+          setResultMsg({ type: 'success', text: res.message });
+        }
+      }
+    } catch (err: any) {
+      setResultMsg({ type: 'error', text: err.message || 'เกิดข้อผิดพลาดในการตรวจสอบข้อมูล' });
+    } finally {
+      setIsPreviewing(false);
+    }
+  };
+
+  // ฟังก์ชันเริ่มดึงข้อมูลและบันทึกจริง
   const handleStartSync = async () => {
     if (syncSource === 'SCANNERS' && selectedMachines.length === 0) {
       setResultMsg({ type: 'error', text: 'กรุณาเลือกเครื่องสแกนนิ้วอย่างน้อย 1 เครื่อง' });
@@ -68,11 +157,14 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
           dateFrom: timeMode === 'RANGE' ? dateFrom : undefined,
           dateTo: timeMode === 'RANGE' ? dateTo : undefined,
           month: timeMode === 'MONTH' ? month : undefined,
-          year: timeMode === 'YEAR' ? year : undefined
+          year: timeMode === 'YEAR' ? year : undefined,
+          strategy,
+          preview: false
         });
 
         if (res.success) {
           setResultMsg({ type: 'success', text: res.message });
+          setPreviewData(null);
           if (onSyncComplete) onSyncComplete(res.message);
         } else {
           setResultMsg({ type: 'error', text: res.message });
@@ -88,11 +180,14 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
           month,
           year,
           allPersonnel: true,
-          recalculate: true
+          recalculate: true,
+          strategy,
+          preview: false
         });
 
         if (res.success) {
           setResultMsg({ type: 'success', text: res.message });
+          setPreviewData(null);
           if (onSyncComplete) onSyncComplete(res.message);
         } else {
           setResultMsg({ type: 'error', text: res.message });
@@ -119,7 +214,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                 ดึงข้อมูลสแกนนิ้วตามเงื่อนไข (Custom Scanner Sync)
               </h3>
               <p className="text-xs text-teal-100">
-                เลือกเครื่องสแกน, วันที่, ช่วงเวลา, รายเดือน หรือรายปี เพื่อดึง Log เข้าสู่ระบบ
+                เลือกเครื่องสแกน, วันที่, ตรวจจับข้อมูลซ้ำ และเลือกวิธีก่อนดึงจริง
               </p>
             </div>
           </div>
@@ -133,6 +228,20 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-5 text-xs">
+          
+          {/* แจ้งเตือนสถานะปิด Sync Auto */}
+          <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-xl flex items-center justify-between text-amber-950">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+              <span className="font-semibold text-[11px]">
+                สถานะปัจจุบัน: ปิดการ Sync อัตโนมัติแล้ว (Manual Sync Only)
+              </span>
+            </div>
+            <span className="text-[10px] text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+              ข้อมูลจะไม่ถูกดึงซ้ำเอง
+            </span>
+          </div>
+
           {/* Source Selection */}
           <div className="space-y-2">
             <label className="font-bold text-slate-800 flex items-center gap-1.5 text-xs">
@@ -142,7 +251,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => setSyncSource('SCANNERS')}
+                onClick={() => { setSyncSource('SCANNERS'); setPreviewData(null); }}
                 className={`p-3 rounded-xl border text-left flex items-start gap-3 transition-all cursor-pointer ${
                   syncSource === 'SCANNERS'
                     ? 'border-teal-500 bg-teal-50/60 ring-2 ring-teal-500/20 shadow-xs'
@@ -160,7 +269,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => setSyncSource('HOSOFFICE')}
+                onClick={() => { setSyncSource('HOSOFFICE'); setPreviewData(null); }}
                 className={`p-3 rounded-xl border text-left flex items-start gap-3 transition-all cursor-pointer ${
                   syncSource === 'HOSOFFICE'
                     ? 'border-teal-500 bg-teal-50/60 ring-2 ring-teal-500/20 shadow-xs'
@@ -249,7 +358,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => setTimeMode(t.id as any)}
+                  onClick={() => { setTimeMode(t.id as any); setPreviewData(null); }}
                   className={`px-3 py-1.5 rounded-lg font-semibold text-xs transition-all cursor-pointer ${
                     timeMode === t.id
                       ? 'bg-white text-teal-800 shadow-xs border border-slate-200'
@@ -278,7 +387,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                   <input
                     type="date"
                     value={singleDate}
-                    onChange={(e) => setSingleDate(e.target.value)}
+                    onChange={(e) => { setSingleDate(e.target.value); setPreviewData(null); }}
                     className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                   />
                 </div>
@@ -291,7 +400,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                     <input
                       type="date"
                       value={dateFrom}
-                      onChange={(e) => setDateFrom(e.target.value)}
+                      onChange={(e) => { setDateFrom(e.target.value); setPreviewData(null); }}
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                     />
                   </div>
@@ -300,7 +409,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                     <input
                       type="date"
                       value={dateTo}
-                      onChange={(e) => setDateTo(e.target.value)}
+                      onChange={(e) => { setDateTo(e.target.value); setPreviewData(null); }}
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                     />
                   </div>
@@ -313,7 +422,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                   <input
                     type="month"
                     value={month}
-                    onChange={(e) => setMonth(e.target.value)}
+                    onChange={(e) => { setMonth(e.target.value); setPreviewData(null); }}
                     className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                   />
                   <span className="text-[11px] text-slate-500">ระบบจะดึงและคำนวณตลอดทั้งเดือนนั้น</span>
@@ -325,7 +434,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                   <span className="text-slate-700 font-medium">เลือกประจำปี (ค.ศ. / พ.ศ.):</span>
                   <select
                     value={year}
-                    onChange={(e) => setYear(e.target.value)}
+                    onChange={(e) => { setYear(e.target.value); setPreviewData(null); }}
                     className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500"
                   >
                     <option value="2026">2026 (พ.ศ. 2569 - ปีปัจจุบัน)</option>
@@ -336,6 +445,175 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                 </div>
               )}
             </div>
+          </div>
+
+          {/* 4. การจัดการข้อมูลซ้ำ / ทับข้อมูลเดิม (Duplicate Handling Strategy) */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="font-bold text-slate-800 flex items-center gap-1.5 text-xs">
+                <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
+                <span>4. วิธีการจัดการข้อมูลซ้ำ (Duplicate Handling Strategy):</span>
+              </label>
+              <button
+                type="button"
+                onClick={handlePreview}
+                disabled={isPreviewing}
+                className="inline-flex items-center gap-1.5 px-3 py-1 bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 rounded-lg font-semibold text-[11px] cursor-pointer transition-colors disabled:opacity-50"
+              >
+                <Eye className="w-3 h-3 text-teal-600" />
+                <span>{isPreviewing ? 'กำลังตรวจสอบ...' : '🔍 ตรวจสอบข้อมูลก่อนดึง'}</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div 
+                onClick={() => setStrategy('SKIP_DUPLICATES')}
+                className={`p-3 rounded-xl border flex items-start gap-2.5 cursor-pointer transition-all ${
+                  strategy === 'SKIP_DUPLICATES'
+                    ? 'border-emerald-500 bg-emerald-50/60 ring-2 ring-emerald-500/20'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
+                }`}
+              >
+                <input 
+                  type="radio" 
+                  name="syncStrategy" 
+                  checked={strategy === 'SKIP_DUPLICATES'}
+                  onChange={() => {}}
+                  className="mt-1 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                />
+                <div>
+                  <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <span>ดึงเฉพาะข้อมูลใหม่ (แนะนำ)</span>
+                    <span className="bg-emerald-100 text-emerald-800 text-[9px] px-1.5 py-0.2 rounded font-semibold">ปลอดภัย</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                    ข้ามรายการที่ซ้ำกับในระบบ ไม่แก้ไขหรือทับประวัติเดิมที่เคยบันทึกไว้ 100%
+                  </div>
+                </div>
+              </div>
+
+              <div 
+                onClick={() => setStrategy('OVERWRITE')}
+                className={`p-3 rounded-xl border flex items-start gap-2.5 cursor-pointer transition-all ${
+                  strategy === 'OVERWRITE'
+                    ? 'border-amber-500 bg-amber-50/60 ring-2 ring-amber-500/20'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
+                }`}
+              >
+                <input 
+                  type="radio" 
+                  name="syncStrategy" 
+                  checked={strategy === 'OVERWRITE'}
+                  onChange={() => {}}
+                  className="mt-1 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                />
+                <div>
+                  <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <span>อัปเดตทับข้อมูลเดิม (Overwrite)</span>
+                    <span className="bg-amber-100 text-amber-900 text-[9px] px-1.5 py-0.2 rounded font-semibold">อัปเดต</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                    เขียนทับข้อมูลเดิมด้วยค่าล่าสุด เหมาะเมื่อต้องการแก้ไขหรือ Refresh ข้อมูล
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Preview Card Results */}
+          {previewData && (
+            <div className="p-4 bg-teal-50/80 border border-teal-200 rounded-xl space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-teal-900 flex items-center gap-1.5 text-xs">
+                  <CheckCircle2 className="w-4 h-4 text-teal-600" />
+                  <span>ผลการตรวจสอบข้อมูลล่วงหน้า:</span>
+                </span>
+                <span className="text-[11px] text-teal-700 font-mono">
+                  รวมพบ {previewData.totalFound} รายการ
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <div className="p-2.5 bg-white border border-emerald-200 rounded-lg shadow-2xs">
+                  <div className="text-[10px] text-slate-500 font-medium">🟢 ข้อมูลใหม่ที่ยังไม่มีในระบบ</div>
+                  <div className="text-base font-bold text-emerald-700 font-mono mt-0.5">
+                    +{previewData.newCount} <span className="text-xs font-normal">รายการ</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    {previewData.newCount > 0 ? 'พร้อมนำเข้าสู่ระบบ' : 'ไม่มีข้อมูลใหม่'}
+                  </div>
+                </div>
+
+                <div className="p-2.5 bg-white border border-slate-200 rounded-lg shadow-2xs">
+                  <div className="text-[10px] text-slate-500 font-medium">🟡 ข้อมูลที่ซ้ำกับระบบแล้ว</div>
+                  <div className="text-base font-bold text-amber-700 font-mono mt-0.5">
+                    {previewData.duplicateCount} <span className="text-xs font-normal">รายการ</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    {strategy === 'SKIP_DUPLICATES' ? 'จะถูกข้าม (ไม่ทับของเดิม)' : 'จะถูกเขียนทับด้วยข้อมูลล่าสุด'}
+                  </div>
+                </div>
+              </div>
+
+              {previewData.newCount === 0 && previewData.duplicateCount > 0 && strategy === 'SKIP_DUPLICATES' && (
+                <div className="text-[11px] text-amber-900 bg-amber-100/60 p-2 rounded-lg leading-relaxed">
+                  💡 ข้อมูลในช่วงเวลานี้มีครบในระบบแล้ว หากคุณกดยืนยันด้วยโหมด "ดึงเฉพาะข้อมูลใหม่" จะไม่มีการเปลี่ยนแปลงใดๆ หากต้องการเขียนทับข้อมูลเดิม ให้เลือกตัวเลือก "อัปเดตทับข้อมูลเดิม"
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Database Info Toggle */}
+          <div className="pt-2 border-t border-slate-200">
+            <button
+              type="button"
+              onClick={() => setShowDbInfo(!showDbInfo)}
+              className="text-slate-600 hover:text-slate-900 text-[11px] flex items-center gap-1 font-semibold cursor-pointer"
+            >
+              <Server className="w-3.5 h-3.5 text-teal-600" />
+              <span>{showDbInfo ? 'ซ่อนโครงสร้างฐานข้อมูล (2 ฐาน)' : 'คลิกเพื่อดูฐานข้อมูลทั้งหมดในระบบ (มีกี่ฐาน / ใช้ทำอะไร)'}</span>
+            </button>
+
+            {showDbInfo && (
+              <div className="mt-3 p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-[11px]">
+                <div className="font-bold text-slate-800 text-xs flex items-center justify-between">
+                  <span>ระบบใช้งาน 2 ฐานข้อมูลหลักบน MySQL 10.2.0.201:</span>
+                  <span className="text-[10px] font-normal text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                    Gateway Port 3002
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {/* Database 1 */}
+                  <div className="p-2.5 bg-white border border-slate-200 rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold text-teal-800 font-mono">1. samchuk_attendance</div>
+                      <span className="bg-emerald-100 text-emerald-800 text-[9px] px-1.5 py-0.2 rounded font-semibold">ONLINE</span>
+                    </div>
+                    <div className="text-slate-600 mt-0.5">
+                      <strong>หน้าที่:</strong> ฐานข้อมูลระบบลงเวลาและตารางเวร (Dedicated Attendance DB)
+                    </div>
+                    <div className="text-slate-500 mt-0.5 text-[10px]">
+                      ตารางภายใน: attendance_raw_scan, attendance_shift, attendance_daily_result, attendance_person_roster, attendance_push_batch
+                    </div>
+                  </div>
+
+                  {/* Database 2 */}
+                  <div className="p-2.5 bg-white border border-slate-200 rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold text-teal-800 font-mono">2. hosoffice</div>
+                      <span className="bg-emerald-100 text-emerald-800 text-[9px] px-1.5 py-0.2 rounded font-semibold">ONLINE</span>
+                    </div>
+                    <div className="text-slate-600 mt-0.5">
+                      <strong>หน้าที่:</strong> ฐานข้อมูลระบบโรงพยาบาล HOSxP / HosOffice (HR Master Database)
+                    </div>
+                    <div className="text-slate-500 mt-0.5 text-[10px]">
+                      ตารางที่เชื่อมต่อ: hr_person (ข้อมูลบุคลากร), hr_department (แผนก), hr_position, fingle_scan (ประวัติสแกนเดิม)
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Result Alert Message */}
@@ -359,8 +637,11 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
 
         {/* Modal Footer */}
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs">
-          <div className="text-slate-500 text-[11px]">
-            * ตรวจจับและข้ามสแกนซ้ำ (Duplicate Protection) ป้องกันข้อมูลซ้ำซ้อน 100%
+          <div className="text-slate-500 text-[11px] flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>
+              โหมดที่เลือก: <strong>{strategy === 'SKIP_DUPLICATES' ? 'ดึงเฉพาะของใหม่ (ไม่ทับของเดิม)' : 'อัปเดตทับข้อมูลเดิม'}</strong>
+            </span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -380,7 +661,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
               className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl shadow-xs flex items-center gap-2 cursor-pointer disabled:opacity-50 transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
-              <span>{isProcessing ? 'กำลังดึงข้อมูล...' : '⚡ เริ่มดึงข้อมูลตามเงื่อนไข'}</span>
+              <span>{isProcessing ? 'กำลังดึงข้อมูล...' : '⚡ ยืนยันดึงข้อมูลตามเงื่อนไข'}</span>
             </button>
           </div>
         </div>

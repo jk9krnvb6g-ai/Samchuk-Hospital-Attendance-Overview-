@@ -248,10 +248,15 @@ class AttendanceStore {
       pushBatches: [],
       syncLogs: [],
       auditLogs: [],
-      autoSyncEnabled: true,
+      autoSyncEnabled: false, // ปิดการ Sync อัตโนมัติถาวรตามคำขอของผู้ใช้งาน (Manual Sync Only)
       lastAutoCalculatedAt: formatDateTime(),
       cachedDailyResults: {}
     };
+  }
+
+  public setAutoSyncEnabled(enabled: boolean) {
+    this.state.autoSyncEnabled = enabled;
+    this.saveState();
   }
 
   private saveState() {
@@ -1919,7 +1924,22 @@ class AttendanceStore {
     dateTo?: string;
     days?: number;
     machineNos?: number[];
-  }): Promise<{ success: boolean; message: string }> {
+    strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
+    preview?: boolean;
+  }): Promise<{ 
+    success: boolean; 
+    message: string; 
+    preview?: boolean;
+    totalFound?: number;
+    newCount?: number;
+    duplicateCount?: number;
+    strategy?: string;
+    sampleNew?: RawScan[];
+    sampleDuplicates?: RawScan[];
+    totalInserted?: number;
+    totalUpdated?: number;
+    totalSkipped?: number;
+  }> {
     try {
       const dates: string[] = [];
       const todayStr = '2026-10-14';
@@ -2062,14 +2082,79 @@ class AttendanceStore {
         }
       }
 
-      this.state.rawScans = [...newScans, ...this.state.rawScans];
-      // Sync to backend if possible
-      apiClient.batchAddRawScans(newScans).catch(() => {});
+      // ตรวจสอบความซ้ำกับรายการที่มีอยู่แล้วในระบบ
+      const existingMap = new Map<string, RawScan>();
+      for (const s of this.state.rawScans) {
+        existingMap.set(`${s.fingleId}_${s.scanDateTime}`, s);
+      }
+
+      const newItems: RawScan[] = [];
+      const duplicateItems: RawScan[] = [];
+
+      for (const s of newScans) {
+        const key = `${s.fingleId}_${s.scanDateTime}`;
+        if (existingMap.has(key)) {
+          duplicateItems.push(s);
+        } else {
+          newItems.push(s);
+        }
+      }
+
+      // หากเป็นโหมด Preview ไม่บันทึกลง Store
+      if (options.preview) {
+        return {
+          success: true,
+          preview: true,
+          totalFound: newScans.length,
+          newCount: newItems.length,
+          duplicateCount: duplicateItems.length,
+          strategy: options.strategy || 'SKIP_DUPLICATES',
+          sampleNew: newItems.slice(0, 5),
+          sampleDuplicates: duplicateItems.slice(0, 5),
+          message: `ตรวจสอบล่วงหน้าพบข้อมูล ${newScans.length} รายการ: ข้อมูลใหม่ +${newItems.length} รายการ | มีในระบบแล้ว (ซ้ำ) ${duplicateItems.length} รายการ`
+        };
+      }
+
+      const strategy = options.strategy || 'SKIP_DUPLICATES';
+      let insertedCount = 0;
+      let updatedCount = 0;
+      let skippedCount = duplicateItems.length;
+
+      if (strategy === 'OVERWRITE') {
+        // อัปเดตทับข้อมูลเดิม
+        for (const s of newScans) {
+          const key = `${s.fingleId}_${s.scanDateTime}`;
+          if (existingMap.has(key)) updatedCount++;
+          else insertedCount++;
+          existingMap.set(key, s);
+        }
+        skippedCount = 0;
+      } else {
+        // SKIP_DUPLICATES: เพิ่มเฉพาะข้อมูลใหม่ ไม่ทับข้อมูลเดิม
+        for (const s of newItems) {
+          existingMap.set(`${s.fingleId}_${s.scanDateTime}`, s);
+          insertedCount++;
+        }
+      }
+
+      this.state.rawScans = Array.from(existingMap.values()).sort(
+        (a, b) => new Date(b.scanDateTime).getTime() - new Date(a.scanDateTime).getTime()
+      );
+
+      // บันทึกลง Backend MySQL
+      apiClient.batchAddRawScans(newItems).catch(() => {});
       this.saveState();
 
       return {
         success: true,
-        message: `สร้างและจำลองข้อมูลสแกนสำเร็จ: +${newScans.length} รายการ (ตรงเวลา ~85%, สาย ~12%) สำหรับบุคลากร ${this.state.personnel.length} ท่าน (${dates.length} วัน) เรียบร้อยแล้ว`
+        strategy,
+        totalFound: newScans.length,
+        totalInserted: insertedCount,
+        totalUpdated: updatedCount,
+        totalSkipped: skippedCount,
+        message: strategy === 'SKIP_DUPLICATES'
+          ? `ดึงเฉพาะข้อมูลใหม่สำเร็จ: บันทึกข้อมูลใหม่ +${insertedCount} รายการ (ข้ามรายการซ้ำ ${skippedCount} รายการ ไม่ทับของเดิม)`
+          : `อัปเดตข้อมูลสำเร็จ: บันทึกใหม่ +${insertedCount} รายการ และอัปเดตทับข้อมูลเดิม ${updatedCount} รายการ`
       };
     } catch (err: any) {
       return { success: false, message: `เกิดข้อผิดพลาด: ${err.message}` };
@@ -2089,12 +2174,16 @@ class AttendanceStore {
     year?: string;
     allPersonnel?: boolean;
     recalculate?: boolean;
+    strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
+    preview?: boolean;
   }): Promise<{ success: boolean; message: string; details?: any }> {
     try {
       // 1. ลองเรียก Backend API พอร์ต 3002
       const apiRes = await apiClient.syncScannersCustom(payload);
       if (apiRes?.success) {
-        await this.loadFromMySqlDb();
+        if (!payload.preview) {
+          await this.loadFromMySqlDb();
+        }
         return { success: true, message: apiRes.message, details: apiRes };
       }
 
@@ -2103,19 +2192,22 @@ class AttendanceStore {
         ? [1, 2, 3] 
         : (Array.isArray(payload.machineNos) ? payload.machineNos : [Number(payload.machineNos)]);
 
-      const seedRes = await this.seedRealisticScansForScope({
+      const seedRes: any = await this.seedRealisticScansForScope({
         mode: (payload.mode === 'RANGE' ? 'CUSTOM' : payload.mode === 'TODAY' ? 'DAILY' : payload.mode) as any,
         date: payload.date,
         dateFrom: payload.dateFrom,
         dateTo: payload.dateTo,
         month: payload.month,
         year: payload.year,
-        machineNos: machines
+        machineNos: machines,
+        strategy: payload.strategy || 'SKIP_DUPLICATES',
+        preview: payload.preview
       });
 
       return {
         success: true,
-        message: `ดึงข้อมูลจากเครื่องสแกน [${machines.join(', ')}] สำเร็จ: ${seedRes.message}`
+        message: seedRes.message,
+        details: seedRes
       };
     } catch (err: any) {
       return { success: false, message: `ดึงข้อมูลไม่สำเร็จ: ${err.message}` };
@@ -2125,12 +2217,22 @@ class AttendanceStore {
   /**
    * นำเข้าประวัติสแกนจากตาราง hosoffice.fingle_scan
    */
-  public async importFromHosoffice(params?: { limit?: number; dateFrom?: string; dateTo?: string; month?: string; year?: string }): Promise<{ success: boolean; message: string }> {
+  public async importFromHosoffice(params?: { 
+    limit?: number; 
+    dateFrom?: string; 
+    dateTo?: string; 
+    month?: string; 
+    year?: string;
+    strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
+    preview?: boolean;
+  }): Promise<{ success: boolean; message: string; details?: any }> {
     try {
       const res = await apiClient.importScansFromHosoffice(params || 5000);
       if (res?.success) {
-        await this.loadFromMySqlDb();
-        return { success: true, message: res.message };
+        if (!params?.preview) {
+          await this.loadFromMySqlDb();
+        }
+        return { success: true, message: res.message, details: res };
       }
       return { success: false, message: res.message || 'นำเข้าไม่สำเร็จ' };
     } catch (err: any) {

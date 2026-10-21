@@ -363,7 +363,15 @@ class ApiClientService {
   /**
    * นำเข้าข้อมูลประวัติสแกนดิบจากตาราง hosoffice.fingle_scan เข้าสู่ attendance_raw_scan
    */
-  public async importScansFromHosoffice(options: number | { limit?: number; dateFrom?: string; dateTo?: string; month?: string; year?: string } = 5000) {
+  public async importScansFromHosoffice(options: number | { 
+    limit?: number; 
+    dateFrom?: string; 
+    dateTo?: string; 
+    month?: string; 
+    year?: string;
+    strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
+    preview?: boolean;
+  } = 5000) {
     try {
       const payload = typeof options === 'number' ? { limit: options } : options;
       const res = await fetch(`${this.customBaseUrl}/api/scans/import-from-hosoffice`, {
@@ -393,6 +401,8 @@ class ApiClientService {
     year?: string;
     allPersonnel?: boolean;
     recalculate?: boolean;
+    strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
+    preview?: boolean;
   }) {
     try {
       const res = await fetch(`${this.customBaseUrl}/api/scanners/sync-custom`, {
@@ -405,6 +415,35 @@ class ApiClientService {
       return {
         success: false,
         message: this.getFriendlyFetchError(err, 'Backend API (Custom Scanner Sync)')
+      };
+    }
+  }
+
+  /**
+   * ข้อมูลสรุปภาพรวมฐานข้อมูลทั้งหมดในระบบ (Dual Database Overview)
+   */
+  public async getDatabaseOverview() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/db/overview`);
+      return await res.json();
+    } catch {
+      return {
+        success: true,
+        totalDatabases: 2,
+        databases: [
+          {
+            id: 1,
+            name: 'samchuk_attendance',
+            role: 'ฐานข้อมูลระบบลงเวลาและตารางเวร (Dedicated Attendance DB)',
+            description: 'จัดเก็บสแกนดิบ, ตารางกะ, และผลการคำนวณเวลาเข้า-ออก แยกอิสระเพื่อความเร็วและปลอดภัย'
+          },
+          {
+            id: 2,
+            name: 'hosoffice',
+            role: 'ฐานข้อมูลระบบโรงพยาบาล HOSxP / HosOffice (HR Master DB)',
+            description: 'จัดเก็บข้อมูลบุคลากรทั้งโรงพยาบาล, กลุ่มงาน, ตำแหน่ง, และตารางสแกนเดิม fingle_scan'
+          }
+        ]
       };
     }
   }

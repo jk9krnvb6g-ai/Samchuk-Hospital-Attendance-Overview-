@@ -27,15 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const isAdmin = currentUser.role === 'ADMIN';
 
-  // Live countdown to next auto-sync (60-second cycle)
-  const [secondsUntilSync, setSecondsUntilSync] = useState(58);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setSecondsUntilSync((prev) => (prev <= 1 ? 60 : prev - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   return (
     <header className="h-14 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 lg:px-6 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
@@ -100,10 +92,13 @@ export const Header: React.FC<HeaderProps> = ({
             );
           })}
 
-          {/* Auto-Sync Countdown Chip */}
-          <div className="pl-1 border-l border-slate-200 flex items-center gap-1 text-[10px] font-mono text-slate-500 tabular-nums">
-            <Clock className="w-3 h-3 text-slate-400" />
-            <span>Sync ใน {secondsUntilSync}s</span>
+          {/* Manual Sync Status Badge */}
+          <div 
+            className="pl-1.5 border-l border-slate-200 flex items-center gap-1 text-[10px] font-medium text-slate-600 bg-slate-100 px-2 py-0.5 rounded"
+            title="ปิดระบบ Sync อัตโนมัติแล้ว เพื่อป้องกันข้อมูลทับซ้อน (ดึงข้อมูลเมื่อกดปุ่มด้วยตัวเองเท่านั้น)"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+            <span>Manual Sync</span>
           </div>
         </div>
 
