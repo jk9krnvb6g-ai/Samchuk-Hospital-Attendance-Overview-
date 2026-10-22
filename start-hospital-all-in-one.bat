@@ -1,38 +1,40 @@
 @echo off
-:: 1. ขอสิทธิ์ Administrator อัตโนมัติ (ตามรูปแบบมาตรฐานของระบบ รพ.สามชุก)
+:: 1. ขอสิทธิ์ Administrator อัตโนมัติ
 net session >nul 2>&1
 if %errorLevel% neq 0 (
-    echo [INFO] กำลังขอสิทธิ์ Administrator เพื่อจัดการพอร์ตระบบ...
+    echo Requesting Administrator privileges...
     powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
     exit /b
 )
 
-title Samchuk Hospital - All Systems Master Launcher (:3001 Web and :3002 API)
+title Samchuk Hospital - All Systems Master Gateway (:3001 Web and :3002 API)
 cd /d "%~dp0"
 chcp 65001 >nul
 cls
 
 echo =========================================================================
-echo       โรงพยาบาลสามชุก - ตัวรันระบบรวมศูนย์ทั้งหมดในหน้าต่างเดียว
+echo       โรงพยาบาลสามชุก - รันระบบรวมศูนย์ทั้งหมด (ALL-IN-ONE)
 echo =========================================================================
 echo   [Web Frontend พอร์ต 3001]:
 echo     - https://10.2.0.13:3001/Procurement/
 echo     - https://10.2.0.13:3001/Cash_Cheque/
 echo     - https://10.2.0.13:3001/Sam_Att/
 echo.
-echo   [Backend API Service พอร์ต 3002]:
-echo     - https://10.2.0.13:3002/api/procurement/ (ระบบจัดซื้อ)
-echo     - https://10.2.0.13:3002/api/Cash_Cheque/ (ระบบเงินสดและเช็ค)
-echo     - https://10.2.0.13:3002/api/Sam_Att/     (ระบบลงเวลา)
+echo   [Backend API Service พอร์ต 3002 รวมทุกระบบ]:
+echo     - https://10.2.0.13:3002/api/procurement/ (จัดซื้อ)
+echo     - https://10.2.0.13:3002/api/Cash_Cheque/ (เงินสดและเช็ค)
+echo     - https://10.2.0.13:3002/api/Sam_Att/     (ลงเวลา)
 echo.
-echo   * ไม่ต้องเปิดพอร์ตอื่นใน Firewall เพิ่มเติม (ภายนอกเห็นแค่ 3001 และ 3002)
+echo   * ไม่ต้องเปิดพอร์ต 3003 หรือ 3004 เพิ่มเติมใน Firewall ภายนอก
 echo =========================================================================
+echo [ตำแหน่งโฟลเดอร์ทำงาน]: %CD%
 echo.
 
 :: ---------------------------------------------------------------------------
-:: ค้นหาโฟลเดอร์ของระบบ Procurement Server (ซึ่งรวม Cash_Cheque อยู่ในตัวแล้ว)
+:: ค้นหาตำแหน่งโฟลเดอร์ Procurement\server และ Backend ลงเวลา
 :: ---------------------------------------------------------------------------
 set "PROCUREMENT_DIR="
+set "ATTENDANCE_DIR="
 
 if exist "%~dp0Procurement\server" (
     set "PROCUREMENT_DIR=%~dp0Procurement\server"
@@ -44,53 +46,63 @@ if exist "%~dp0Procurement\server" (
     set "PROCUREMENT_DIR=D:\Procurement\server"
 )
 
+if exist "%~dp0backend\server.cjs" (
+    set "ATTENDANCE_DIR=%~dp0"
+) else if exist "%~dp0Samchuk_Attendance\backend\server.cjs" (
+    set "ATTENDANCE_DIR=%~dp0Samchuk_Attendance"
+) else if exist "%~dp0Sam_Att\backend\server.cjs" (
+    set "ATTENDANCE_DIR=%~dp0Sam_Att"
+) else if exist "C:\inetpub\wwwroot\Sam_Att\backend\server.cjs" (
+    set "ATTENDANCE_DIR=C:\inetpub\wwwroot\Sam_Att"
+)
+
 :: ---------------------------------------------------------------------------
-:: เคลียร์โปรเซสค้างเดิมเพื่อเตรียมรันใหม่
+:: เคลียร์โปรเซสค้างเดิมบนพอร์ต 3002
 :: ---------------------------------------------------------------------------
-echo [เตรียมพร้อม] ตรวจสอบและเคลียร์โปรเซสพอร์ต 3002 เดิม...
+echo [เตรียมพร้อม] เคลียร์โปรเซสที่อาจค้างบนพอร์ต 3002...
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3002 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3005 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
 
 :: ---------------------------------------------------------------------------
-:: 1. สตาร์ท Procurement and Cash_Cheque Server
+:: รันระบบ API Gateway พอร์ต 3002
 :: ---------------------------------------------------------------------------
 echo.
 echo =========================================================================
-echo [1/2] เริ่มต้น Procurement and Cash_Cheque API Gateway...
+echo [1/1] เริ่มต้น Central API Gateway (พอร์ต 3002)...
 echo =========================================================================
+
 if defined PROCUREMENT_DIR (
     if exist "%PROCUREMENT_DIR%" (
-        echo       - โฟลเดอร์: %PROCUREMENT_DIR%
-        echo       - ระบบจัดซื้อ (/api/procurement) และ ระบบเช็ค (/api/Cash_Cheque)
-        start "Procurement and Cash_Cheque (:3002)" /D "%PROCUREMENT_DIR%" cmd /k "chcp 65001 >nul && npm start"
-        echo       [OK] สตาร์ท Procurement and Cash_Cheque สำเร็จแล้ว
+        echo [INFO] พบโฟลเดอร์ Gateway: %PROCUREMENT_DIR%
+        echo [INFO] เริ่มต้น Backend Gateway พอร์ต 3002 ในหน้าต่างนี้...
+        cd /d "%PROCUREMENT_DIR%"
+        if not exist "node_modules" (
+            echo [INFO] กำลังติดตั้ง Dependencies...
+            call npm install --no-audit
+        )
+        :: รัน Gateway พอร์ต 3002
+        call npm start
     ) else (
-        echo       [คำเตือน] ไม่พบโฟลเดอร์ Procurement\server
+        echo [ERROR] ไม่พบโฟลเดอร์ Procurement\server
+        goto FALLBACK_ATTENDANCE
     )
 ) else (
-    echo       [คำแนะนำ] หากโฟลเดอร์ Procurement อยู่ตำแหน่งอื่น ให้เปิดรันแยกตามปกติ
+    echo [คำเตือน] ไม่พบตำแหน่ง Procurement\server อัตโนมัติ
+    goto FALLBACK_ATTENDANCE
+)
+goto END
+
+:FALLBACK_ATTENDANCE
+if defined ATTENDANCE_DIR (
+    echo [INFO] กำลังรัน Samchuk Attendance Backend โดยตรง...
+    cd /d "%ATTENDANCE_DIR%"
+    set API_PORT=3002
+    node backend\server.cjs
+) else (
+    echo [ERROR] ไม่พบทั้ง Procurement\server และระบบลงเวลา
 )
 
-:: ---------------------------------------------------------------------------
-:: 2. สตาร์ท Samchuk Attendance Backend Service
-:: ---------------------------------------------------------------------------
+:END
 echo.
-echo =========================================================================
-echo [2/2] เริ่มต้น Samchuk Attendance API Service...
-echo =========================================================================
-echo       - ระบบลงเวลา (/api/Sam_Att)
-echo       - เชื่อมต่อเครื่องสแกนและฐานข้อมูล MySQL
-echo.
-
-start "Samchuk Attendance API (:3005)" /D "%~dp0" cmd /k "chcp 65001 >nul && set API_PORT=3005 && node backend\server.cjs"
-echo       [OK] สตาร์ท Samchuk Attendance API เรียบร้อยแล้ว
-
-echo.
-echo =========================================================================
-echo  [สรุปสถานะการทำงาน]:
-echo  - Procurement and Cash_Cheque API: http://10.2.0.13:3002/
-echo  - Samchuk Attendance Web:         https://10.2.0.13:3001/Sam_Att/
-echo  - Samchuk Attendance API:         http://10.2.0.13:3005/ (หรือผ่าน Gateway 3002)
-echo =========================================================================
-echo.
+echo ระบบหยุดทำงาน กรุณากดปุ่มใดๆ เพื่อปิดหน้าต่างนี้...
 pause
