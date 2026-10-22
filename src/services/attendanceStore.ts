@@ -1928,15 +1928,15 @@ class AttendanceStore {
       const dates: string[] = [];
       const todayStr = '2026-10-14';
 
-      if (options.mode === 'DAILY') {
+      if (options.mode === 'DAILY' || (options.mode as string) === 'TODAY' || (options.mode as string) === 'DATE') {
         dates.push(options.date || todayStr);
-      } else if (options.mode === 'MONTHLY') {
+      } else if (options.mode === 'MONTHLY' || (options.mode as string) === 'MONTH') {
         const m = options.month || '2026-10';
         const numDays = options.days || 14;
         for (let d = 1; d <= numDays; d++) {
           dates.push(`${m}-${String(d).padStart(2, '0')}`);
         }
-      } else if (options.mode === 'YEARLY') {
+      } else if (options.mode === 'YEARLY' || (options.mode as string) === 'YEAR') {
         const y = Number(options.year || '2026') > 2400 ? Number(options.year) - 543 : Number(options.year || '2026');
         for (let m = 1; m <= 12; m++) {
           const mStr = `${y}-${String(m).padStart(2, '0')}`;
@@ -1944,7 +1944,7 @@ class AttendanceStore {
             dates.push(`${mStr}-${String(d).padStart(2, '0')}`);
           }
         }
-      } else if (options.mode === 'CUSTOM' && options.dateFrom && options.dateTo) {
+      } else if ((options.mode === 'CUSTOM' || (options.mode as string) === 'RANGE') && options.dateFrom && options.dateTo) {
         let cur = new Date(options.dateFrom);
         const end = new Date(options.dateTo);
         let count = 0;
@@ -2177,7 +2177,7 @@ class AttendanceStore {
         : (Array.isArray(payload.machineNos) ? payload.machineNos : [Number(payload.machineNos)]);
 
       const seedRes: any = await this.seedRealisticScansForScope({
-        mode: (payload.mode === 'RANGE' ? 'CUSTOM' : payload.mode === 'TODAY' ? 'DAILY' : payload.mode) as any,
+        mode: (payload.mode === 'RANGE' ? 'CUSTOM' : payload.mode === 'TODAY' ? 'DAILY' : payload.mode === 'MONTH' ? 'MONTHLY' : payload.mode === 'YEAR' ? 'YEARLY' : payload.mode) as any,
         date: payload.date,
         dateFrom: payload.dateFrom,
         dateTo: payload.dateTo,
