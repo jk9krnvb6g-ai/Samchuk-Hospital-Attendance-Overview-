@@ -16,7 +16,9 @@ import {
   Check,
   HelpCircle,
   Server,
-  Activity
+  Activity,
+  AlertTriangle,
+  ArrowRight
 } from 'lucide-react';
 import { attendanceStore } from '../services/attendanceStore';
 import { apiClient } from '../services/apiClient';
@@ -200,6 +202,9 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
     }
   };
 
+  const isMixedBlocked = typeof window !== 'undefined' && window.location.protocol === 'https:' && apiClient.getBaseUrl().startsWith('http:');
+  const httpUrl = typeof window !== 'undefined' ? window.location.href.replace(/^https:/i, 'http:') : '';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
@@ -229,6 +234,29 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-5 text-xs">
           
+          {/* แจ้งเตือนบราวเซอร์บล็อก Mixed Content (HTTPS -> HTTP) */}
+          {isMixedBlocked && (
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-950 space-y-2.5 shadow-xs">
+              <div className="flex items-center gap-2 font-bold text-sm text-rose-800">
+                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                <span>บราวเซอร์บล็อกการดึงข้อมูล (Mixed Content Blocked)</span>
+              </div>
+              <p className="text-xs text-rose-900 leading-relaxed">
+                เนื่องจากขณะนี้คุณกำลังเปิดหน้าเว็บด้วย <strong>HTTPS</strong> (<code className="bg-rose-100 px-1.5 py-0.5 rounded font-mono font-bold text-rose-900">https://10.2.0.13:3001</code>) แต่ Backend API Gateway (พอร์ต 3002) ทำงานด้วย <strong>HTTP</strong> ทำให้ Chrome/Edge บล็อกการเชื่อมต่อทุกอย่าง
+              </p>
+              <div className="pt-1 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => { if (httpUrl) window.location.href = httpUrl; }}
+                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs cursor-pointer shadow-xs flex items-center gap-1.5 transition-colors"
+                >
+                  <span>คลิกที่นี่เพื่อเปลี่ยนไปใช้ HTTP ทันที ({httpUrl})</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* แจ้งเตือนสถานะปิด Sync Auto */}
           <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-xl flex items-center justify-between text-amber-950">
             <div className="flex items-center gap-2">
