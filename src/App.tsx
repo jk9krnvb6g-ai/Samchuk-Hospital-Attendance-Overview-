@@ -12,6 +12,7 @@ import { PersonnelPage } from './pages/PersonnelPage';
 import { SystemAndLogsPage } from './pages/SystemAndLogsPage';
 import { MonthlyReportPage } from './pages/MonthlyReportPage';
 import { MyAttendancePage } from './pages/MyAttendancePage';
+import { CustomSyncModal } from './components/CustomSyncModal';
 import { User } from './types/attendance';
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isCustomSyncOpen, setIsCustomSyncOpen] = useState(false);
 
   // Subscribe to store updates
   useEffect(() => {
@@ -29,29 +31,12 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  // ปิดการ Sync อัตโนมัติตามคำขอของผู้ใช้งาน (Manual Sync Only)
-  // ไม่รัน Background Interval สุ่มดึงหรือทับข้อมูลอีกต่อไป
-  useEffect(() => {
-    if (storeState.autoSyncEnabled) {
-      // หากผู้ใช้จงใจเปิดเองในภายหลัง ถึงจะเปิดใช้งาน
-      const timer = setInterval(() => {
-        attendanceStore.triggerScannerSync();
-      }, 300000); // 5 นาที (หากเปิดใช้งาน)
-      return () => clearInterval(timer);
-    }
-  }, [storeState.autoSyncEnabled]);
+  // ปิดการ Sync อัตโนมัติตลอดเวลา (Manual Sync Only)
+  // ไม่มีการรัน Interval ในเบื้องหลัง เพื่อป้องกันการสุ่มดึงหรือเขียนทับข้อมูลโดยไม่ได้รับอนุญาต
 
-  // Handle manual sync action (ดึงสแกนดิบจากเครื่องและบันทึกลง MySQL ทันที)
-  const handleTriggerSync = async () => {
-    setIsSyncing(true);
-    try {
-      const res = await attendanceStore.triggerScannerSync();
-      setIsSyncing(false);
-      showToast(`⚡ ดึงข้อมูลจากเครื่องสแกน บันทึกสแกนดิบ (+${res.totalNew} รายการ) และประมวลผลเวลา (${res.processedCount} คน) ลงฐานข้อมูล MySQL เรียบร้อยแล้ว!`);
-    } catch {
-      setIsSyncing(false);
-      showToast('เกิดข้อผิดพลาดในการดึงข้อมูลจากเครื่องสแกน');
-    }
+  // เมื่อผู้ใช้กดปุ่ม Sync บน Header หรือส่วนต่างๆ ให้เปิดหน้าต่าง CustomSyncModal เพื่อตรวจสอบข้อมูลและเลือกวิธีก่อนดึง
+  const handleTriggerSync = () => {
+    setIsCustomSyncOpen(true);
   };
 
   const showToast = (msg: string) => {
@@ -96,8 +81,8 @@ export default function App() {
       subtitle: 'สรุปยอดวันทำงาน, มาสาย, ออกก่อน, OT สะสม และพิมพ์รายงาน/ส่งออก Excel'
     },
     my_attendance: {
-      title: 'เวลาทำงานของฉัน (My Personal Attendance)',
-      subtitle: 'ตรวจสอบสถานะสแกนนิ้ววันนี้, เวลากะตามประเภทบุคลากร และประวัติการลงเวลาส่วนบุคคล'
+      title: 'ดูข้อมูลรายคน / ฝ่าย (Individual & Department Attendance)',
+      subtitle: 'เลือกดูประวัติการลงเวลาและสแกนนิ้วแยกรายบุคคล หรือดูสรุปภาพรวมการเข้างานตามฝ่าย/กลุ่มงาน'
     },
     scanners: {
       title: 'จัดการเครื่องสแกนนิ้วมือ (CMiF68S Scanners)',
@@ -198,6 +183,16 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* Custom Sync Modal with Preview and Duplicate Control */}
+      <CustomSyncModal
+        isOpen={isCustomSyncOpen}
+        onClose={() => setIsCustomSyncOpen(false)}
+        onSyncComplete={(msg) => {
+          setIsCustomSyncOpen(false);
+          showToast(msg);
+        }}
+      />
 
       {/* Toast Notification */}
       {toastMessage && (

@@ -797,7 +797,47 @@ class ApiClientService {
   }
 
   /**
-   * ดึงข้อมูลบุคลากรจาก hosoffice.hr_person โดยตรง
+   * ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel (ค่าเริ่มต้นปกติ ไม่แตะต้อง hosoffice)
+   */
+  public async getPersonnelFromDb() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * สั่งซิงค์รายชื่อบุคลากรจาก hosoffice เข้าสู่ฐาน samchuk_attendance (ทำงานเมื่อผู้ใช้กดปุ่มเท่านั้น)
+   */
+  public async syncPersonnelFromHosoffice() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
+        method: 'POST'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ล้างข้อมูลบุคลากรในฐาน samchuk_attendance
+   */
+  public async clearPersonnelInDb() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/personnel/clear`, {
+        method: 'DELETE'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
+
+  /**
+   * ดึงข้อมูลบุคลากรจาก hosoffice.hr_person โดยตรง (เมื่อต้องการตรวจสอบข้อมูลต้นทาง)
    */
   public async getPersonnelFromHosoffice(limit: number = 500) {
     try {

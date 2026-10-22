@@ -243,11 +243,37 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         </div>
       )}
 
+      {/* แจ้งเตือนเมื่อฐานข้อมูล samchuk_attendance ว่างเปล่า (ตามที่ผู้ใช้สั่งลบข้อมูล) */}
+      {state.rawScans.length === 0 && (
+        <div className="p-4 bg-teal-50/90 border border-teal-200/90 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-teal-950">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-teal-100 rounded-xl text-teal-700 shrink-0 mt-0.5">
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-bold text-xs sm:text-sm text-teal-900 flex items-center gap-2">
+                <span>ฐานข้อมูล samchuk_attendance ว่างเปล่า (0 รายการ)</span>
+                <span className="bg-teal-200/80 text-teal-800 text-[10px] px-2 py-0.5 rounded-full font-semibold">ตารางสะอาด</span>
+              </div>
+              <p className="text-xs text-teal-700 mt-0.5">
+                ตาราง attendance_raw_scan ไม่มีข้อมูลสแกนตามที่คุณได้ลบออกแล้ว ระบบปิดการสุ่มสร้างข้อมูลอัตโนมัติ 100% คุณสามารถกดปุ่ม "⚡ ดึงข้อมูลสแกน" ด้านบนเพื่อเลือกดึงข้อมูลจริงจากเครื่องสแกน หรือนำเข้าจาก hosoffice ได้เมื่อต้องการ
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsSyncModalOpen(true)}
+            className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl font-bold text-xs shrink-0 cursor-pointer transition-colors shadow-xs"
+          >
+            ดึงข้อมูลสแกนใหม่
+          </button>
+        </div>
+      )}
+
       {/* Hero Metric Cards with Instant Click-to-Drill-Down */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
         {/* Card 1: Total Personnel */}
         <div 
-          onClick={() => handleOpenDrillDown('ALL_PERSONNEL', 'รายชื่อบุคลากรทั้งหมดในระบบ', `บุคลากรในฐานข้อมูล hosoffice.hr_person (${filteredPersonnelCount} ท่าน)`)}
+          onClick={() => handleOpenDrillDown('ALL_PERSONNEL', 'รายชื่อบุคลากรในฐาน samchuk_attendance', `บุคลากรในฐานข้อมูล samchuk_attendance (${filteredPersonnelCount} ท่าน)`)}
           className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-xs hover:border-teal-500 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
         >
           <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
@@ -258,7 +284,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             {filteredPersonnelCount}
           </div>
           <div className="text-[11px] text-teal-700 font-medium mt-1 flex items-center justify-between">
-            <span>ฐานข้อมูล HR</span>
+            <span>{filteredPersonnelCount > 0 ? 'ฐาน samchuk_attendance' : '0 ท่าน (ยังไม่ได้ซิงค์)'}</span>
             <span className="opacity-0 group-hover:opacity-100 transition-opacity">&rarr;</span>
           </div>
         </div>

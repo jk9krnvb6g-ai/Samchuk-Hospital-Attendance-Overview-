@@ -101,8 +101,8 @@ export const Navigation: React.FC<NavigationProps> = ({
         },
         {
           id: 'my_attendance',
-          label: 'เวลาทำงานของฉัน',
-          sublabel: 'My Personal Attendance',
+          label: 'ดูข้อมูลรายคน / ฝ่าย',
+          sublabel: 'Person & Dept View',
           icon: UserCheck,
         },
       ]
@@ -165,8 +165,8 @@ export const Navigation: React.FC<NavigationProps> = ({
       items: [
         {
           id: 'my_attendance',
-          label: 'เวลาทำงานของฉัน',
-          sublabel: 'My Personal Attendance',
+          label: 'ดูข้อมูลรายคน / ฝ่าย',
+          sublabel: 'Person & Dept View',
           icon: UserCheck,
         },
       ]

@@ -62,23 +62,46 @@ export const PersonnelPage: React.FC<PersonnelPageProps> = ({ state }) => {
     return true;
   });
 
-  const hosofficeSqlQuery = `SELECT 
-    HP.HR_CID,
-    CONCAT(HF.HR_PREFIX_NAME, HP.HR_FNAME, ' ', HP.HR_LNAME) AS FULLNAME,
-    HT.HR_POSITION_NAME,
-    HD.HR_DEPARTMENT_NAME,
-    HDS.HR_DEPARTMENT_SUB_NAME AS HR_DEPARTMENT_SUB,
-    HPT.HR_PERSON_TYPE_NAME,
-    HL.HR_LEVEL_NAME,
-    HP.FINGLE_ID,
-    HP.ID
-FROM hr_person HP
-LEFT OUTER JOIN hr_prefix HF ON HP.HR_PREFIX_ID = HF.HR_PREFIX_ID
-LEFT OUTER JOIN hr_position HT ON HP.HR_POSITION_ID = HT.HR_POSITION_ID
-LEFT OUTER JOIN hr_department HD ON HP.HR_DEPARTMENT_ID = HD.HR_DEPARTMENT_ID
-LEFT OUTER JOIN hr_department_sub HDS ON HP.HR_DEPARTMENT_SUB_ID = HDS.HR_DEPARTMENT_SUB_ID
-LEFT OUTER JOIN hr_person_type HPT ON HP.HR_PERSON_TYPE_ID = HPT.HR_PERSON_TYPE_ID
-LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
+  const hosofficeSqlQuery = `WITH active_person AS (
+  SELECT * 
+  FROM hr_person 
+  WHERE HR_STATUS_ID IN ('01')
+)
+SELECT 
+  hp.ID AS id,
+  hp.FINGLE_ID AS fingle_id,
+  hp.HR_CID AS hr_cid,
+  TRIM(CONCAT(
+    COALESCE(hf.HR_PREFIX_NAME, ''),
+    COALESCE(hp.HR_FNAME, ''),
+    CASE 
+      WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' 
+      THEN CONCAT(' ', TRIM(hp.HR_LNAME)) 
+      ELSE '' 
+    END
+  )) AS hr_fullname,
+  hp.HR_FNAME AS hr_fname,
+  hp.HR_LNAME AS hr_lname,
+  COALESCE(ht.HR_POSITION_NAME, '') AS hr_position_name,
+  COALESCE(hd.HR_DEPARTMENT_NAME, '') AS hr_dep_name,
+  COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') AS hr_dep_sub_name,
+  COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') AS hr_person_type_name,
+  COALESCE(hl.HR_LEVEL_NAME, '') AS hr_level_name,
+  hp.HR_STATUS_ID AS hr_status_id
+FROM active_person hp
+LEFT JOIN hr_prefix hf 
+  ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+LEFT JOIN hr_position ht 
+  ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+LEFT JOIN hr_department hd 
+  ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+LEFT JOIN hr_department_sub hds 
+  ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID
+LEFT JOIN hr_person_type hpt 
+  ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+LEFT JOIN hr_level hl 
+  ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
+ORDER BY hp.ID ASC;`;
 
   const handleCopyQuery = () => {
     navigator.clipboard.writeText(hosofficeSqlQuery);
@@ -86,17 +109,18 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
     setTimeout(() => setCopiedQuery(false), 2000);
   };
 
-  // Perform Sync from HOSOffice
+  // Perform Sync from HOSOffice เข้าสู่ samchuk_attendance.attendance_personnel (เมื่อกดสั่งเท่านั้น)
   const handleExecuteSync = async (simulateChanges = false) => {
     setIsSyncing(true);
     let customData: any = undefined;
 
     if (!simulateChanges) {
-      // พยายามดึงข้อมูลบุคลากรจริงจาก MySQL hosoffice.hr_person
       try {
-        const liveRes = await apiClient.getPersonnelFromHosoffice(1000);
-        if (liveRes.success && Array.isArray(liveRes.data) && liveRes.data.length > 0) {
-          customData = liveRes.data.map((r: any) => ({
+        const syncRes = await apiClient.syncPersonnelFromHosoffice();
+        if (syncRes.success) {
+          await attendanceStore.loadFromMySqlDb();
+          const liveData = attendanceStore.getState().personnel;
+          customData = liveData.map((r: any) => ({
             ID: r.personId || r.id,
             HR_CID: r.hrCid || r.hr_cid || '',
             FULLNAME: (r.hrFullname || r.hr_fullname || '').trim() || `เจ้าหน้าที่ รหัส ${r.personId || r.id}`,
@@ -108,8 +132,8 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
             FINGLE_ID: r.fingleId || r.fingle_id || r.id
           }));
         }
-      } catch {
-        // fallback
+      } catch (err: any) {
+        console.warn('Sync personnel failed:', err);
       }
     } else {
       // Create an on-the-fly change to test dynamic update
@@ -148,19 +172,30 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
     else setSyncActiveTab('SKIPPED');
   };
 
+  // ล้างข้อมูลบุคลากรในฐาน samchuk_attendance
+  const handleClearPersonnelInDb = async () => {
+    setIsSyncing(true);
+    try {
+      await apiClient.clearPersonnelInDb();
+      await attendanceStore.loadFromMySqlDb();
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Page Title & Main Actions */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
           <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-mono font-medium mb-1">
-            <span>ฐานข้อมูล: 10.2.0.201 / hosoffice (Read-Only via MySQL)</span>
+            <span>ฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel (แยกอิสระ ไม่เชื่อมต่อ hosoffice อัตโนมัติ)</span>
           </div>
           <h2 className="text-base font-bold text-slate-800">
             ข้อมูลบุคลากรและรหัสสแกนนิ้ว (Personnel Directory)
           </h2>
           <p className="text-xs text-slate-500">
-            ดึงข้อมูลบุคลากรจากตาราง hr_person ผูกกับ FINGLE_ID พร้อมตรวจสอบข้อมูลที่ดึงแล้วและปรับปรุงข้อมูลที่เปลี่ยนให้ตรงกับ HOSOffice
+            แสดงข้อมูลจากฐาน samchuk_attendance โดยตรง (จะดึงจาก hosoffice.hr_person ก็ต่อเมื่อท่านกดปุ่มสั่งการเท่านั้น)
           </p>
         </div>
 
@@ -172,11 +207,23 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
             className={`flex items-center gap-2 px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer ${
               !isAdmin ? 'opacity-60 cursor-not-allowed' : ''
             }`}
-            title="ดึงข้อมูลจากตาราง hr_person ใน hosoffice ตามคำสั่ง SQL"
+            title="ดึงข้อมูลจากตาราง hr_person ใน hosoffice มาเก็บใน samchuk_attendance"
           >
             <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'กำลังดึงข้อมูล...' : 'ดึงข้อมูลจาก HOSOffice'}</span>
+            <span>{isSyncing ? 'กำลังดึงข้อมูล...' : '📥 ดึงข้อมูลจาก HOSOffice'}</span>
           </button>
+
+          {/* Button: Clear Personnel in Samchuk DB */}
+          {isAdmin && state.personnel.length > 0 && (
+            <button
+              onClick={handleClearPersonnelInDb}
+              disabled={isSyncing}
+              className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold rounded-lg cursor-pointer transition-colors"
+              title="ลบข้อมูลบุคลากรในฐาน samchuk_attendance เพื่อให้ว่างเปล่า 0 ท่าน"
+            >
+              <span>ล้างเป็น 0 ท่าน</span>
+            </button>
+          )}
 
           {/* Button: Show SQL Query */}
           <button
@@ -387,6 +434,34 @@ LEFT OUTER JOIN hr_level HL ON HP.HR_LEVEL_ID = HL.HR_LEVEL_ID;`;
                   </tr>
                 );
               })}
+
+              {filteredPersonnel.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="py-12 text-center text-slate-500">
+                    <div className="flex flex-col items-center justify-center gap-3">
+                      <div className="p-3 bg-teal-50 text-teal-700 rounded-full">
+                        <Users className="w-8 h-8" />
+                      </div>
+                      <div className="font-bold text-slate-800 text-sm">
+                        ไม่มีข้อมูลบุคลากรในฐานข้อมูล samchuk_attendance (0 ท่าน)
+                      </div>
+                      <p className="text-xs text-slate-500 max-w-md">
+                        ระบบไม่ดึงข้อมูลจากฐาน hosoffice อัตโนมัติ เพื่อให้ท่านควบคุมข้อมูลได้อย่างอิสระ หากต้องการนำเข้ารายชื่อบุคลากรจาก HOSOffice มาใส่ฐาน samchuk_attendance สามารถกดปุ่มด้านล่างได้ทันที
+                      </p>
+                      {isAdmin && (
+                        <button
+                          onClick={() => handleExecuteSync(false)}
+                          disabled={isSyncing}
+                          className="mt-2 flex items-center gap-2 px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-colors"
+                        >
+                          <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                          <span>📥 ดึงข้อมูลบุคลากรจาก HOSOffice มาใส่ฐาน samchuk_attendance</span>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

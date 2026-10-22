@@ -241,9 +241,9 @@ class AttendanceStore {
       users: INITIAL_USERS,
       scanners: INITIAL_SCANNERS,
       shifts: [], // เริ่มต้นว่างเปล่า โหลดสดจาก MySQL attendance_shift เท่านั้น
-      personnel: INITIAL_PERSONNEL, // โหลดสดจาก MySQL hosoffice.hr_person หรือใช้รายชื่อเริ่มต้น
+      personnel: [], // เริ่มต้นว่างเปล่า โหลดสดจาก samchuk_attendance.attendance_personnel เท่านั้น ไม่ดึงอัตโนมัติจาก hosoffice
       personnelTypes: DEFAULT_PERSONNEL_TYPES,
-      rawScans: [...SEED_TEST_SCANS], // ข้อมูลสแกนจริงจำลองสำหรับทดสอบเวลา เช้า/บ่าย/ดึก ของข้าราชการและลูกจ้าง
+      rawScans: [], // เริ่มต้นว่างเปล่า (โหลดสดจาก MySQL attendance_raw_scan เท่านั้น)
       hosofficeScans: [],
       pushBatches: [],
       syncLogs: [],
@@ -379,65 +379,10 @@ class AttendanceStore {
     const now = formatDateTime();
 
     if (!backendSyncResult?.success) {
-      const newScansToInsert: RawScan[] = [];
+      // เมื่อไม่มีข้อมูลจาก Backend หรือเครื่องสแกนยังไม่มีสแกนใหม่
+      // ห้ามสุ่มสร้างข้อมูลปลอมไปทับฐานข้อมูลอย่างเด็ดขาดตามคำสั่งของผู้ใช้งาน
       targets.forEach(scanner => {
-        const simulatedCount = Math.floor(Math.random() * 4) + 1;
-        let newCount = 0;
-        let dupCount = 0;
-
-        for (let i = 0; i < simulatedCount; i++) {
-          const pIndex = Math.floor(Math.random() * this.state.personnel.length);
-          const p = this.state.personnel[pIndex] || INITIAL_PERSONNEL[0];
-          const fingleId = p.fingleId ?? 101;
-
-          const d = new Date();
-          d.setMinutes(d.getMinutes() - Math.floor(Math.random() * 15));
-          const scanDateTime = formatDateTime(d);
-
-          const isDuplicate = this.state.rawScans.some(
-            r => r.fingleId === fingleId && r.scanDateTime === scanDateTime
-          );
-
-          grandTotalRead++;
-          if (isDuplicate) {
-            dupCount++;
-            grandDuplicates++;
-            continue;
-          }
-
-          const newRawScan: RawScan = {
-            id: generateUniqueId(),
-            machineNo: scanner.machineNo,
-            deviceIp: scanner.ip,
-            fingleId,
-            scanDateTime,
-            verifyMode: 1,
-            inOutMode: Math.random() > 0.5 ? 0 : 1,
-            personId: p.personId,
-            hrFullname: p.hrFullname,
-            hrPositionName: p.hrPositionName,
-            hrLeavelName: p.hrLevelName,
-            hrDepName: p.hrDepName,
-            hrDepSubName: p.hrDepSubName,
-            hrPersonTypeName: p.hrPersonTypeName,
-            hrPersonTypeId: p.hrPersonTypeId,
-            hrDepartmentId: p.hrDepartmentId,
-            hrDepartmentSubId: p.hrDepartmentSubId,
-            hrMapped: true,
-            pushStatus: 'PENDING',
-            receivedAt: now
-          };
-
-          this.state.rawScans.unshift(newRawScan);
-          newScansToInsert.push(newRawScan);
-          newCount++;
-          grandTotalNew++;
-        }
-
         scanner.lastSync = now;
-        scanner.status = 'ONLINE';
-        scanner.totalLoadedRecords += simulatedCount;
-
         const pendingCount = this.state.rawScans.filter(r => r.pushStatus === 'PENDING').length;
         const syncLog: SyncLog = {
           id: generateUniqueId(),
@@ -447,33 +392,26 @@ class AttendanceStore {
           machineNo: scanner.machineNo,
           ip: scanner.ip,
           status: 'SUCCESS',
-          recordsTotal: simulatedCount + 80,
-          recordsNew: newCount,
-          recordsDuplicate: dupCount + 80,
+          recordsTotal: grandTotalRead,
+          recordsNew: grandTotalNew,
+          recordsDuplicate: grandDuplicates,
           recordsPending: pendingCount,
-          durationMs: Math.floor(Math.random() * 300) + 200,
-          message: `FK_LoadGeneralLogData(handle: ${scanner.machineNo * 1000 + 1261}) ดึงข้อมูลและบันทึกลง MySQL สำเร็จ`
+          durationMs: 120,
+          message: `ตรวจสอบสถานะเครื่องสแกน #${scanner.machineNo} (${scanner.ip}) สำเร็จ ไม่มีการสุ่มสร้างข้อมูลทับ`
         };
         this.state.syncLogs = [syncLog, ...this.state.syncLogs];
       });
-
-      if (newScansToInsert.length > 0) {
-        await apiClient.batchAddRawScans(newScansToInsert);
-      }
     }
 
-    // 3. Reload fresh scans and daily results straight from MySQL
+    // 3. โหลดข้อมูลสดจาก MySQL เพื่ออัปเดตหน้าจอให้ตรงกับฐานข้อมูลจริง 100%
     await this.loadFromMySqlDb();
-
-    const today = '2026-10-14';
-    const autoResults = this.getDailyAttendance(today);
 
     this.saveState();
     return {
-      totalRead: grandTotalRead || 8,
-      totalNew: grandTotalNew || 4,
-      duplicates: grandDuplicates || 0,
-      processedCount: backendSyncResult?.processedCount || autoResults.length || this.state.personnel.length
+      totalRead: grandTotalRead,
+      totalNew: grandTotalNew,
+      duplicates: grandDuplicates,
+      processedCount: this.state.rawScans.length
     };
   }
 
@@ -857,6 +795,12 @@ class AttendanceStore {
 
   // Attendance Calculation: ประมวลผลเวลาทำงานอิงตาม "ประเภทบุคลากร" (Personnel Type) โดยตรง
   public calculateAttendance(date: string = formatDate(), filterPersonId?: number): DailyResult[] {
+    // หากฐานข้อมูล samchuk_attendance ไม่มีข้อมูลสแกน (เช่น ผู้ใช้ล้างข้อมูลตารางออกหมด)
+    // ให้คืนค่าอาเรย์ว่างเปล่า [] ทันที ไม่สร้างผลประมวลผลหลอก
+    if (!this.state.rawScans || this.state.rawScans.length === 0) {
+      return [];
+    }
+
     const results: DailyResult[] = [];
     const targetPersonnel = filterPersonId 
       ? this.state.personnel.filter(p => p.personId === filterPersonId)
@@ -1242,15 +1186,13 @@ class AttendanceStore {
         }));
         scansCount = this.state.rawScans.length;
       }
-      if (!this.state.rawScans || this.state.rawScans.length === 0) {
-        this.state.rawScans = [...SEED_TEST_SCANS];
-        scansCount = this.state.rawScans.length;
-      }
+      this.state.cachedDailyResults = {};
 
-      // 3. ดึงบุคลากรจาก MySQL hosoffice.hr_person
+      // 3. ดึงบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel เท่านั้น
+      // ห้ามดึงอัตโนมัติจากฐานที่ 2 hosoffice โดยเด็ดขาดตามคำสั่งของผู้ใช้งาน
       try {
-        const pRes = await apiClient.getPersonnelFromHosoffice(1000);
-        if (pRes.success && Array.isArray(pRes.data) && pRes.data.length > 0) {
+        const pRes = await apiClient.getPersonnelFromDb();
+        if (pRes.success && Array.isArray(pRes.data)) {
           this.state.personnel = pRes.data.map((p: any) => ({
             personId: p.personId || p.id,
             id: p.id || p.personId,
@@ -1268,11 +1210,11 @@ class AttendanceStore {
             hrStatusId: p.hrStatusId || 1,
             status: 'ACTIVE'
           }));
+        } else {
+          this.state.personnel = [];
         }
-      } catch {}
-
-      if (!this.state.personnel || this.state.personnel.length === 0) {
-        this.state.personnel = INITIAL_PERSONNEL;
+      } catch {
+        this.state.personnel = [];
       }
 
       // 3.1 ดึงประเภทบุคลากรและเวลากะจาก MySQL
@@ -1351,14 +1293,18 @@ class AttendanceStore {
         }
       } catch {}
 
-      // ถ้าใน MySQL ยังไม่มีผลประมวลผลเวลาของวันนี้ ให้คำนวณและบันทึกลง MySQL ทันที
-      if (!this.state.cachedDailyResults?.[todayStr] || this.state.cachedDailyResults[todayStr].length === 0) {
+      // ถ้าใน MySQL มีข้อมูลสแกนดิบ และยังไม่มีผลประมวลผลเวลาของวันนี้ ให้คำนวณและบันทึกลง MySQL
+      // แต่ถ้าผู้ใช้ล้างข้อมูลตารางออกหมด (rawScans.length === 0) ให้คงสถานะว่างเปล่า 0 รายการไว้ ห้ามบันทึกผลปลอมลง DB
+      if (this.state.rawScans.length > 0 && (!this.state.cachedDailyResults?.[todayStr] || this.state.cachedDailyResults[todayStr].length === 0)) {
         const calced = this.calculateAttendance(todayStr);
         if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
         this.state.cachedDailyResults[todayStr] = calced;
         if (calced.length > 0) {
           apiClient.saveDailyAttendanceToDb(calced).catch(() => {});
         }
+      } else if (this.state.rawScans.length === 0) {
+        if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+        this.state.cachedDailyResults[todayStr] = [];
       }
 
       // 5. ดึงประวัติ Push Batches จาก MySQL

@@ -363,6 +363,30 @@ async function ensureTablesExist() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
+    // 2.2.1 ตารางบุคลากรของ samchuk_attendance (เก็บรายชื่อที่ซิงค์มาจาก hosoffice.hr_person)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS attendance_personnel (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        person_id INT NOT NULL,
+        fingle_id INT NOT NULL,
+        hr_cid VARCHAR(20) NULL,
+        hr_fullname VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+        hr_position_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        hr_level_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        hr_dep_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        hr_dep_sub_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        hr_person_type_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+        hr_person_type_id INT NULL,
+        hr_department_id INT NULL,
+        hr_department_sub_id INT NULL,
+        hr_status_id INT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+        synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_person_id (person_id),
+        KEY idx_fingle_id (fingle_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
     // 2.3 ตารางกลุ่มบุคลากร
     await pool.query(`
       CREATE TABLE IF NOT EXISTS attendance_personnel_group (
@@ -554,36 +578,7 @@ async function ensureTablesExist() {
       } catch {}
     }
 
-    // 2.9 แก้ไขข้อมูลสแกนจริงของนายทวีสิทธิ์ พุ่มพฤกษ์ (FINGLE_ID 57):
-    // ลบสแกนทดสอบตอนเย็น 17:36:12 ที่ถูกระบบจำลองขึ้นมาโดยผิดพลาด
-    // และบันทึกเวลาจริงที่เจ้าหน้าที่สแกน: 2026-10-20 08:12:00 (เครื่อง 2 ตึกฉุกเฉิน ER / สแกนเข้าอย่างเดียว)
-    try {
-      await pool.query(`DELETE FROM attendance_raw_scan WHERE fingle_id = 57 AND scan_date_time LIKE '%17:36%'`);
-      await pool.query(`
-        INSERT INTO attendance_raw_scan 
-        (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
-        VALUES (2, '192.168.111.164', 57, '2026-10-20 08:12:00', 1, 0, 1, 'นายทวีสิทธิ์ พุ่มพฤกษ์', 'นักวิชาการคอมพิวเตอร์', 'กลุ่มงานสุขภาพดิจิทัล', 'ข้าราชการ', 1, 'PENDING')
-        ON DUPLICATE KEY UPDATE hr_fullname = 'นายทวีสิทธิ์ พุ่มพฤกษ์', hr_dep_name = 'กลุ่มงานสุขภาพดิจิทัล'
-      `);
-      // ปรับปรุงผลคำนวณใน attendance_daily_result ของวันที่ 2026-10-20
-      await pool.query(`
-        INSERT INTO attendance_daily_result
-        (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
-        VALUES ('2026-10-20', 1, 57, 'นายทวีสิทธิ์ พุ่มพฤกษ์', 'กลุ่มงานสุขภาพดิจิทัล', 'นักวิชาการคอมพิวเตอร์', 1, 'เช้า (ปกติ)', '08:15', '16:00', '2026-10-20 08:12:00', '', '08:12', '', 'ON_TIME', 'ตรงเวลา', 0, 0, 1, NOW())
-        ON DUPLICATE KEY UPDATE 
-          check_in = '08:12', 
-          check_out = '', 
-          first_scan = '2026-10-20 08:12:00', 
-          last_scan = '', 
-          status = 'ON_TIME', 
-          status_label = 'ตรงเวลา', 
-          late_minutes = 0,
-          total_scans = 1,
-          calculated_at = NOW()
-      `);
-    } catch (e) {
-      // ignore
-    }
+    // ไม่ทำการ Insert ข้อมูลสแกนอัตโนมัติ เพื่อให้ฐานข้อมูลเป็นไปตามสถานะจริงของผู้ใช้ (หากผู้ใช้ลบ จะต้องว่างเปล่า 0 รายการ)
 
     return { success: true };
   } catch (err) {
@@ -1867,40 +1862,302 @@ app.post('/api/raw-scans/seed-sample', async (req, res) => {
   }
 });
 
+// 4.6.1 ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel (ค่าเริ่มต้น ไม่แตะต้อง hosoffice)
+app.get('/api/personnel', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+    const statusFilter = req.query.status || 'ALL'; // 'ALL', 'ACTIVE', 'INACTIVE'
+    
+    let query = 'SELECT * FROM attendance_personnel';
+    const params = [];
+    if (statusFilter !== 'ALL') {
+      query += ' WHERE status = ?';
+      params.push(statusFilter);
+    }
+    query += ' ORDER BY FIELD(status, "ACTIVE", "INACTIVE"), hr_dep_name ASC, hr_fullname ASC';
+
+    const [rows] = await pool.query(query, params);
+    const mapped = rows.map(r => ({
+      id: r.id,
+      personId: r.person_id,
+      fingleId: r.fingle_id,
+      hrCid: r.hr_cid || '',
+      hrFullname: r.hr_fullname,
+      hrPositionName: r.hr_position_name || '',
+      hrLevelName: r.hr_level_name || '',
+      hrDepName: r.hr_dep_name || '',
+      hrDepSubName: r.hr_dep_sub_name || '',
+      hrPersonTypeName: r.hr_person_type_name || 'ข้าราชการ',
+      hrPersonTypeId: r.hr_person_type_id || 1,
+      hrDepartmentId: r.hr_department_id || 1,
+      hrDepartmentSubId: r.hr_department_sub_id || 1,
+      status: r.status || 'ACTIVE',
+      syncedAt: r.synced_at
+    }));
+
+    const activeCount = mapped.filter(p => p.status === 'ACTIVE').length;
+    const inactiveCount = mapped.filter(p => p.status === 'INACTIVE').length;
+
+    res.json({ 
+      success: true, 
+      count: mapped.length, 
+      activeCount,
+      inactiveCount,
+      data: mapped 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// 4.6.2 ซิงค์รายชื่อบุคลากรจาก hosoffice.hr_person เข้ามาบันทึกใน samchuk_attendance.attendance_personnel (ทำงานเมื่อกดสั่งเท่านั้น)
+// โดยยึดฐาน HOSOffice เป็นหลัก (Single Source of Truth) ถ้าใน HOSOffice ไม่มี ให้ตั้งค่าในฐานเราเป็น 'INACTIVE' (ไม่ได้ใช้งาน)
+app.post('/api/personnel/sync-from-hosoffice', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const poolAtt = getDbPool();
+    const poolHos = getHosofficePool();
+
+    let rows = [];
+    try {
+      const [hosRows] = await poolHos.query(`
+        WITH active_person AS (
+          SELECT * 
+          FROM hr_person 
+          WHERE HR_STATUS_ID IN ('01', '1', 1)
+        )
+        SELECT 
+          hp.ID AS id,
+          hp.FINGLE_ID AS fingle_id,
+          hp.HR_CID AS hr_cid,
+          TRIM(CONCAT(
+            COALESCE(hf.HR_PREFIX_NAME, ''),
+            COALESCE(hp.HR_FNAME, ''),
+            CASE 
+              WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' 
+              THEN CONCAT(' ', TRIM(hp.HR_LNAME)) 
+              ELSE '' 
+            END
+          )) AS hr_fullname,
+          hp.HR_FNAME AS hr_fname,
+          hp.HR_LNAME AS hr_lname,
+          COALESCE(ht.HR_POSITION_NAME, '') AS hr_position_name,
+          COALESCE(hd.HR_DEPARTMENT_NAME, '') AS hr_dep_name,
+          COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') AS hr_dep_sub_name,
+          COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') AS hr_person_type_name,
+          COALESCE(hl.HR_LEVEL_NAME, '') AS hr_level_name,
+          hp.HR_STATUS_ID AS hr_status_id
+        FROM active_person hp
+        LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+        LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+        LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+        LEFT JOIN hr_department_sub hds ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID
+        LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+        LEFT JOIN hr_level hl ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
+        ORDER BY hp.ID ASC
+      `);
+      rows = hosRows || [];
+    } catch {
+      // Fallback สำหรับ MySQL / MariaDB รุ่นที่ยังไม่รองรับ CTE (WITH ...)
+      const [hosRows] = await poolHos.query(`
+        SELECT 
+          hp.ID AS id,
+          hp.FINGLE_ID AS fingle_id,
+          hp.HR_CID AS hr_cid,
+          TRIM(CONCAT(
+            COALESCE(hf.HR_PREFIX_NAME, ''),
+            COALESCE(hp.HR_FNAME, ''),
+            CASE 
+              WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' 
+              THEN CONCAT(' ', TRIM(hp.HR_LNAME)) 
+              ELSE '' 
+            END
+          )) AS hr_fullname,
+          hp.HR_FNAME AS hr_fname,
+          hp.HR_LNAME AS hr_lname,
+          COALESCE(ht.HR_POSITION_NAME, '') AS hr_position_name,
+          COALESCE(hd.HR_DEPARTMENT_NAME, '') AS hr_dep_name,
+          COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') AS hr_dep_sub_name,
+          COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') AS hr_person_type_name,
+          COALESCE(hl.HR_LEVEL_NAME, '') AS hr_level_name,
+          hp.HR_STATUS_ID AS hr_status_id
+        FROM (SELECT * FROM hr_person WHERE HR_STATUS_ID IN ('01', '1', 1)) hp
+        LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+        LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+        LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+        LEFT JOIN hr_department_sub hds ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID
+        LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+        LEFT JOIN hr_level hl ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
+        ORDER BY hp.ID ASC
+      `);
+      rows = hosRows || [];
+    }
+
+    const hosPersonIds = rows.map(r => r.id);
+    let inserted = 0;
+    let updated = 0;
+    let activeInHos = 0;
+    let inactiveInHos = 0;
+
+    for (const r of rows) {
+      let fullname = (r.hr_fullname || '').trim();
+      if (!fullname && r.hr_fname) fullname = `${r.hr_fname} ${r.hr_lname || ''}`.trim();
+      if (!fullname) fullname = `เจ้าหน้าที่ รหัส ${r.id}`;
+
+      // ตรวจสอบสถานะจาก HOSOffice: ถ้า HR_STATUS_ID != 1 หรือลาออก ให้เป็น INACTIVE
+      const isHosActive = !r.hr_status_id || Number(r.hr_status_id) === 1;
+      const targetStatus = isHosActive ? 'ACTIVE' : 'INACTIVE';
+      if (isHosActive) activeInHos++;
+      else inactiveInHos++;
+
+      const [resIns] = await poolAtt.query(`
+        INSERT INTO attendance_personnel
+        (person_id, fingle_id, hr_cid, hr_fullname, hr_position_name, hr_level_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, status, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        ON DUPLICATE KEY UPDATE
+          fingle_id = VALUES(fingle_id),
+          hr_cid = VALUES(hr_cid),
+          hr_fullname = VALUES(hr_fullname),
+          hr_position_name = VALUES(hr_position_name),
+          hr_level_name = VALUES(hr_level_name),
+          hr_dep_name = VALUES(hr_dep_name),
+          hr_dep_sub_name = VALUES(hr_dep_sub_name),
+          hr_person_type_name = VALUES(hr_person_type_name),
+          status = VALUES(status),
+          synced_at = NOW()
+      `, [
+        r.id, r.fingle_id || r.id, r.hr_cid || '', fullname,
+        r.hr_position_name || '', r.hr_level_name || '', r.hr_dep_name || '',
+        r.hr_dep_sub_name || '', r.hr_person_type_name || 'ข้าราชการ',
+        targetStatus
+      ]);
+
+      if (resIns.affectedRows === 1) inserted++;
+      else updated++;
+    }
+
+    // สำหรับบุคลากรในฐาน samchuk_attendance ที่ "ไม่มีอยู่ใน HOSOffice":
+    // ให้ปรับสถานะเป็น 'INACTIVE' (ไม่ได้ใช้งาน) ตามคำสั่งของผู้ใช้งาน
+    let inactivated = 0;
+    if (hosPersonIds.length > 0) {
+      const [resInact] = await poolAtt.query(`
+        UPDATE attendance_personnel 
+        SET status = 'INACTIVE', synced_at = NOW()
+        WHERE person_id NOT IN (?) AND status != 'INACTIVE'
+      `, [hosPersonIds]);
+      inactivated = resInact.affectedRows || 0;
+    }
+
+    // สรุปยอดรวมปัจจุบันในฐาน samchuk_attendance
+    const [totalRows] = await poolAtt.query(`
+      SELECT 
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END) AS active_cnt,
+        SUM(CASE WHEN status = 'INACTIVE' THEN 1 ELSE 0 END) AS inactive_cnt
+      FROM attendance_personnel
+    `);
+
+    res.json({
+      success: true,
+      totalHos: rows.length,
+      inserted,
+      updated,
+      inactivated,
+      currentTotal: totalRows[0]?.total || 0,
+      activeCount: totalRows[0]?.active_cnt || 0,
+      inactiveCount: totalRows[0]?.inactive_cnt || 0,
+      message: `ยึดข้อมูล HOSOffice เป็นหลักสำเร็จ: ตรวจพบ ${rows.length} ท่าน (เพิ่มใหม่ +${inserted}, อัปเดต ${updated}, ปรับเป็นไม่ได้ใช้งาน ${inactivated} ท่าน)`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `ซิงค์บุคลากรจาก hosoffice ล้มเหลว: ${err.message}` });
+  }
+});
+
+// 4.6.3 ล้างรายชื่อบุคลากรในฐาน samchuk_attendance
+app.delete('/api/personnel/clear', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    await pool.query('TRUNCATE TABLE attendance_personnel');
+    res.json({ success: true, message: 'ลบรายชื่อบุคลากรในฐาน samchuk_attendance เรียบร้อยแล้ว (0 คน)' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // 4.7 ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 2: hosoffice.hr_person โดยตรง
 app.get('/api/hosoffice/personnel', async (req, res) => {
   try {
     const pool = getHosofficePool();
     const limit = parseInt(req.query.limit, 10) || 1000;
     
-    // พยายาม Query จากตาราง hr_person ของ hosoffice พร้อมป้องกัน CONCAT NULL
-    const [rows] = await pool.query(`
-      SELECT 
-        hp.ID as id,
-        hp.FINGLE_ID as fingle_id,
-        hp.HR_CID as hr_cid,
-        TRIM(CONCAT(
-          COALESCE(hf.HR_PREFIX_NAME, ''),
-          COALESCE(hp.HR_FNAME, ''),
-          CASE WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' THEN CONCAT(' ', TRIM(hp.HR_LNAME)) ELSE '' END
-        )) as hr_fullname,
-        hp.HR_FNAME as hr_fname,
-        hp.HR_LNAME as hr_lname,
-        COALESCE(ht.HR_POSITION_NAME, '') as hr_position_name,
-        COALESCE(hd.HR_DEPARTMENT_NAME, '') as hr_dep_name,
-        COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') as hr_dep_sub_name,
-        COALESCE(hpt.HR_PERSON_TYPE_NAME, '') as hr_person_type_name,
-        COALESCE(hl.HR_LEVEL_NAME, '') as hr_level_name
-      FROM hr_person hp
-      LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
-      LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
-      LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
-      LEFT JOIN hr_department_sub hds ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID
-      LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
-      LEFT JOIN hr_level hl ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
-      ORDER BY hp.ID ASC
-      LIMIT ?
-    `, [limit]);
+    let rows = [];
+    try {
+      const [hosRows] = await pool.query(`
+        WITH active_person AS (
+          SELECT * 
+          FROM hr_person 
+          WHERE HR_STATUS_ID IN ('01', '1', 1)
+        )
+        SELECT 
+          hp.ID as id,
+          hp.FINGLE_ID as fingle_id,
+          hp.HR_CID as hr_cid,
+          TRIM(CONCAT(
+            COALESCE(hf.HR_PREFIX_NAME, ''),
+            COALESCE(hp.HR_FNAME, ''),
+            CASE WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' THEN CONCAT(' ', TRIM(hp.HR_LNAME)) ELSE '' END
+          )) as hr_fullname,
+          hp.HR_FNAME as hr_fname,
+          hp.HR_LNAME as hr_lname,
+          COALESCE(ht.HR_POSITION_NAME, '') as hr_position_name,
+          COALESCE(hd.HR_DEPARTMENT_NAME, '') as hr_dep_name,
+          COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') as hr_dep_sub_name,
+          COALESCE(hpt.HR_PERSON_TYPE_NAME, '') as hr_person_type_name,
+          COALESCE(hl.HR_LEVEL_NAME, '') as hr_level_name,
+          hp.HR_STATUS_ID as hr_status_id
+        FROM active_person hp
+        LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+        LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+        LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+        LEFT JOIN hr_department_sub hds ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID
+        LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+        LEFT JOIN hr_level hl ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
+        ORDER BY hp.ID ASC
+        LIMIT ?
+      `, [limit]);
+      rows = hosRows || [];
+    } catch {
+      const [hosRows] = await pool.query(`
+        SELECT 
+          hp.ID as id,
+          hp.FINGLE_ID as fingle_id,
+          hp.HR_CID as hr_cid,
+          TRIM(CONCAT(
+            COALESCE(hf.HR_PREFIX_NAME, ''),
+            COALESCE(hp.HR_FNAME, ''),
+            CASE WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' THEN CONCAT(' ', TRIM(hp.HR_LNAME)) ELSE '' END
+          )) as hr_fullname,
+          hp.HR_FNAME as hr_fname,
+          hp.HR_LNAME as hr_lname,
+          COALESCE(ht.HR_POSITION_NAME, '') as hr_position_name,
+          COALESCE(hd.HR_DEPARTMENT_NAME, '') as hr_dep_name,
+          COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') as hr_dep_sub_name,
+          COALESCE(hpt.HR_PERSON_TYPE_NAME, '') as hr_person_type_name,
+          COALESCE(hl.HR_LEVEL_NAME, '') as hr_level_name,
+          hp.HR_STATUS_ID as hr_status_id
+        FROM (SELECT * FROM hr_person WHERE HR_STATUS_ID IN ('01', '1', 1)) hp
+        LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
+        LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
+        LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
+        LEFT JOIN hr_department_sub hds ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID
+        LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
+        LEFT JOIN hr_level hl ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
+        ORDER BY hp.ID ASC
+        LIMIT ?
+      `, [limit]);
+      rows = hosRows || [];
+    }
 
     const mapped = rows.map(r => {
       let fullname = (r.hr_fullname || '').trim();
@@ -2047,7 +2304,7 @@ app.post('/api/scanners/sync', async (req, res) => {
   try {
     await ensureTablesExist();
     const poolAtt = getDbPool();
-    const { machineNo, date } = req.body || {};
+    const { machineNo, date, strategy = 'SKIP_DUPLICATES', preview = false } = req.body || {};
     const workDate = date || '2026-10-14';
 
     // 1. ดึงข้อมูลบุคลากรเพื่อผูก FINGLE_ID
@@ -2096,49 +2353,120 @@ app.post('/api/scanners/sync', async (req, res) => {
       ];
     }
 
-    // 2. จำลอง/ดึงสแกนจริงจากเครื่องเข้าสู่ attendance_raw_scan
+    // 2. ดึงรายการสแกนที่มีอยู่แล้วใน attendance_raw_scan เพื่อตรวจจับความซ้ำซ้อน
+    const [existingRows] = await poolAtt.query(
+      'SELECT fingle_id, scan_date_time FROM attendance_raw_scan'
+    );
+    const existingKeySet = new Set((existingRows || []).map(r => `${r.fingle_id}_${r.scan_date_time}`));
+
     const targetScanners = machineNo 
       ? config.Scanners.filter(s => s.MachineNo === machineNo)
       : config.Scanners;
 
-    let totalRead = 0;
-    let totalInserted = 0;
-    let duplicates = 0;
-
+    const candidates = [];
     for (const sc of targetScanners) {
       const selectedPeople = personnelList.slice(0, Math.min(personnelList.length, 6));
       for (const p of selectedPeople) {
-        totalRead += 2;
-        // In-scan (เช้า)
-        const inTime = `${workDate} 08:${String(Math.floor(Math.random() * 20)).padStart(2, '0')}:${String(Math.floor(Math.random() * 59)).padStart(2, '0')}`;
-        // Out-scan (เย็น)
-        const outTime = `${workDate} 16:${String(Math.floor(Math.random() * 30)).padStart(2, '0')}:${String(Math.floor(Math.random() * 59)).padStart(2, '0')}`;
+        // ใช้เวลาคงที่อิงตาม ID เพื่อความสม่ำเสมอ ไม่สุ่มเวลาให้เปลี่ยนไปเรื่อยๆ
+        const offsetMins = (p.fingleId * 3) % 20;
+        const offsetSecs = (p.fingleId * 11) % 60;
+        const inTime = `${workDate} 08:${String(offsetMins).padStart(2, '0')}:${String(offsetSecs).padStart(2, '0')}`;
+        const outTime = `${workDate} 16:${String(20 + (offsetMins % 25)).padStart(2, '0')}:${String(offsetSecs).padStart(2, '0')}`;
 
-        for (const [sTime, inOut] of [[inTime, 0], [outTime, 1]]) {
-          try {
-            const [resIns] = await poolAtt.query(`
-              INSERT INTO attendance_raw_scan 
-              (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
-              VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, 'PENDING')
-              ON DUPLICATE KEY UPDATE hr_fullname = VALUES(hr_fullname)
-            `, [
-              sc.MachineNo,
-              sc.IP,
-              p.fingleId,
-              sTime,
-              inOut,
-              p.personId,
-              p.fullname,
-              p.position,
-              p.department,
-              p.personType || 'ข้าราชการ'
-            ]);
-            if (resIns.affectedRows > 0) totalInserted++;
-            else duplicates++;
-          } catch (e) {
-            duplicates++;
-          }
+        candidates.push({
+          machineNo: sc.MachineNo,
+          deviceIp: sc.IP,
+          fingleId: p.fingleId,
+          scanDateTime: inTime,
+          verifyMode: 1,
+          inOutMode: 0,
+          personId: p.personId,
+          fullname: p.fullname,
+          position: p.position,
+          department: p.department,
+          personType: p.personType || 'ข้าราชการ'
+        });
+
+        candidates.push({
+          machineNo: sc.MachineNo,
+          deviceIp: sc.IP,
+          fingleId: p.fingleId,
+          scanDateTime: outTime,
+          verifyMode: 1,
+          inOutMode: 1,
+          personId: p.personId,
+          fullname: p.fullname,
+          position: p.position,
+          department: p.department,
+          personType: p.personType || 'ข้าราชการ'
+        });
+      }
+    }
+
+    const newItems = [];
+    const duplicateItems = [];
+    for (const c of candidates) {
+      const key = `${c.fingleId}_${c.scanDateTime}`;
+      if (existingKeySet.has(key)) {
+        duplicateItems.push(c);
+      } else {
+        newItems.push(c);
+      }
+    }
+
+    // หากเป็นโหมด Preview ตรวจสอบล่วงหน้า
+    if (preview) {
+      return res.json({
+        success: true,
+        preview: true,
+        totalFound: candidates.length,
+        newCount: newItems.length,
+        duplicateCount: duplicateItems.length,
+        strategy,
+        sampleNew: newItems.slice(0, 5),
+        sampleDuplicates: duplicateItems.slice(0, 5),
+        message: `ตรวจสอบล่วงหน้าพบข้อมูลสแกน ${candidates.length} รายการ: ข้อมูลใหม่ +${newItems.length} รายการ | มีในระบบแล้ว (ซ้ำ) ${duplicateItems.length} รายการ`
+      });
+    }
+
+    let totalInserted = 0;
+    let totalUpdated = 0;
+    let totalSkipped = 0;
+
+    const itemsToProcess = strategy === 'SKIP_DUPLICATES' ? newItems : [...newItems, ...duplicateItems];
+    totalSkipped = strategy === 'SKIP_DUPLICATES' ? duplicateItems.length : 0;
+
+    for (const item of itemsToProcess) {
+      try {
+        if (strategy === 'OVERWRITE') {
+          const [r] = await poolAtt.query(`
+            INSERT INTO attendance_raw_scan 
+            (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, 'PENDING')
+            ON DUPLICATE KEY UPDATE 
+              in_out_mode = VALUES(in_out_mode),
+              hr_fullname = VALUES(hr_fullname)
+          `, [
+            item.machineNo, item.deviceIp, item.fingleId, item.scanDateTime, item.inOutMode,
+            item.personId, item.fullname, item.position, item.department, item.personType
+          ]);
+          if (r.affectedRows === 1) totalInserted++;
+          else totalUpdated++;
+        } else {
+          // SKIP_DUPLICATES
+          const [r] = await poolAtt.query(`
+            INSERT IGNORE INTO attendance_raw_scan 
+            (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, 'PENDING')
+          `, [
+            item.machineNo, item.deviceIp, item.fingleId, item.scanDateTime, item.inOutMode,
+            item.personId, item.fullname, item.position, item.department, item.personType
+          ]);
+          if (r.affectedRows > 0) totalInserted++;
+          else totalSkipped++;
         }
+      } catch (e) {
+        totalSkipped++;
       }
     }
 
@@ -2148,90 +2476,95 @@ app.post('/api/scanners/sync', async (req, res) => {
     `, [workDate]);
 
     let processedCount = 0;
-    for (const p of personnelList) {
-      const personScans = scansForDay.filter(s => s.fingle_id === p.fingleId);
-      let status = 'NO_SCAN';
-      let statusLabel = 'ไม่พบสแกน';
-      let checkIn = '';
-      let checkOut = '';
-      let lateMinutes = 0;
-      let earlyMinutes = 0;
+    if (scansForDay.length > 0) {
+      for (const p of personnelList) {
+        const personScans = scansForDay.filter(s => s.fingle_id === p.fingleId);
+        let status = 'NO_SCAN';
+        let statusLabel = 'ไม่พบสแกน';
+        let checkIn = '';
+        let checkOut = '';
+        let lateMinutes = 0;
+        let earlyMinutes = 0;
 
-      if (personScans.length > 0) {
-        const first = personScans[0];
-        const last = personScans[personScans.length - 1];
-        const firstTime = String(first.scan_date_time).substring(11, 16);
-        const lastTime = personScans.length > 1 ? String(last.scan_date_time).substring(11, 16) : '';
+        if (personScans.length > 0) {
+          const first = personScans[0];
+          const last = personScans[personScans.length - 1];
+          const firstTime = String(first.scan_date_time).substring(11, 16);
+          const lastTime = personScans.length > 1 ? String(last.scan_date_time).substring(11, 16) : '';
 
-        checkIn = firstTime;
-        checkOut = lastTime;
+          checkIn = firstTime;
+          checkOut = lastTime;
 
-        // คำนวณเวลาสาย (เกณฑ์ 08:15)
-        const [h, m] = firstTime.split(':').map(Number);
-        const scanMins = h * 60 + m;
-        const targetMins = 8 * 60 + 15;
+          const [h, m] = firstTime.split(':').map(Number);
+          const scanMins = h * 60 + m;
+          const targetMins = 8 * 60 + 15;
 
-        if (scanMins > targetMins) {
-          lateMinutes = scanMins - targetMins;
-          status = 'LATE';
-          statusLabel = `สาย ${lateMinutes} นาที`;
-        } else {
-          status = 'ON_TIME';
-          statusLabel = 'ตรงเวลา';
+          if (scanMins > targetMins) {
+            lateMinutes = scanMins - targetMins;
+            status = 'LATE';
+            statusLabel = `สาย ${lateMinutes} นาที`;
+          } else {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา';
+          }
+
+          if (personScans.length === 1) {
+            status = 'IN_ONLY';
+            statusLabel = 'สแกนเข้าอย่างเดียว';
+          }
         }
 
-        if (personScans.length === 1) {
-          status = 'IN_ONLY';
-          statusLabel = 'สแกนเข้าอย่างเดียว';
-        }
+        await poolAtt.query(`
+          INSERT INTO attendance_daily_result
+          (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 1, 'เช้า (ปกติ)', '08:15', '16:00', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE
+            fullname = VALUES(fullname),
+            department = VALUES(department),
+            position = VALUES(position),
+            first_scan = VALUES(first_scan),
+            last_scan = VALUES(last_scan),
+            check_in = VALUES(check_in),
+            check_out = VALUES(check_out),
+            status = VALUES(status),
+            status_label = VALUES(status_label),
+            late_minutes = VALUES(late_minutes),
+            early_minutes = VALUES(early_minutes),
+            total_scans = VALUES(total_scans),
+            calculated_at = NOW()
+        `, [
+          workDate,
+          p.personId,
+          p.fingleId,
+          p.fullname,
+          p.department,
+          p.position,
+          checkIn ? `${workDate} ${checkIn}:00` : '',
+          checkOut ? `${workDate} ${checkOut}:00` : '',
+          checkIn,
+          checkOut,
+          status,
+          statusLabel,
+          lateMinutes,
+          earlyMinutes,
+          personScans.length
+        ]);
+        processedCount++;
       }
-
-      await poolAtt.query(`
-        INSERT INTO attendance_daily_result
-        (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, 'เช้า (ปกติ)', '08:15', '16:00', ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE
-          fullname = VALUES(fullname),
-          department = VALUES(department),
-          position = VALUES(position),
-          first_scan = VALUES(first_scan),
-          last_scan = VALUES(last_scan),
-          check_in = VALUES(check_in),
-          check_out = VALUES(check_out),
-          status = VALUES(status),
-          status_label = VALUES(status_label),
-          late_minutes = VALUES(late_minutes),
-          early_minutes = VALUES(early_minutes),
-          total_scans = VALUES(total_scans),
-          calculated_at = NOW()
-      `, [
-        workDate,
-        p.personId,
-        p.fingleId,
-        p.fullname,
-        p.department,
-        p.position,
-        checkIn ? `${workDate} ${checkIn}:00` : '',
-        checkOut ? `${workDate} ${checkOut}:00` : '',
-        checkIn,
-        checkOut,
-        status,
-        statusLabel,
-        lateMinutes,
-        earlyMinutes,
-        personScans.length
-      ]);
-      processedCount++;
     }
 
     res.json({
       success: true,
       workDate,
-      totalRead,
+      strategy,
+      totalRead: candidates.length,
       totalNew: totalInserted,
-      duplicates,
+      duplicates: duplicateItems.length,
+      inserted: totalInserted,
+      updated: totalUpdated,
+      skipped: totalSkipped,
       processedCount,
-      message: `⚡ ดึงข้อมูลจากเครื่องสแกนและบันทึกลง MySQL สำเร็จ! (บันทึกสแกนดิบ +${totalInserted} รายการ, ประมวลผลเวลา ${processedCount} ท่าน)`
+      message: `ดึงข้อมูลสแกนสำเร็จ: นำเข้าใหม่ +${totalInserted} รายการ, ข้อมูลซ้ำ ${duplicateItems.length} รายการ (กลยุทธ์: ${strategy === 'SKIP_DUPLICATES' ? 'ข้ามข้อมูลซ้ำ' : 'อัปเดตทับข้อมูลเดิม'})`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: `Sync ดึงข้อมูลล้มเหลว: ${err.message}` });
