@@ -31,17 +31,9 @@ if exist "..\Procurement\server" (
     echo                 (หากต้องการเปิด ให้ใช้ start-procurement-for-gateway.bat ได้เลย)
 )
 
-:: 3. สตาร์ท Cash & Cheque Backend บน Internal Port 3004 (หากมีโฟลเดอร์)
-echo [3/3] กำลังตรวจสอบระบบเงินสดและเช็ค Cash_Cheque...
-if exist "..\Cash_Cheque\server" (
-    start "Cash & Cheque Backend (:3004)" cmd /k "cd /d "%~dp0\..\Cash_Cheque\server" && set PORT=3004 && npm start"
-    echo       [OK] สตาร์ท Cash & Cheque สำเร็จ
-) else if exist "..\Cash_Cheque" (
-    start "Cash & Cheque Backend (:3004)" cmd /k "cd /d "%~dp0\..\Cash_Cheque" && set PORT=3004 && npm start"
-    echo       [OK] สตาร์ท Cash & Cheque สำเร็จ
-) else (
-    echo       [แจ้งเตือน] ไม่พบโฟลเดอร์ Cash_Cheque ในตำแหน่งเริ่มต้น
-)
+:: 3. ตรวจสอบระบบเงินสดและเช็ค Cash_Cheque
+echo [3/3] ตรวจสอบสถานะระบบเงินสดและเช็ค Cash_Cheque...
+echo       (หมายเหตุ: ระบบ Cash_Cheque ถูกรวมอยู่ใน Procurement Server พอร์ต 3002 เรียบร้อยแล้ว)
 
 echo.
 echo =========================================================================
