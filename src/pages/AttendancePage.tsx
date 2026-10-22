@@ -44,8 +44,8 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
 
   // Calculate daily attendance safely inside useMemo
   const results: DailyResult[] = useMemo(() => {
-    // หากไม่มีข้อมูลบุคลากรในฐาน samchuk_attendance (ผู้ใช้ลบข้อมูลตารางออกหมด) จะต้องเป็น 0 รายการ 100%
-    if (!state.personnel || state.personnel.length === 0) {
+    // หากไม่มีทั้งข้อมูลบุคลากรและไม่มีสแกนดิบในระบบ จะต้องเป็น 0 รายการ
+    if ((!state.personnel || state.personnel.length === 0) && (!state.rawScans || state.rawScans.length === 0)) {
       return [];
     }
     return attendanceStore.getDailyAttendance(selectedDate);

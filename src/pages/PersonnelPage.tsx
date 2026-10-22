@@ -109,7 +109,8 @@ ORDER BY hp.ID ASC;`;
     setTimeout(() => setCopiedQuery(false), 2000);
   };
 
-  // Perform Sync from HOSOffice เข้าสู่ samchuk_attendance.attendance_personnel (เมื่อกดสั่งเท่านั้น)
+  // Perform Sync from HOSOffice เข้าสู่ samchuk_attendance.attendance_personnel
+  // วัตถุประสงค์: ดึงข้อมูลมาเก็บไว้ในทำเนียบบุคลากร เพื่อไม่ต้องบันทึกข้อมูลเองทีละคน (ไม่เช็คสถานะสแกน)
   const handleExecuteSync = async (simulateChanges = false) => {
     setIsSyncing(true);
     let customData: any = undefined;
@@ -117,10 +118,8 @@ ORDER BY hp.ID ASC;`;
     if (!simulateChanges) {
       try {
         const syncRes = await apiClient.syncPersonnelFromHosoffice();
-        if (syncRes.success) {
-          await attendanceStore.loadFromMySqlDb();
-          const liveData = attendanceStore.getState().personnel;
-          customData = liveData.map((r: any) => ({
+        if (syncRes && syncRes.success && Array.isArray(syncRes.data) && syncRes.data.length > 0) {
+          customData = syncRes.data.map((r: any) => ({
             ID: r.personId || r.id,
             HR_CID: r.hrCid || r.hr_cid || '',
             FULLNAME: (r.hrFullname || r.hr_fullname || '').trim() || `เจ้าหน้าที่ รหัส ${r.personId || r.id}`,
@@ -131,9 +130,26 @@ ORDER BY hp.ID ASC;`;
             HR_PERSON_TYPE_NAME: r.hrPersonTypeName || r.hr_person_type_name || 'ข้าราชการ',
             FINGLE_ID: r.fingleId || r.fingle_id || r.id
           }));
+        } else {
+          // หากผลลัพธ์จาก API ว่างเปล่า ให้ลองโหลดจาก DB อีกครั้ง
+          await attendanceStore.loadFromMySqlDb();
+          const liveData = attendanceStore.getState().personnel;
+          if (liveData && liveData.length > 0) {
+            customData = liveData.map((r: any) => ({
+              ID: r.personId || r.id,
+              HR_CID: r.hrCid || r.hr_cid || '',
+              FULLNAME: (r.hrFullname || r.hr_fullname || '').trim() || `เจ้าหน้าที่ รหัส ${r.personId || r.id}`,
+              HR_POSITION_NAME: r.hrPositionName || r.hr_position_name || 'เจ้าหน้าที่',
+              HR_LEVEL_NAME: r.hrLevelName || r.hr_level_name || '',
+              HR_DEPARTMENT_NAME: r.hrDepName || r.hr_dep_name || 'โรงพยาบาลสามชุก',
+              HR_DEPARTMENT_SUB: r.hrDepSubName || r.hr_dep_sub_name || '',
+              HR_PERSON_TYPE_NAME: r.hrPersonTypeName || r.hr_person_type_name || 'ข้าราชการ',
+              FINGLE_ID: r.fingleId || r.fingle_id || r.id
+            }));
+          }
         }
       } catch (err: any) {
-        console.warn('Sync personnel failed:', err);
+        console.warn('Sync personnel failed, falling back to hospital master data:', err);
       }
     } else {
       // Create an on-the-fly change to test dynamic update
@@ -163,12 +179,13 @@ ORDER BY hp.ID ASC;`;
       ];
     }
 
+    // ซิงค์เข้า Store และแสดงผลทันที
     const result = attendanceStore.syncPersonnelFromHosoffice(state.currentUser, customData);
     setSyncResult(result);
     setIsSyncing(false);
     setIsSyncModalOpen(true);
-    if (result.updatedCount > 0) setSyncActiveTab('UPDATED');
-    else if (result.insertedCount > 0) setSyncActiveTab('INSERTED');
+    if (result.insertedCount > 0) setSyncActiveTab('INSERTED');
+    else if (result.updatedCount > 0) setSyncActiveTab('UPDATED');
     else setSyncActiveTab('SKIPPED');
   };
 
@@ -195,7 +212,7 @@ ORDER BY hp.ID ASC;`;
             ข้อมูลบุคลากรและรหัสสแกนนิ้ว (Personnel Directory)
           </h2>
           <p className="text-xs text-slate-500">
-            แสดงข้อมูลจากฐาน samchuk_attendance โดยตรง (จะดึงจาก hosoffice.hr_person ก็ต่อเมื่อท่านกดปุ่มสั่งการเท่านั้น)
+            ดึงข้อมูลจาก hosoffice.hr_person เข้าสู่ระบบลงเวลาอัตโนมัติ เพื่อไม่ต้องบันทึกข้อมูลเอง
           </p>
         </div>
 
@@ -207,10 +224,10 @@ ORDER BY hp.ID ASC;`;
             className={`flex items-center gap-2 px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer ${
               !isAdmin ? 'opacity-60 cursor-not-allowed' : ''
             }`}
-            title="ดึงข้อมูลจากตาราง hr_person ใน hosoffice มาเก็บใน samchuk_attendance"
+            title="ดึงข้อมูลจากตาราง hr_person ใน hosoffice มาเก็บใน samchuk_attendance เพื่อไม่ต้องพิมพ์เอง"
           >
             <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'กำลังดึงข้อมูล...' : '📥 ดึงข้อมูลจาก HOSOffice'}</span>
+            <span>{isSyncing ? 'กำลังดึงข้อมูล...' : '📥 ดึงข้อมูลบุคลากรจาก HOSOffice'}</span>
           </button>
 
           {/* Button: Clear Personnel in Samchuk DB */}
@@ -219,7 +236,7 @@ ORDER BY hp.ID ASC;`;
               onClick={handleClearPersonnelInDb}
               disabled={isSyncing}
               className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold rounded-lg cursor-pointer transition-colors"
-              title="ลบข้อมูลบุคลากรในฐาน samchuk_attendance เพื่อให้ว่างเปล่า 0 ท่าน"
+              title="ลบข้อมูลบุคลากรในฐาน samchuk_attendance เพื่อทดสอบการดึงข้อมูลใหม่"
             >
               <span>ล้างเป็น 0 ท่าน</span>
             </button>
@@ -271,6 +288,25 @@ ORDER BY hp.ID ASC;`;
           </div>
         </div>
       )}
+
+      {/* Notice Card: HOSOffice Purpose */}
+      <div className="bg-gradient-to-r from-teal-50 via-emerald-50 to-cyan-50 border border-teal-200 rounded-xl p-3.5 text-xs text-teal-900 flex items-start gap-3 shadow-xs">
+        <div className="p-1.5 bg-teal-600 text-white rounded-lg shrink-0 mt-0.5">
+          <Info className="w-4 h-4" />
+        </div>
+        <div className="space-y-1">
+          <div className="font-bold text-teal-950 flex items-center gap-2">
+            <span>นำเข้าข้อมูลบุคลากรและรหัสสแกนนิ้วจาก HOSOffice (hr_person @ 10.2.0.201)</span>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-200/80 text-teal-800">
+              เพื่อไม่ต้องบันทึกข้อมูลเอง
+            </span>
+          </div>
+          <p className="text-[11px] text-teal-800 leading-relaxed">
+            ระบบจะดึงข้อมูลรายชื่อ, <strong>รหัสสแกนนิ้ว (FINGLE_ID)</strong>, เลขบัตรประชาชน (CID), ตำแหน่ง, ระดับ, กลุ่มงาน และประเภทบุคลากร จากฐาน HOSOffice มาบันทึกในทำเนียบบุคลากรให้โดยตรง 
+            <strong> เพื่อที่เจ้าหน้าที่ฝ่ายบุคคลจะได้ไม่ต้องเสียเวลาคีย์ข้อมูลทีละคน</strong> โดยการดึงนี้เป็นการนำเข้าข้อมูลประวัติบุคลากรเท่านั้น ไม่เกี่ยวข้องกับการประมวลผลสถานะสแกนเวลา
+          </p>
+        </div>
+      </div>
 
       {/* Filter Toolbar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
