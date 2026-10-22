@@ -44,6 +44,10 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
 
   // Calculate daily attendance safely inside useMemo
   const results: DailyResult[] = useMemo(() => {
+    // หากไม่มีข้อมูลบุคลากรในฐาน samchuk_attendance (ผู้ใช้ลบข้อมูลตารางออกหมด) จะต้องเป็น 0 รายการ 100%
+    if (!state.personnel || state.personnel.length === 0) {
+      return [];
+    }
     return attendanceStore.getDailyAttendance(selectedDate);
   }, [selectedDate, state.rawScans, state.personnel, state.personnelTypes, state.shifts]);
 
@@ -236,6 +240,28 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
                 <span>🧪 สร้างสแกน (ปกติ/สาย)</span>
               </button>
 
+              {/* Clear Daily Attendance (Red/Rose) */}
+              <button
+                onClick={async () => {
+                  if (confirm('คุณต้องการล้างข้อมูลผลการคำนวณในตาราง attendance_daily_result ของ samchuk_attendance หรือไม่?')) {
+                    setIsRecalculating(true);
+                    try {
+                      const res = await attendanceStore.clearDailyAttendanceFromMySql();
+                      setSaveDbMsg({ type: res.success ? 'success' : 'error', text: res.message });
+                    } catch (e: any) {
+                      setSaveDbMsg({ type: 'error', text: e.message });
+                    } finally {
+                      setIsRecalculating(false);
+                    }
+                  }
+                }}
+                disabled={isRecalculating}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 text-xs font-semibold rounded-lg shadow-2xs cursor-pointer disabled:opacity-50 transition-all duration-150"
+                title="ล้างข้อมูลผลการคำนวณในตาราง attendance_daily_result ให้ว่างเปล่า"
+              >
+                <span>ล้างผลในตาราง DB</span>
+              </button>
+
               {/* Save MySQL (Matte Slate) */}
               <button
                 onClick={handleSaveToMySQL}
@@ -250,6 +276,22 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
           )}
         </div>
       </div>
+
+      {/* Empty Database Banner */}
+      {state.personnel.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 text-center shadow-xs">
+          <div className="w-10 h-10 bg-amber-100 text-amber-800 rounded-full flex items-center justify-center mx-auto mb-2.5">
+            <Database className="w-5 h-5" />
+          </div>
+          <h3 className="text-sm font-bold text-amber-950">
+            ฐานข้อมูล samchuk_attendance ว่างเปล่า (ไม่มีข้อมูลบุคลากรในตาราง attendance_personnel)
+          </h3>
+          <p className="text-xs text-amber-800 mt-1 max-w-lg mx-auto leading-relaxed">
+            ระบบทำงานตรงกับฐานข้อมูล <code>samchuk_attendance</code> อย่างแท้จริง เมื่อลบข้อมูลในตารางออกหมด รายงานสรุปเวลาสำหรับผู้บริหารจะแสดง 0 รายการทันที<br />
+            คุณสามารถสั่งดึงข้อมูลรายชื่อจากฐาน HOSOffice ได้ที่เมนู <strong>"ข้อมูลบุคลากร HR"</strong>
+          </p>
+        </div>
+      )}
 
       {/* Action Notification Toast */}
       {saveDbMsg && (

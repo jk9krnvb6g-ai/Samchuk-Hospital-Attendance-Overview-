@@ -66,16 +66,7 @@ class ApiClientService {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(STORAGE_API_KEY);
       if (saved && saved.trim()) {
-        let normalized = saved.trim().replace('https://', 'http://');
-        // เปลี่ยนพอร์ต 3005 เป็น 3002 และใส่ prefix /api/Sam_Att
-        if (normalized.includes(':3005')) {
-          normalized = normalized.replace(':3005', ':3002');
-        }
-        if (!normalized.includes('/api/Sam_Att')) {
-          normalized = normalized.replace(/\/+$/, '') + '/api/Sam_Att';
-        }
-        this.customBaseUrl = normalized;
-        localStorage.setItem(STORAGE_API_KEY, this.customBaseUrl);
+        this.customBaseUrl = saved.trim().replace('https://', 'http://');
       } else {
         this.customBaseUrl = resolveDefaultApiUrl();
       }
@@ -117,56 +108,83 @@ class ApiClientService {
   }
 
   public getStatus() {
+    const is3005 = this.customBaseUrl.includes(':3005');
     return {
       baseUrl: this.customBaseUrl,
       isOnline: this.isOnline,
       lastPingMs: this.lastPingMs,
       lastCheckTime: this.lastCheckTime,
       frontendUrl: HOSPITAL_WEB_URL,
-      apiPort: 3002,
+      apiPort: is3005 ? 3005 : 3002,
       frontendPort: 3001
     };
   }
 
   /**
-   * ทดสอบการเชื่อมต่อ API บนพอร์ต 3005 (GET /api/health)
+   * ทดสอบการเชื่อมต่อ API พร้อม Auto-Fallback ระหว่างพอร์ต 3002 และ 3005
    */
   public async checkHealth(): Promise<{ online: boolean; latencyMs: number; data?: ApiHealthResponse; error?: string }> {
     const start = performance.now();
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
+    const tryPing = async (url: string): Promise<{ ok: boolean; data?: ApiHealthResponse; status?: number; statusText?: string }> => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        const res = await fetch(`${url}/api/health`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const data: ApiHealthResponse = await res.json();
+          return { ok: true, data };
+        }
+        return { ok: false, status: res.status, statusText: res.statusText };
+      } catch {
+        return { ok: false };
+      }
+    };
 
-      const res = await fetch(`${this.customBaseUrl}/api/health`, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
+    // 1. ลอง Ping ที่ URL ปัจจุบันก่อน
+    const primaryResult = await tryPing(this.customBaseUrl);
+    if (primaryResult.ok && primaryResult.data) {
       const elapsed = Math.round(performance.now() - start);
       this.lastPingMs = elapsed;
       this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
+      this.isOnline = true;
+      this.notify();
+      return { online: true, latencyMs: elapsed, data: primaryResult.data };
+    }
 
-      if (res.ok) {
-        const data: ApiHealthResponse = await res.json();
+    // 2. ถ้าไม่สำเร็จ ลอง Ping Candidate สำรอง (3005 หรือ 3002)
+    const host = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
+    const fallbackUrls = [
+      `http://${host}:3005`,
+      `http://${host}:3002/api/Sam_Att`
+    ].filter(u => u !== this.customBaseUrl);
+
+    for (const altUrl of fallbackUrls) {
+      const altResult = await tryPing(altUrl);
+      if (altResult.ok && altResult.data) {
+        const elapsed = Math.round(performance.now() - start);
+        this.customBaseUrl = altUrl;
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(STORAGE_API_KEY, altUrl);
+        }
+        this.lastPingMs = elapsed;
+        this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
         this.isOnline = true;
         this.notify();
-        return { online: true, latencyMs: elapsed, data };
-      } else {
-        this.isOnline = false;
-        this.notify();
-        return { online: false, latencyMs: elapsed, error: `HTTP ${res.status}: ${res.statusText}` };
+        return { online: true, latencyMs: elapsed, data: altResult.data };
       }
-    } catch (err: unknown) {
-      const elapsed = Math.round(performance.now() - start);
-      this.isOnline = false;
-      this.lastPingMs = elapsed;
-      this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
-      this.notify();
-      const msg = err instanceof Error ? err.message : 'Cannot connect to API';
-      return { online: false, latencyMs: elapsed, error: msg };
     }
+
+    const elapsed = Math.round(performance.now() - start);
+    this.isOnline = false;
+    this.lastPingMs = elapsed;
+    this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
+    this.notify();
+    return { online: false, latencyMs: elapsed, error: 'Cannot connect to API (:3002 or :3005)' };
   }
 
   /**
@@ -767,6 +785,20 @@ class ApiClientService {
     }
   }
 
+
+  /**
+   * ล้างผลการประมวลผลเวลา (attendance_daily_result) ใน MySQL ทั้งหมด
+   */
+  public async clearDailyAttendanceFromDb() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/attendance/daily/clear`, {
+        method: 'DELETE'
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    }
+  }
 
   /**
    * ล้างข้อมูลสแกนทั้งหมดใน MySQL

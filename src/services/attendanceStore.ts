@@ -468,6 +468,13 @@ class AttendanceStore {
   }
 
   public getDailyAttendance(date: string = '2026-10-14', forceRecalculate = false): DailyResult[] {
+    // ถ้าไม่มีบุคลากรในฐานข้อมูล samchuk_attendance (ผู้ใช้ลบตารางออกหมด) ให้คืนค่าว่างเปล่า 0 รายการ 100%
+    if (!this.state.personnel || this.state.personnel.length === 0) {
+      if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+      this.state.cachedDailyResults[date] = [];
+      return [];
+    }
+
     if (!forceRecalculate && this.state.cachedDailyResults && this.state.cachedDailyResults[date]) {
       return this.state.cachedDailyResults[date];
     }
@@ -481,6 +488,13 @@ class AttendanceStore {
   }
 
   public async recalculateDailyAttendance(date: string = '2026-10-14'): Promise<DailyResult[]> {
+    if (!this.state.personnel || this.state.personnel.length === 0) {
+      if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+      this.state.cachedDailyResults[date] = [];
+      this.notify();
+      return [];
+    }
+
     // 1. ส่งคำสั่งให้ Backend คำนวณผลและบันทึกลง MySQL attendance_daily_result
     try {
       await apiClient.recalculateAttendanceInDb(date);
@@ -508,11 +522,24 @@ class AttendanceStore {
    * โหลดผลการประมวลผลเวลาตรงจากฐานข้อมูล MySQL attendance_daily_result
    */
   public async loadDailyAttendanceFromDb(date: string = '2026-10-14'): Promise<DailyResult[]> {
+    // ถ้าไม่มีบุคลากรในฐานข้อมูล samchuk_attendance เลย ให้คืนค่าว่างเปล่า 0 รายการทันที
+    if (!this.state.personnel || this.state.personnel.length === 0) {
+      if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+      this.state.cachedDailyResults[date] = [];
+      this.notify();
+      return [];
+    }
+
     try {
       const dailyRes = await apiClient.getDailyAttendanceFromDb(date);
-      if (dailyRes.success && Array.isArray(dailyRes.data) && dailyRes.data.length > 0) {
+      if (dailyRes.success && Array.isArray(dailyRes.data)) {
         if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
-        this.state.cachedDailyResults[date] = dailyRes.data.map((d: any) => ({
+        // กรองเฉพาะผลคำนวณที่ตรงกับรายชื่อบุคลากรที่มีอยู่ใน samchuk_attendance.attendance_personnel จริง
+        const validRows = dailyRes.data.filter((d: any) =>
+          this.state.personnel.some(p => p.personId === d.personId)
+        );
+
+        this.state.cachedDailyResults[date] = validRows.map((d: any) => ({
           id: d.id,
           personId: d.personId,
           fingleId: d.fingleId,
@@ -558,6 +585,17 @@ class AttendanceStore {
       }
     } catch {}
     return this.getDailyAttendance(date);
+  }
+
+  public async clearDailyAttendanceFromMySql(): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await apiClient.clearDailyAttendanceFromDb();
+      this.state.cachedDailyResults = {};
+      this.notify();
+      return res;
+    } catch (e: any) {
+      return { success: false, message: e.message || 'Failed' };
+    }
   }
 
   /**

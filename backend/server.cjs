@@ -32,51 +32,74 @@ app.use(express.json({ limit: '10mb' }));
 // --------------------------------------------------------------------------
 
 // Helper สำหรับ Proxy ไปยัง Internal Microservices (Loopback 127.0.0.1 - ไม่ต้องเปิด firewall ใหม่)
-function createGatewayProxy(targetHost, targetPort, serviceName, manualTip) {
+function createGatewayProxy(targetHost, targetPort, serviceName, manualTip, prefixToStrip) {
   return (req, res) => {
-    const options = {
-      hostname: targetHost,
-      port: targetPort,
-      path: req.originalUrl,
-      method: req.method,
-      headers: { ...req.headers, host: `${targetHost}:${targetPort}` }
+    const doProxy = (forwardPath, isRetry = false) => {
+      const options = {
+        hostname: targetHost,
+        port: targetPort,
+        path: forwardPath,
+        method: req.method,
+        headers: { ...req.headers, host: `${targetHost}:${targetPort}` }
+      };
+
+      const proxyReq = http.request(options, (proxyRes) => {
+        // หากปลายทางตอบ 404 และยังไม่ได้ลองแบบตัด prefix ให้ลองสลับ path ทันที
+        if (proxyRes.statusCode === 404 && !isRetry && prefixToStrip) {
+          let altPath = req.originalUrl;
+          if (altPath.toLowerCase().startsWith(`${prefixToStrip.toLowerCase()}/api/`)) {
+            altPath = altPath.slice(prefixToStrip.length);
+          } else if (altPath.toLowerCase().startsWith(prefixToStrip.toLowerCase())) {
+            altPath = altPath.slice(prefixToStrip.length);
+            if (!altPath.startsWith('/')) altPath = '/' + altPath;
+          }
+          if (altPath !== forwardPath && altPath !== '') {
+            proxyRes.resume(); // discard body
+            return doProxy(altPath, true);
+          }
+        }
+
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res, { end: true });
+      });
+
+      proxyReq.on('error', (err) => {
+        if (!res.headersSent) {
+          res.status(502).json({
+            success: false,
+            gateway: 'Samchuk Hospital API Gateway (:3002)',
+            service: serviceName,
+            targetPort,
+            error: err.code || err.message,
+            message: `[พอร์ต 3002] ไม่สามารถส่งต่อไปยังบริการ ${serviceName} บน internal port ${targetPort} (${err.message})`,
+            solution: manualTip || `กรุณารัน Backend ของ ${serviceName} บน internal port ${targetPort} (ไม่ต้องเปิด firewall เพิ่ม)`
+          });
+        }
+      });
+
+      if (req.body && Object.keys(req.body).length > 0) {
+        const bodyData = JSON.stringify(req.body);
+        proxyReq.setHeader('Content-Type', 'application/json');
+        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+        proxyReq.write(bodyData);
+        proxyReq.end();
+      } else {
+        req.pipe(proxyReq, { end: true });
+      }
     };
 
-    const proxyReq = http.request(options, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
-      proxyRes.pipe(res, { end: true });
-    });
-
-    proxyReq.on('error', (err) => {
-      res.status(502).json({
-        success: false,
-        gateway: 'Samchuk Hospital API Gateway (:3002)',
-        service: serviceName,
-        targetPort,
-        error: err.code || err.message,
-        message: `[พอร์ต 3002] ไม่สามารถส่งต่อไปยังบริการ ${serviceName} บน internal port ${targetPort} (${err.message})`,
-        solution: manualTip || `กรุณารัน Backend ของ ${serviceName} บน internal port ${targetPort} (ไม่ต้องเปิด firewall เพิ่ม)`
-      });
-    });
-
-    if (req.body && Object.keys(req.body).length > 0) {
-      const bodyData = JSON.stringify(req.body);
-      proxyReq.setHeader('Content-Type', 'application/json');
-      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
-      proxyReq.write(bodyData);
-    }
-
-    req.pipe(proxyReq, { end: true });
+    doProxy(req.originalUrl);
   };
 }
 
 // 1. Gateway Forwarding สำหรับระบบจัดซื้อ (Procurement): /api/procurement/* -> 127.0.0.1:3003
 const PROCUREMENT_INTERNAL_PORT = parseInt(process.env.PROCUREMENT_PORT || '3003', 10);
-app.use('/api/procurement', createGatewayProxy(
+app.use(['/api/procurement', '/api/Procurement'], createGatewayProxy(
   '127.0.0.1', 
   PROCUREMENT_INTERNAL_PORT, 
   'Procurement Backend', 
-  'ตั้งค่าใน start-procurement.bat: "set PORT=3003 && npm start" เพื่อให้ Gateway พอร์ต 3002 ดึงข้อมูลได้อัตโนมัติ'
+  'ตรวจสอบว่าได้เปิด Procurement Backend บน internal port 3003 แล้วหรือยัง',
+  '/api/procurement'
 ));
 
 // 2. Gateway Forwarding สำหรับระบบ Cash & Cheque: /api/Cash_Cheque/* -> 127.0.0.1:3004
@@ -85,7 +108,8 @@ app.use(['/api/Cash_Cheque', '/api/cash_cheque'], createGatewayProxy(
   '127.0.0.1', 
   CASH_CHEQUE_INTERNAL_PORT, 
   'Cash & Cheque Backend', 
-  'ตั้งค่าใน start-cash-cheque.bat: "set PORT=3004 && npm start" เพื่อให้ Gateway พอร์ต 3002 ดึงข้อมูลได้อัตโนมัติ'
+  'ตรวจสอบว่าได้เปิด Cash & Cheque Backend บน internal port 3004 แล้วหรือยัง',
+  '/api/Cash_Cheque'
 ));
 
 // 3. Gateway URL Rewriter สำหรับระบบลงเวลา (Sam_Att):
@@ -1695,10 +1719,21 @@ app.get('/api/attendance/daily', async (req, res) => {
     await ensureTablesExist();
     const pool = getDbPool();
     const date = req.query.date || new Date().toISOString().substring(0, 10);
-    const [rows] = await pool.query(
-      'SELECT * FROM attendance_daily_result WHERE work_date = ? ORDER BY department ASC, fullname ASC',
-      [date]
-    );
+
+    // 1. ตรวจสอบว่าใน samchuk_attendance มีบุคลากรหรือไม่ หากตารางว่าง (0 คน) ให้คืนค่าว่าง 0 ทันที
+    const [personCheck] = await pool.query('SELECT COUNT(*) as cnt FROM attendance_personnel');
+    if (!personCheck[0] || personCheck[0].cnt === 0) {
+      return res.json({ success: true, date, total: 0, data: [], message: 'ไม่มีรายชื่อบุคลากรในตาราง attendance_personnel' });
+    }
+
+    // 2. ดึงเฉพาะผลคำนวณของบุคลากรที่มีตัวตนอยู่ใน attendance_personnel เท่านั้น
+    const [rows] = await pool.query(`
+      SELECT d.* 
+      FROM attendance_daily_result d
+      INNER JOIN attendance_personnel p ON d.person_id = p.person_id
+      WHERE d.work_date = ? 
+      ORDER BY d.department ASC, d.fullname ASC
+    `, [date]);
 
     const mapped = rows.map(r => ({
       id: r.id,
@@ -1725,6 +1760,17 @@ app.get('/api/attendance/daily', async (req, res) => {
     }));
 
     res.json({ success: true, date, total: mapped.length, data: mapped });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ล้างผลคำนวณเวลาปฏิบัติงานใน samchuk_attendance.attendance_daily_result
+app.delete('/api/attendance/daily/clear', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    await pool.query('TRUNCATE TABLE attendance_daily_result');
+    res.json({ success: true, message: 'ล้างข้อมูลตาราง attendance_daily_result สำเร็จ (0 รายการ)' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -2079,7 +2125,8 @@ app.delete('/api/personnel/clear', async (req, res) => {
   try {
     const pool = getDbPool();
     await pool.query('TRUNCATE TABLE attendance_personnel');
-    res.json({ success: true, message: 'ลบรายชื่อบุคลากรในฐาน samchuk_attendance เรียบร้อยแล้ว (0 คน)' });
+    await pool.query('TRUNCATE TABLE attendance_daily_result');
+    res.json({ success: true, message: 'ลบรายชื่อบุคลากรและผลคำนวณเวลาในฐาน samchuk_attendance เรียบร้อยแล้ว (0 คน)' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -3707,36 +3754,45 @@ async function tryFallbackToLocalhost() {
   console.log('=========================================================================');
 }
 
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log('=========================================================================');
-  console.log(`   โรงพยาบาลสามชุก - Sam_Att Backend API Service v2.6.0`);
-  console.log('=========================================================================');
-  console.log(`🚀 กำลังให้บริการ API บนพอร์ต: ${PORT}`);
-  console.log(`🌐 Base URL: http://10.2.0.13:${PORT}`);
-  console.log(`🏥 เชื่อมต่อกับ Web Frontend: https://10.2.0.13:3001/Sam_Att/`);
-  const hosHost = process.env.HOSOFFICE_HOST || activeDbConfig.host;
-  const hosPort = parseInt(process.env.HOSOFFICE_PORT || activeDbConfig.port, 10);
-  const hosUser = process.env.HOSOFFICE_USER || 'sa';
-  console.log(`🗄️  ฐานข้อมูลเป้าหมายทั้ง 2 ฐาน:`);
-  console.log(`   1. [Attendance] ${activeDbConfig.database} (Host: ${activeDbConfig.host}:${activeDbConfig.port}, User: ${activeDbConfig.user})`);
-  console.log(`   2. [HosOffice]  ${hosofficeDbName} (Host: ${hosHost}:${hosPort}, User: ${hosUser})`);
-  console.log('=========================================================================');
-  
-  // พยายามเชื่อมต่อและตรวจสอบตาราง
-  try {
-    console.log(`⏳ กำลังตรวจสอบการเชื่อมต่อฐานข้อมูล MySQL ${activeDbConfig.host}...`);
-    const initRes = await ensureTablesExist();
-    if (initRes && initRes.success) {
-      console.log(`✅ ตรวจสอบและเตรียมตารางใน ${activeDbConfig.database} สำเร็จพร้อมใช้งาน!`);
-    } else {
-      console.log(`⚠️ ยังไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host} ได้ (${initRes?.error || 'Failed'})`);
-      if (activeDbConfig.host !== '127.0.0.1' && activeDbConfig.host !== 'localhost') {
-        await tryFallbackToLocalhost();
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', async () => {
+    console.log('=========================================================================');
+    console.log(`   โรงพยาบาลสามชุก - Central API Gateway & Sam_Att v2.6.0`);
+    console.log('=========================================================================');
+    console.log(`🚀 กำลังให้บริการ API บนพอร์ต: ${PORT}`);
+    console.log(`🌐 Base URL: http://10.2.0.13:${PORT}`);
+    console.log(`🏥 จุดเชื่อมต่อทั้ง 3 ระบบ (พอร์ต 3002 รวมศูนย์):`);
+    console.log(`   1. ระบบลงเวลา (Sam_Att):         http://10.2.0.13:${PORT}/api/Sam_Att/`);
+    console.log(`   2. ระบบจัดซื้อ (Procurement):     http://10.2.0.13:${PORT}/api/procurement/`);
+    console.log(`   3. ระบบเงินสดและเช็ค (Cash_Cheque): http://10.2.0.13:${PORT}/api/Cash_Cheque/`);
+    console.log(`🏥 เชื่อมต่อกับ Web Frontend: https://10.2.0.13:3001/Sam_Att/`);
+    const hosHost = process.env.HOSOFFICE_HOST || activeDbConfig.host;
+    const hosPort = parseInt(process.env.HOSOFFICE_PORT || activeDbConfig.port, 10);
+    const hosUser = process.env.HOSOFFICE_USER || 'sa';
+    console.log(`🗄️  ฐานข้อมูลเป้าหมายทั้ง 2 ฐาน:`);
+    console.log(`   1. [Attendance] ${activeDbConfig.database} (Host: ${activeDbConfig.host}:${activeDbConfig.port}, User: ${activeDbConfig.user})`);
+    console.log(`   2. [HosOffice]  ${hosofficeDbName} (Host: ${hosHost}:${hosPort}, User: ${hosUser})`);
+    console.log('=========================================================================');
+    
+    // พยายามเชื่อมต่อและตรวจสอบตาราง
+    try {
+      console.log(`⏳ กำลังตรวจสอบการเชื่อมต่อฐานข้อมูล MySQL ${activeDbConfig.host}...`);
+      const initRes = await ensureTablesExist();
+      if (initRes && initRes.success) {
+        console.log(`✅ ตรวจสอบและเตรียมตารางใน ${activeDbConfig.database} สำเร็จพร้อมใช้งาน!`);
+      } else {
+        console.log(`⚠️ ยังไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host} ได้ (${initRes?.error || 'Failed'})`);
+        if (activeDbConfig.host !== '127.0.0.1' && activeDbConfig.host !== 'localhost') {
+          await tryFallbackToLocalhost();
+        }
       }
+    } catch (err) {
+      console.log(`⚠️ ยังไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host} ได้อัตโนมัติ:`, err.message);
     }
-  } catch (err) {
-    console.log(`⚠️ ยังไม่สามารถเชื่อมต่อ MySQL ${activeDbConfig.host} ได้อัตโนมัติ:`, err.message);
-  }
-  
-  console.log('พร้อมรับคำสั่งทดสอบฐานข้อมูลทั้ง 2 ฐาน, เครื่องสแกนนิ้ว และการบันทึกข้อมูลแล้ว...');
-});
+    
+    console.log('พร้อมรับคำสั่งทดสอบฐานข้อมูลทั้ง 2 ฐาน, เครื่องสแกนนิ้ว และการบันทึกข้อมูลแล้ว...');
+  });
+}
+
+module.exports = app;
+
