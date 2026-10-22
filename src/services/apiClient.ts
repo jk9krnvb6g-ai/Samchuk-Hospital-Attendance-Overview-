@@ -66,11 +66,21 @@ class ApiClientService {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(STORAGE_API_KEY);
       if (saved && saved.trim()) {
-        this.customBaseUrl = saved.trim().replace('https://', 'http://');
+        this.customBaseUrl = saved.trim();
       } else {
         this.customBaseUrl = resolveDefaultApiUrl();
       }
     }
+  }
+
+  public isMixedContentBlocked(): boolean {
+    if (typeof window === 'undefined') return false;
+    return window.location.protocol === 'https:' && this.customBaseUrl.startsWith('http://');
+  }
+
+  public getHttpFallbackUrl(): string {
+    if (typeof window === 'undefined') return 'http://10.2.0.13:3001/Sam_Att/';
+    return window.location.href.replace(/^https:/i, 'http:');
   }
 
   public getBaseUrl(): string {
@@ -471,9 +481,9 @@ class ApiClientService {
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
     if (rawMsg.toLowerCase().includes('failed to fetch') || rawMsg.toLowerCase().includes('networkerror')) {
       if (isHttps) {
-        return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3005 ได้ (เกิดจากบราวเซอร์บล็อก Mixed Content เพราะเข้าเว็บด้วย HTTPS) -> กรุณาเปลี่ยน URL หน้าเว็บเป็น http://10.2.0.13:3001/Sam_Att/ (ใช้ http:// แทน https://)`;
+        return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (เกิดจากบราวเซอร์บล็อก Mixed Content เพราะเข้าเว็บด้วย HTTPS) -> กรุณาเปลี่ยน URL หน้าเว็บเป็น http://10.2.0.13:3001/Sam_Att/ (ใช้ http:// แทน https://)`;
       }
-      return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3005 ได้ (${rawMsg}) -> กรุณาตรวจสอบว่าได้รันคำสั่ง call start-backend.bat บนเซิร์ฟเวอร์แล้วหรือไม่ และ Windows Firewall เปิดพอร์ต 3005 หรือยัง`;
+      return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (${rawMsg}) -> กรุณาตรวจสอบว่าได้รัน Backend Gateway พอร์ต 3002 บนเซิร์ฟเวอร์แล้วหรือไม่ และ Windows Firewall เปิดพอร์ต 3002 หรือยัง`;
     }
     return `ไม่สามารถติดต่อ ${serviceName} ได้ (${rawMsg})`;
   }

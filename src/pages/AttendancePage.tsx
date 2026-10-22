@@ -441,7 +441,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              รอสแกนออก ({inOnlyCount})
+              สแกนเข้าอย่างเดียว ({inOnlyCount})
             </button>
             <button
               onClick={() => setStatusFilter('NO_SCAN')}
@@ -451,7 +451,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              ไม่พบสแกน ({noScanCount})
+              ไม่พบสแกน / ขาดสแกน ({noScanCount})
             </button>
           </div>
 
@@ -658,14 +658,15 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
                           </span>
                         )}
                         {row.status === 'IN_ONLY' && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200">
-                            <Clock className="w-3 h-3 text-slate-400" />
-                            <span>รอสแกนออก</span>
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200">
+                            <Clock className="w-3 h-3 text-blue-500" />
+                            <span>สแกนเข้าอย่างเดียว (ยังไม่สแกนออก)</span>
                           </span>
                         )}
                         {row.status === 'NO_SCAN' && (
-                          <span className="text-slate-400 italic text-[11px]">
-                            ไม่พบการสแกน
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] text-slate-500 bg-slate-100 border border-slate-200">
+                            <AlertCircle className="w-3 h-3 text-slate-400" />
+                            <span>ไม่พบสแกน (ไม่สแกนเข้า)</span>
                           </span>
                         )}
                       </td>

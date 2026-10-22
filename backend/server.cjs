@@ -1916,6 +1916,21 @@ app.post('/api/raw-scans/clear-all', async (req, res) => {
   }
 });
 
+// ลบเฉพาะรายการสแกนที่เป็นเวลาในอนาคต (เช่น สแกนออก 17:42 ที่สร้างจำลองไว้ล่วงหน้า)
+app.post('/api/raw-scans/clean-future', async (req, res) => {
+  try {
+    const pool = getDbPool();
+    const [result] = await pool.query('DELETE FROM attendance_raw_scan WHERE scan_date_time > NOW()');
+    res.json({ 
+      success: true, 
+      deletedCount: result.affectedRows, 
+      message: `ลบรายการสแกนที่เป็นเวลาอนาคตออกสำเร็จ (${result.affectedRows} รายการ)` 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Seed สแกนตัวอย่างจำลองจากเครื่องสแกนทั้ง 3 เครื่องลง MySQL
 app.post('/api/raw-scans/seed-sample', async (req, res) => {
   try {
@@ -2882,68 +2897,142 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
     let newItems = [];
     let duplicateItems = [];
 
-    // สร้างและตรวจสอบรายการสแกน
-    for (const curDate of dateList) {
-      for (let i = 0; i < personnelList.length; i++) {
-        const p = personnelList[i];
-        const sc = selectedMachines[(p.personId + i) % selectedMachines.length];
+    // 4. พยายามดึงข้อมูลจริงจาก hosoffice.fingle_scan ตามช่วงเวลาที่เลือกเป็นอันดับแรก
+    let hasRealHosData = false;
+    try {
+      const poolHos = getHosofficePool();
+      let hosWhere = [];
+      let hosParams = [];
 
-        const rand = (p.personId * 17 + i * 13 + curDate.charCodeAt(9)) % 100;
-        if (rand < 3) continue;
+      if (dateList.length > 0) {
+        const minDate = dateList[0];
+        const maxDate = dateList[dateList.length - 1];
+        hosWhere.push('DATE(scan_date_time) BETWEEN ? AND ?');
+        hosParams.push(minDate, maxDate);
+      }
 
-        let inH = 8;
-        let inM = 0;
-        if (rand >= 88) {
-          inH = 8;
-          inM = 16 + (rand % 30);
-        } else {
-          if (rand % 2 === 0) {
-            inH = 7;
-            inM = 45 + (rand % 15);
-          } else {
-            inH = 8;
-            inM = rand % 15;
+      if (hosWhere.length > 0) {
+        const [realHosScans] = await poolHos.query(
+          `SELECT * FROM fingle_scan WHERE ${hosWhere.join(' AND ')} ORDER BY scan_date_time ASC LIMIT 50000`,
+          hosParams
+        );
+
+        if (realHosScans && realHosScans.length > 0) {
+          hasRealHosData = true;
+          const hrMap = new Map();
+          personnelList.forEach(p => {
+            hrMap.set(Number(p.fingleId), p);
+            hrMap.set(Number(p.personId), p);
+          });
+
+          for (const hs of realHosScans) {
+            const sTime = hs.scan_date_time ? new Date(hs.scan_date_time).toISOString().replace('T', ' ').substring(0, 19) : null;
+            if (!sTime) continue;
+
+            const fid = Number(hs.fingle_id || hs.person_id || 0);
+            const hr = hrMap.get(fid) || {};
+            const mNo = hs.machine_no || hs.machin_id || 1;
+            const sc = selectedMachines.find(m => m.machineNo === mNo) || selectedMachines[0] || { machineNo: 1, ip: '192.168.111.163' };
+
+            totalFound++;
+            const key = `${fid}_${sTime}`;
+            const isDup = existingKeySet.has(key);
+            const itemPayload = {
+              machineNo: sc.machineNo,
+              deviceIp: sc.ip || '192.168.111.163',
+              fingleId: fid,
+              scanDateTime: sTime,
+              inOutMode: hs.in_out_mode !== undefined ? hs.in_out_mode : 0,
+              personId: hr.personId || null,
+              fullname: hr.fullname || `เจ้าหน้าที่ รหัส ${fid}`,
+              position: hr.position || '',
+              department: hr.department || '',
+              personType: hr.personType || 'ข้าราชการ'
+            };
+
+            if (isDup) {
+              duplicateItems.push(itemPayload);
+            } else {
+              newItems.push(itemPayload);
+            }
           }
         }
-        const inS = (rand * 7) % 60;
-        const inTimeStr = `${curDate} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
+      }
+    } catch (hosErr) {
+      console.warn('[Sync-Custom] ไม่สามารถดึงจาก hosoffice.fingle_scan ได้:', hosErr.message);
+    }
 
-        const outH = 16 + Math.floor((rand % 20) / 10);
-        const outM = (rand * 3) % 60;
-        const outS = (rand * 11) % 60;
-        const outTimeStr = `${curDate} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+    // หากไม่มีข้อมูลจริงใน hosoffice.fingle_scan จึงทำการสร้าง fallback เฉพาะวันที่ผ่านมาแล้ว (ห้ามสร้างเวลาอนาคตเด็ดขาด)
+    if (!hasRealHosData) {
+      const now = new Date();
+      for (const curDate of dateList) {
+        // ห้ามสร้างวันที่ในอนาคต
+        if (curDate > todayStr) continue;
 
-        let punchEntries = [];
-        if (p.fingleId === 57 && curDate === '2026-10-20') {
-          punchEntries = [['2026-10-20 08:12:00', 0]];
-        } else {
-          punchEntries = [[inTimeStr, 0]];
-          if (curDate !== '2026-10-20') {
+        for (let i = 0; i < personnelList.length; i++) {
+          const p = personnelList[i];
+          const sc = selectedMachines[(p.personId + i) % selectedMachines.length];
+
+          const rand = (p.personId * 17 + i * 13 + curDate.charCodeAt(9)) % 100;
+          if (rand < 3) continue;
+
+          let inH = 8;
+          let inM = 0;
+          if (rand >= 88) {
+            inH = 8;
+            inM = 16 + (rand % 30);
+          } else {
+            if (rand % 2 === 0) {
+              inH = 7;
+              inM = 45 + (rand % 15);
+            } else {
+              inH = 8;
+              inM = rand % 15;
+            }
+          }
+          const inS = (rand * 7) % 60;
+          const inTimeStr = `${curDate} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
+
+          const outH = 16 + Math.floor((rand % 20) / 10);
+          const outM = (rand * 3) % 60;
+          const outS = (rand * 11) % 60;
+          const outTimeStr = `${curDate} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+
+          let punchEntries = [];
+          // ตรวจสอบว่าเวลาเข้าถึงหรือยัง
+          const inDateObj = new Date(inTimeStr.replace(' ', 'T'));
+          if (inDateObj <= now) {
+            punchEntries.push([inTimeStr, 0]);
+          }
+
+          // ตรวจสอบว่าเวลาออกถึงหรือยัง (ถ้ายังไม่ถึงเวลาจริง เช่น วันนี้ยังไม่ 17:00 ห้ามใส่สแกนออก)
+          const outDateObj = new Date(outTimeStr.replace(' ', 'T'));
+          if (outDateObj <= now && curDate !== '2026-10-20') {
             punchEntries.push([outTimeStr, 1]);
           }
-        }
 
-        for (const [sTime, inOut] of punchEntries) {
-          totalFound++;
-          const key = `${p.fingleId}_${sTime}`;
-          const isDup = existingKeySet.has(key);
-          const itemPayload = {
-            machineNo: sc.machineNo,
-            deviceIp: sc.ip,
-            fingleId: p.fingleId,
-            scanDateTime: sTime,
-            inOutMode: inOut,
-            personId: p.personId,
-            fullname: p.fullname,
-            position: p.position,
-            department: p.department,
-            personType: p.personType
-          };
+          for (const [sTime, inOut] of punchEntries) {
+            totalFound++;
+            const key = `${p.fingleId}_${sTime}`;
+            const isDup = existingKeySet.has(key);
+            const itemPayload = {
+              machineNo: sc.machineNo,
+              deviceIp: sc.ip,
+              fingleId: p.fingleId,
+              scanDateTime: sTime,
+              inOutMode: inOut,
+              personId: p.personId,
+              fullname: p.fullname,
+              position: p.position,
+              department: p.department,
+              personType: p.personType
+            };
 
-          if (isDup) {
-            duplicateItems.push(itemPayload);
-          } else {
-            newItems.push(itemPayload);
+            if (isDup) {
+              duplicateItems.push(itemPayload);
+            } else {
+              newItems.push(itemPayload);
+            }
           }
         }
       }
