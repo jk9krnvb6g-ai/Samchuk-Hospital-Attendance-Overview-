@@ -14,7 +14,8 @@ import {
   ArrowRight,
   ShieldCheck,
   Building2,
-  FileText
+  FileText,
+  Zap
 } from 'lucide-react';
 import { DailyPersonReport, ReportSummaryItem, attendanceStore } from '../services/attendanceStore';
 import { RawScan } from '../types/attendance';
@@ -42,6 +43,21 @@ export const PersonAttendanceDrillDownModal: React.FC<PersonAttendanceDrillDownM
 }) => {
   const [activeTab, setActiveTab] = useState<'LOGS' | 'MONTHLY_CALENDAR' | 'RAW_SCANS'>('MONTHLY_CALENDAR');
   const [filterMonth, setFilterMonth] = useState(month);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [genMessage, setGenMessage] = useState<string | null>(null);
+
+  const handleSeedPerson = async () => {
+    setIsGenerating(true);
+    setGenMessage(null);
+    try {
+      const res = await attendanceStore.seedScansForPerson(effectivePersonId, effectiveFingleId, filterMonth);
+      if (res.success) {
+        setGenMessage(res.message);
+      }
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   // Find person details
   const person = useMemo(() => {
@@ -320,6 +336,39 @@ export const PersonAttendanceDrillDownModal: React.FC<PersonAttendanceDrillDownM
 
         {/* Modal Body / Tab Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {/* แจ้งเตือนเมื่อยังไม่พบประวัติสแกนของบุคคลนี้ พร้อมปุ่มสร้างข้อมูลทันที */}
+          {personRawScans.length === 0 && (
+            <div className="p-4 bg-amber-50/95 border border-amber-300 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-950 shadow-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold text-amber-900">
+                    ยังไม่มีข้อมูลประวัติสแกนของ {effectiveFullname} (FINGLE: {effectiveFingleId}) ในเดือน {filterMonth}
+                  </div>
+                  <div className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                    เนื่องจากเพิ่งมีการล้างตารางใน MySQL หรือยังไม่ได้เชื่อมต่อดึงข้อมูลจากเครื่องสแกน คุณสามารถกดปุ่มเพื่อจำลองประวัติการลงเวลาจริงของ รพ.สามชุก ครบทั้งเดือนได้ทันที
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleSeedPerson}
+                disabled={isGenerating}
+                className="px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-lg shadow-xs flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50 text-xs transition-colors"
+              >
+                <Zap className={`w-3.5 h-3.5 ${isGenerating ? 'animate-bounce' : ''}`} />
+                <span>{isGenerating ? 'กำลังสร้างข้อมูล...' : '⚡ คลิกสร้างประวัติสแกนเดือนนี้ทันที'}</span>
+              </button>
+            </div>
+          )}
+
+          {genMessage && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{genMessage}</span>
+            </div>
+          )}
+
           {activeTab === 'MONTHLY_CALENDAR' ? (
             /* Tab 1: Day-by-Day Timeline */
             <div className="space-y-3">

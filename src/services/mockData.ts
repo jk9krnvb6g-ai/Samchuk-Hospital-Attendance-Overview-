@@ -245,6 +245,21 @@ export const INITIAL_PERSONNEL: HrPerson[] = [
     hrDepartmentId: 105,
     hrDepartmentSubId: 1010,
     status: 'ACTIVE'
+  },
+  {
+    personId: 260,
+    hrCid: '3720600117918',
+    fingleId: 260,
+    hrFullname: 'นางกัญภร ไชยพัชรกุล',
+    hrPositionName: 'พยาบาลวิชาชีพ',
+    hrLevelName: 'ชำนาญการ',
+    hrDepName: 'กลุ่มงานการพยาบาล',
+    hrDepSubName: 'งานการพยาบาลผู้ป่วยนอก',
+    hrPersonTypeName: 'ข้าราชการ',
+    hrPersonTypeId: 1,
+    hrDepartmentId: 102,
+    hrDepartmentSubId: 1003,
+    status: 'ACTIVE'
   }
 ];
 

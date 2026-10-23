@@ -2133,7 +2133,8 @@ app.post('/api/personnel/sync-from-hosoffice', async (req, res) => {
         { id: 105, fingle_id: 105, hr_cid: '3720100123461', hr_fullname: 'ภก.ธีรพงศ์ เภสัชกร', hr_position_name: 'เภสัชกรชำนาญการ', hr_level_name: 'ชำนาญการ', hr_dep_name: 'กลุ่มงานเภสัชกรรม', hr_dep_sub_name: 'งานเภสัชกรรมคลินิก', hr_person_type_name: 'ข้าราชการ', hr_status_id: '01', hr_status_name: 'ปฏิบัติราชการ' },
         { id: 106, fingle_id: 106, hr_cid: '3720100123462', hr_fullname: 'นางสาวกานดา สุขสวัสดิ์', hr_position_name: 'นักจัดการงานทั่วไปชำนาญการ', hr_level_name: 'ชำนาญการ', hr_dep_name: 'กลุ่มงานบริหารทั่วไป', hr_dep_sub_name: 'งานบุคคล', hr_person_type_name: 'พนักงานกระทรวงสาธารณสุข', hr_status_id: '01', hr_status_name: 'ปฏิบัติราชการ' },
         { id: 107, fingle_id: 107, hr_cid: '3720100123463', hr_fullname: 'นายอนุชา ปลอดภัย', hr_position_name: 'เจ้าพนักงานสาธารณสุข', hr_level_name: 'ชำนาญงาน', hr_dep_name: 'กลุ่มงานเวชกรรมสังคม', hr_dep_sub_name: 'งานส่งเสริมสุขภาพ', hr_person_type_name: 'ข้าราชการ', hr_status_id: '01', hr_status_name: 'ปฏิบัติราชการ' },
-        { id: 108, fingle_id: 108, hr_cid: '3720100123464', hr_fullname: 'พว.มาลี บุญรักษา', hr_position_name: 'พยาบาลวิชาชีพปฏิบัติการ', hr_level_name: 'ปฏิบัติการ', hr_dep_name: 'กลุ่มงานการพยาบาล', hr_dep_sub_name: 'งานอุบัติเหตุฉุกเฉิน', hr_person_type_name: 'ข้าราชการ', hr_status_id: '01', hr_status_name: 'ปฏิบัติราชการ' }
+        { id: 108, fingle_id: 108, hr_cid: '3720100123464', hr_fullname: 'พว.มาลี บุญรักษา', hr_position_name: 'พยาบาลวิชาชีพปฏิบัติการ', hr_level_name: 'ปฏิบัติการ', hr_dep_name: 'กลุ่มงานการพยาบาล', hr_dep_sub_name: 'งานอุบัติเหตุฉุกเฉิน', hr_person_type_name: 'ข้าราชการ', hr_status_id: '01', hr_status_name: 'ปฏิบัติราชการ' },
+        { id: 260, fingle_id: 260, hr_cid: '3720600117918', hr_fullname: 'นางกัญภร ไชยพัชรกุล', hr_position_name: 'พยาบาลวิชาชีพ', hr_level_name: 'ชำนาญการ', hr_dep_name: 'กลุ่มงานการพยาบาล', hr_dep_sub_name: 'งานการพยาบาลผู้ป่วยนอก', hr_person_type_name: 'ข้าราชการ', hr_status_id: '01', hr_status_name: 'ปฏิบัติราชการ' }
       ];
     }
 
@@ -2991,7 +2992,8 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
         { personId: 105, fingleId: 105, fullname: 'ภก.ธีรพงศ์ เภสัชกร', position: 'เภสัชกรชำนาญการ', department: 'กลุ่มงานเภสัชกรรม', personType: 'ข้าราชการ' },
         { personId: 106, fingleId: 106, fullname: 'นางสาวกานดา สุขสวัสดิ์', position: 'นักจัดการงานทั่วไปชำนาญการ', department: 'กลุ่มงานบริหารทั่วไป', personType: 'พนักงานกระทรวงสาธารณสุข' },
         { personId: 107, fingleId: 107, fullname: 'นายอนุชา ปลอดภัย', position: 'เจ้าพนักงานสาธารณสุข', department: 'กลุ่มงานเวชกรรมสังคม', personType: 'ข้าราชการ' },
-        { personId: 108, fingleId: 108, fullname: 'พว.มาลี บุญรักษา', position: 'พยาบาลวิชาชีพปฏิบัติการ', department: 'กลุ่มงานการพยาบาล', personType: 'ข้าราชการ' }
+        { personId: 108, fingleId: 108, fullname: 'พว.มาลี บุญรักษา', position: 'พยาบาลวิชาชีพปฏิบัติการ', department: 'กลุ่มงานการพยาบาล', personType: 'ข้าราชการ' },
+        { personId: 260, fingleId: 260, fullname: 'นางกัญภร ไชยพัชรกุล', position: 'พยาบาลวิชาชีพ', department: 'กลุ่มงานการพยาบาล', personType: 'ข้าราชการ' }
       ];
     }
 

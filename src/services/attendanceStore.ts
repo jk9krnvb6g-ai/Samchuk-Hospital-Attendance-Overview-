@@ -2046,7 +2046,8 @@ class AttendanceStore {
           { personId: 105, fingleId: 105, hrCid: '3720100123461', hrFullname: 'ภก.ธีรพงศ์ เภสัชกร', hrPositionName: 'เภสัชกรชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานเภสัชกรรม', hrDepSubName: 'งานเภสัชกรรมคลินิก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 4, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
           { personId: 106, fingleId: 106, hrCid: '3720100123462', hrFullname: 'นางสาวกานดา สุขสวัสดิ์', hrPositionName: 'นักจัดการงานทั่วไปชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานบุคคล', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 3, hrDepartmentSubId: 4, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
           { personId: 107, fingleId: 107, hrCid: '3720100123463', hrFullname: 'นายอนุชา ปลอดภัย', hrPositionName: 'เจ้าพนักงานสาธารณสุข', hrLevelName: 'ชำนาญงาน', hrDepName: 'กลุ่มงานเวชกรรมสังคม', hrDepSubName: 'งานส่งเสริมสุขภาพ', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 5, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 108, fingleId: 108, hrCid: '3720100123464', hrFullname: 'พว.มาลี บุญรักษา', hrPositionName: 'พยาบาลวิชาชีพปฏิบัติการ', hrLevelName: 'ปฏิบัติการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานอุบัติเหตุฉุกเฉิน', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 2, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' }
+          { personId: 108, fingleId: 108, hrCid: '3720100123464', hrFullname: 'พว.มาลี บุญรักษา', hrPositionName: 'พยาบาลวิชาชีพปฏิบัติการ', hrLevelName: 'ปฏิบัติการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานอุบัติเหตุฉุกเฉิน', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 2, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 260, fingleId: 260, hrCid: '3720600117918', hrFullname: 'นางกัญภร ไชยพัชรกุล', hrPositionName: 'พยาบาลวิชาชีพ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานการพยาบาลผู้ป่วยนอก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' }
         ];
         this.state.personnel = effectivePersonnel;
       }
@@ -2329,6 +2330,117 @@ class AttendanceStore {
       };
     } catch (err: any) {
       return { success: false, message: `ไม่สามารถสร้างข้อมูลได้: ${err.message}`, count: 0 };
+    }
+  }
+
+  /**
+   * สร้างประวัติสแกนสำหรับบุคลากรคนใดคนหนึ่งโดยเฉพาะ (เมื่อไม่มีข้อมูลหรือเพิ่งล้างฐาน)
+   */
+  public async seedScansForPerson(personId: number, fingleId: number, month: string = '2026-10'): Promise<{ success: boolean; count: number; message: string }> {
+    try {
+      const person = this.state.personnel.find(p => p.personId === personId || p.fingleId === fingleId) || {
+        personId,
+        fingleId,
+        hrFullname: 'เจ้าหน้าที่',
+        hrPositionName: 'เจ้าหน้าที่',
+        hrDepName: 'โรงพยาบาลสามชุก',
+        hrPersonTypeName: 'ข้าราชการ'
+      };
+
+      const [y, m] = month.split('-').map(Number);
+      const daysInMonth = new Date(y, m, 0).getDate();
+      const newItems: RawScan[] = [];
+      const now = formatDateTime();
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const curDateStr = `${month}-${String(day).padStart(2, '0')}`;
+        const dayOfWeek = new Date(curDateStr).getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        if (isWeekend) continue;
+
+        const rand = (fingleId * 17 + day * 13) % 100;
+        if (rand < 2) continue; // ลา ~2%
+
+        let inH = 7;
+        let inM = 45 + (rand % 25);
+        if (inM >= 60) {
+          inH = 8;
+          inM -= 60;
+        }
+        if (rand >= 90) {
+          inH = 8;
+          inM = 16 + (rand % 15);
+        }
+        const inS = (rand * 7) % 60;
+        const inTimeStr = `${curDateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
+
+        const outH = 16;
+        const outM = 20 + (rand % 35);
+        const outS = (rand * 11) % 60;
+        const outTimeStr = `${curDateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+
+        const machineNo = ((fingleId + day) % 3) + 1;
+        const ips = ['192.168.111.163', '192.168.111.164', '192.168.111.165'];
+
+        newItems.push({
+          id: generateUniqueId(),
+          machineNo,
+          deviceIp: ips[machineNo - 1],
+          fingleId,
+          scanDateTime: inTimeStr,
+          verifyMode: 1,
+          inOutMode: 0,
+          personId,
+          hrFullname: person.hrFullname,
+          hrPositionName: person.hrPositionName,
+          hrDepName: person.hrDepName,
+          hrPersonTypeName: person.hrPersonTypeName,
+          hrMapped: true,
+          pushStatus: 'PENDING',
+          receivedAt: now
+        });
+
+        if (!(curDateStr === '2026-10-20' && fingleId === 57)) {
+          newItems.push({
+            id: generateUniqueId(),
+            machineNo,
+            deviceIp: ips[machineNo - 1],
+            fingleId,
+            scanDateTime: outTimeStr,
+            verifyMode: 1,
+            inOutMode: 1,
+            personId,
+            hrFullname: person.hrFullname,
+            hrPositionName: person.hrPositionName,
+            hrDepName: person.hrDepName,
+            hrPersonTypeName: person.hrPersonTypeName,
+            hrMapped: true,
+            pushStatus: 'PENDING',
+            receivedAt: now
+          });
+        }
+      }
+
+      const existingKeySet = new Set(this.state.rawScans.map(s => `${s.fingleId}_${s.scanDateTime}`));
+      const toAdd = newItems.filter(s => !existingKeySet.has(`${s.fingleId}_${s.scanDateTime}`));
+
+      this.state.rawScans = [...toAdd, ...this.state.rawScans].sort(
+        (a, b) => b.scanDateTime.localeCompare(a.scanDateTime)
+      );
+
+      this.state.cachedDailyResults = {};
+      this.saveState();
+      this.notify();
+
+      apiClient.batchAddRawScans(toAdd).catch(() => {});
+
+      return {
+        success: true,
+        count: toAdd.length,
+        message: `สร้างและบันทึกประวัติการสแกนของ ${person.hrFullname} จำนวน ${toAdd.length} รายการเรียบร้อยแล้ว!`
+      };
+    } catch (err: any) {
+      return { success: false, count: 0, message: err.message || 'ไม่สามารถสร้างข้อมูลได้' };
     }
   }
 
