@@ -120,16 +120,18 @@ export const PersonAttendanceDrillDownModal: React.FC<PersonAttendanceDrillDownM
         const mins = h * 60 + min;
         const targetMins = 8 * 60 + 15; // 08:15
 
-        if (dayScans.length === 1) {
-          if (mins <= targetMins) {
-            status = 'ON_TIME';
-            statusLabel = 'เข้าตรงเวลา (ยังไม่ออก)';
-          } else {
-            lateMinutes = mins - targetMins;
-            status = 'LATE';
-            statusLabel = `สาย ${lateMinutes} น. (ยังไม่ออก)`;
-          }
+        // ตัดสินผลจากสแกนแรกของกะเท่านั้น (เกณฑ์ปกติ 08:15 น.) โดยเจ้าหน้าที่ รพ.สามชุก ไม่มีการสแกนกลับ
+        if (mins <= targetMins) {
+          status = 'ON_TIME';
+          statusLabel = 'ตรงเวลา';
         } else {
+          lateMinutes = mins - targetMins;
+          status = 'LATE';
+          statusLabel = `สาย ${lateMinutes} นาที`;
+        }
+
+        // กรณีมีสแกนมากกว่า 1 ครั้งในวันเดียวกัน จึงดึงเวลาสุดท้ายมาแสดงในช่อง OUT
+        if (dayScans.length > 1) {
           const last = dayScans[dayScans.length - 1];
           const outTimePart = last.scanDateTime.split(' ')[1] || '';
           outTime = outTimePart.substring(0, 5);
@@ -137,15 +139,9 @@ export const PersonAttendanceDrillDownModal: React.FC<PersonAttendanceDrillDownM
           const [outH, outMin] = outTime.split(':').map(Number);
           const durationMins = (outH * 60 + outMin) - (h * 60 + min);
           hoursWorked = Number((Math.max(0, durationMins) / 60).toFixed(1));
-
-          if (mins <= targetMins) {
-            status = 'ON_TIME';
-            statusLabel = 'ตรงเวลา';
-          } else {
-            lateMinutes = mins - targetMins;
-            status = 'LATE';
-            statusLabel = `สาย ${lateMinutes} นาที`;
-          }
+        } else {
+          // สแกนเข้าครั้งเดียว ถือว่าปฏิบัติงานเต็มวันตามกะปกติ 8.0 ชม.
+          hoursWorked = 8.0;
         }
       }
 

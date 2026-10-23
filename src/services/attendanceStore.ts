@@ -100,11 +100,11 @@ export function getStatusBadgeInfo(status: DailyResult['status'], lateMinutes = 
       };
     case 'IN_ONLY':
       return {
-        label: 'สแกนเข้า (รอสแกนออก)',
-        shortLabel: 'รอสแกนออก',
-        colorClass: 'text-sky-700 font-semibold',
-        bgClass: 'bg-sky-50 text-sky-800',
-        borderClass: 'border-sky-200'
+        label: 'ตรงเวลา',
+        shortLabel: 'ตรงเวลา',
+        colorClass: 'text-emerald-700 font-semibold',
+        bgClass: 'bg-emerald-50 text-emerald-800',
+        borderClass: 'border-emerald-200'
       };
     case 'OUT_ONLY':
       return {
@@ -996,16 +996,10 @@ class AttendanceStore {
         }
       }
 
-      // ประเมินสถานะ
+      // ประเมินสถานะ: ยึดข้อมูลสแกนแรกของกะนั้นเท่านั้นมาตัดสินผล (<= 08:15 น. คือ ตรงเวลา, > 08:15 น. คือ สาย)
       let status: DailyResult['status'] = 'ON_TIME';
-      if (!outTime) {
-        status = lateMinutes > 0 ? 'LATE' : 'IN_ONLY';
-      } else if (lateMinutes > 0 && earlyMinutes > 0) {
-        status = 'LATE_AND_EARLY';
-      } else if (lateMinutes > 0) {
+      if (lateMinutes > 0) {
         status = 'LATE';
-      } else if (earlyMinutes > 0) {
-        status = 'EARLY_LEAVE';
       } else {
         status = 'ON_TIME';
       }
@@ -1219,10 +1213,12 @@ class AttendanceStore {
         shiftsCount = this.state.shifts.length;
       }
 
-      // 2. ดึงข้อมูลสแกนจาก MySQL attendance_raw_scan
+      // 2. ดึงข้อมูลสแกนจาก MySQL attendance_raw_scan (กรองไม่เอาสแกนออก in_out_mode === 1 ตามระเบียบปฏิบัติจริง)
       const scansRes = await apiClient.getRawScansFromDb(500);
       if (scansRes.success && Array.isArray(scansRes.data)) {
-        this.state.rawScans = scansRes.data.map((r: any) => ({
+        this.state.rawScans = scansRes.data
+          .filter((r: any) => (r.inOutMode ?? r.in_out_mode ?? 0) !== 1)
+          .map((r: any) => ({
           id: r.id,
           machineNo: r.machineNo || r.machine_no || 1,
           deviceIp: r.deviceIp || r.device_ip || '',
@@ -1811,18 +1807,17 @@ class AttendanceStore {
       let otMinutes = res?.otMinutes || 0;
       let hoursWorked = 0;
 
-      if (status === 'ON_TIME') {
+      if (status === 'ON_TIME' || status === 'IN_ONLY') {
+        status = 'ON_TIME';
         statusLabel = 'ปกติ (ตรงเวลา)';
       } else if (status === 'LATE') {
         statusLabel = `สาย (+${lateMinutes} น.)`;
       } else if (status === 'EARLY_LEAVE') {
         statusLabel = `ออกก่อน (-${earlyMinutes} น.)`;
       } else if (status === 'LATE_AND_EARLY') {
-        statusLabel = `สายและออกก่อน (+${lateMinutes}/-${earlyMinutes})`;
-      } else if (status === 'IN_ONLY') {
-        statusLabel = 'สแกนเข้าอย่างเดียว';
+        statusLabel = `สาย (+${lateMinutes} น.)`;
       } else if (status === 'OUT_ONLY') {
-        statusLabel = 'สแกนออกอย่างเดียว';
+        statusLabel = 'สแกนออก';
       } else if ((status as string) === 'LEAVE') {
         statusLabel = 'ลา';
       }
@@ -2090,7 +2085,6 @@ class AttendanceStore {
           }
 
           let inTimeStr = `${dateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
-          let outTimeStr = `${dateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
           
           const mNo = allowedMachines[(p.personId + pIdx) % allowedMachines.length];
           const sIp = scannerIps[mNo - 1] || '192.168.111.163';
@@ -2116,7 +2110,6 @@ class AttendanceStore {
               pushStatus: 'PUSHED',
               receivedAt: now
             });
-            // ไม่สร้างสแกนออก 17:36 เพราะเจ้าหน้าที่สแกนเข้าครั้งเดียวในตอนเช้า
             continue;
           }
 
@@ -2137,31 +2130,6 @@ class AttendanceStore {
             pushStatus: 'PENDING',
             receivedAt: now
           });
-
-          // สแกนออก:
-          // 1. ถ้าเป็น "วันนี้" (dateStr === todayStr เช่น 2026-10-22) -> เจ้าหน้าที่ยังทำงานอยู่ ยังไม่ได้สแกนกลับ ห้ามใส่สแกนออกเด็ดขาด
-          // 2. วันที่เจ้าหน้าที่ไม่ได้สแกนออก (เช่น 2026-10-20 หรือบางคนที่ลืมสแกนออก) -> ไม่ใส่สแกนออก เพื่อให้เห็นสแกนเข้าอย่างเดียวตามความจริง
-          const isToday = dateStr === todayStr;
-          const isSkipOut = isToday || dateStr === '2026-10-20' || (p.fingleId === 57 && dateStr === '2026-10-20') || (rand % 7 === 0);
-          if (!isSkipOut) {
-            newScans.push({
-              id: generateUniqueId(),
-              machineNo: mNo,
-              deviceIp: sIp,
-              fingleId: p.fingleId,
-              scanDateTime: outTimeStr,
-              verifyMode: 1,
-              inOutMode: 1,
-              personId: p.personId,
-              hrFullname: p.hrFullname,
-              hrPositionName: p.hrPositionName,
-              hrDepName: p.hrDepName,
-              hrPersonTypeName: p.hrPersonTypeName,
-              hrMapped: true,
-              pushStatus: 'PENDING',
-              receivedAt: now
-            });
-          }
         }
       }
 
@@ -2352,6 +2320,13 @@ class AttendanceStore {
       const newItems: RawScan[] = [];
       const now = formatDateTime();
 
+      // ล้างข้อมูลสแกนเดิมของบุคคลนี้ในเดือนดังกล่าว (รวมถึงสแกนกลับ 16:xx น. ที่เคยมี)
+      this.state.rawScans = this.state.rawScans.filter(s => {
+        const matches = Number(s.fingleId) === Number(fingleId) || (s.personId && Number(s.personId) === Number(personId));
+        const sMonth = (s.scanDateTime || '').replace('T', ' ').substring(0, 7);
+        return !(matches && sMonth === month);
+      });
+
       for (let day = 1; day <= daysInMonth; day++) {
         const curDateStr = `${month}-${String(day).padStart(2, '0')}`;
         const dayOfWeek = new Date(curDateStr).getDay();
@@ -2374,14 +2349,10 @@ class AttendanceStore {
         const inS = (rand * 7) % 60;
         const inTimeStr = `${curDateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
 
-        const outH = 16;
-        const outM = 20 + (rand % 35);
-        const outS = (rand * 11) % 60;
-        const outTimeStr = `${curDateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
-
         const machineNo = ((fingleId + day) % 3) + 1;
         const ips = ['192.168.111.163', '192.168.111.164', '192.168.111.165'];
 
+        // สแกนเข้าอย่างเดียวเท่านั้น ตามข้อเท็จจริงของเจ้าหน้าที่ รพ.สามชุก ที่ไม่มีการสแกนกลับ
         newItems.push({
           id: generateUniqueId(),
           machineNo,
@@ -2399,26 +2370,6 @@ class AttendanceStore {
           pushStatus: 'PENDING',
           receivedAt: now
         });
-
-        if (!(curDateStr === '2026-10-20' && fingleId === 57)) {
-          newItems.push({
-            id: generateUniqueId(),
-            machineNo,
-            deviceIp: ips[machineNo - 1],
-            fingleId,
-            scanDateTime: outTimeStr,
-            verifyMode: 1,
-            inOutMode: 1,
-            personId,
-            hrFullname: person.hrFullname,
-            hrPositionName: person.hrPositionName,
-            hrDepName: person.hrDepName,
-            hrPersonTypeName: person.hrPersonTypeName,
-            hrMapped: true,
-            pushStatus: 'PENDING',
-            receivedAt: now
-          });
-        }
       }
 
       const existingKeySet = new Set(this.state.rawScans.map(s => `${s.fingleId}_${s.scanDateTime}`));

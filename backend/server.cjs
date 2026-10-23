@@ -2587,20 +2587,6 @@ app.post('/api/scanners/sync', async (req, res) => {
           department: p.department,
           personType: p.personType || 'ข้าราชการ'
         });
-
-        candidates.push({
-          machineNo: sc.MachineNo,
-          deviceIp: sc.IP,
-          fingleId: p.fingleId,
-          scanDateTime: outTime,
-          verifyMode: 1,
-          inOutMode: 1,
-          personId: p.personId,
-          fullname: p.fullname,
-          position: p.position,
-          department: p.department,
-          personType: p.personType || 'ข้าราชการ'
-        });
       }
     }
 
@@ -2804,10 +2790,6 @@ app.post('/api/attendance/recalculate', async (req, res) => {
           lateMinutes = mins - (8 * 60 + 15);
           status = 'LATE';
           statusLabel = `สาย ${lateMinutes} นาที`;
-        }
-        if (pScans.length === 1) {
-          status = 'IN_ONLY';
-          statusLabel = 'สแกนเข้าอย่างเดียว';
         }
       } else {
         status = 'NO_SCAN';
@@ -3120,20 +3102,8 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
           const inS = (rand * 7) % 60;
           const inTimeStr = `${curDate} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
 
-          const outH = 16 + Math.floor((rand % 20) / 10);
-          const outM = (rand * 3) % 60;
-          const outS = (rand * 11) % 60;
-          const outTimeStr = `${curDate} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
-
-          let punchEntries = [];
-          // สแกนเข้าเสมอ
-          punchEntries.push([inTimeStr, 0]);
-
-          // สแกนออก (ยกเว้นวันที่ตั้งใจให้มีแต่สแกนเข้า หรือนายทวีสิทธิ์วันที่ 2026-10-20)
-          const isSkipOut = (curDate === '2026-10-20' && p.fingleId === 57) || (rand % 11 === 0);
-          if (!isSkipOut) {
-            punchEntries.push([outTimeStr, 1]);
-          }
+          // สแกนเข้าอย่างเดียวเท่านั้น ตามระเบียบปฏิบัติจริงของโรงพยาบาลสามชุก (ไม่สแกนกลับ)
+          const punchEntries = [[inTimeStr, 0]];
 
           for (const [sTime, inOut] of punchEntries) {
             totalFound++;

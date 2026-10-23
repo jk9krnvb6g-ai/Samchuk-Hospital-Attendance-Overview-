@@ -366,17 +366,20 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
           </div>
         </div>
 
-        {/* In-Only (Waiting Clock-out) */}
-        <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-xs">
-          <div className="flex items-center justify-between text-xs text-slate-500">
-            <span className="font-medium">รอสแกนออก</span>
-            <Clock className="w-3.5 h-3.5 text-slate-400" />
+        {/* On-Time Staff (Emerald Accent) */}
+        <div className="bg-white p-3.5 rounded-xl border border-emerald-300/80 bg-emerald-500/[0.02] shadow-xs">
+          <div className="flex items-center justify-between text-xs text-emerald-900 font-bold">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+              ตรงเวลา (On Time)
+            </span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
           </div>
-          <div className="mt-1 text-2xl font-bold font-mono tracking-tight text-slate-700 tabular-nums">
-            {inOnlyCount} <span className="text-xs font-normal text-slate-400">คน</span>
+          <div className="mt-1 text-2xl font-bold font-mono tracking-tight text-emerald-950 tabular-nums">
+            {onTimeCount} <span className="text-xs font-normal text-slate-500">คน</span>
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">
-            บันทึกเข้าแล้ว รอเวลาเลิกกะ
+          <div className="text-[11px] text-emerald-800/90 mt-1">
+            สแกนเข้าทันเกณฑ์เวลา (≤ 08:15 น.)
           </div>
         </div>
 
@@ -432,16 +435,6 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
             >
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
               <span>ปกติ / ตรงเวลา ({onTimeCount})</span>
-            </button>
-            <button
-              onClick={() => setStatusFilter('IN_ONLY')}
-              className={`px-3 py-1 rounded-md font-medium cursor-pointer transition-all duration-150 ${
-                statusFilter === 'IN_ONLY'
-                  ? 'bg-white text-slate-900 shadow-2xs font-semibold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              สแกนเข้าอย่างเดียว ({inOnlyCount})
             </button>
             <button
               onClick={() => setStatusFilter('NO_SCAN')}
