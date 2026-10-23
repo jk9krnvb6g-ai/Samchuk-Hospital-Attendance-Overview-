@@ -33,6 +33,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [shiftFilter, setShiftFilter] = useState<'ALL' | 'MORNING' | 'AFTERNOON' | 'NIGHT'>('ALL');
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [saveDbMsg, setSaveDbMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isSavingDb, setIsSavingDb] = useState(false);
@@ -51,6 +52,11 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
     return attendanceStore.getDailyAttendance(selectedDate);
   }, [selectedDate, state.rawScans, state.personnel, state.personnelTypes, state.shifts]);
 
+  // Shift counts for badges
+  const morningCount = useMemo(() => results.filter(r => (r.shiftName || '').includes('เช้า')).length, [results]);
+  const afternoonCount = useMemo(() => results.filter(r => (r.shiftName || '').includes('บ่าย')).length, [results]);
+  const nightCount = useMemo(() => results.filter(r => (r.shiftName || '').includes('ดึก')).length, [results]);
+
   // Personnel Types list for filter
   const personnelTypesList = useMemo(() => {
     const fromTypes = (state.personnelTypes || []).map(t => t.name);
@@ -66,6 +72,13 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
   // Filtered results
   const filteredResults = useMemo(() => {
     return results.filter((r) => {
+      // ตัวกรองกะ (Shift filter)
+      if (shiftFilter !== 'ALL') {
+        const sName = r.shiftName || '';
+        if (shiftFilter === 'MORNING' && !sName.includes('เช้า')) return false;
+        if (shiftFilter === 'AFTERNOON' && !sName.includes('บ่าย')) return false;
+        if (shiftFilter === 'NIGHT' && !sName.includes('ดึก')) return false;
+      }
       if (selectedType !== 'ALL' && (r.personnelTypeName || '') !== selectedType) return false;
       if (selectedDept !== 'ALL' && r.department !== selectedDept) return false;
       if (statusFilter !== 'ALL') {
@@ -87,7 +100,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
       }
       return true;
     });
-  }, [results, selectedType, selectedDept, statusFilter, searchTerm]);
+  }, [results, shiftFilter, selectedType, selectedDept, statusFilter, searchTerm]);
 
   // Summary counts
   const totalCount = results.length;
@@ -467,6 +480,90 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
               </button>
             )}
           </div>
+        </div>
+
+        {/* Row 1.5: Shift Quick-Pills (ติวเตอร์ปุ่ม / ตัวกรองกะ) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-2 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1 mr-1">
+              <Clock className="w-3.5 h-3.5 text-teal-600" />
+              <span>กะการทำงาน:</span>
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setShiftFilter('ALL')}
+              className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-all duration-150 flex items-center gap-1.5 border ${
+                shiftFilter === 'ALL'
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <span>ทุกกะ</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono tabular-nums ${shiftFilter === 'ALL' ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                {results.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShiftFilter('MORNING')}
+              className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-all duration-150 flex items-center gap-1.5 border ${
+                shiftFilter === 'MORNING'
+                  ? 'bg-amber-600 text-white border-amber-600 shadow-2xs ring-1 ring-amber-400'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-amber-50 hover:border-amber-300'
+              }`}
+            >
+              <span>🌅 กะเช้า (08:15)</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono tabular-nums ${shiftFilter === 'MORNING' ? 'bg-amber-700 text-white' : 'bg-amber-100 text-amber-800'}`}>
+                {morningCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShiftFilter('AFTERNOON')}
+              className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-all duration-150 flex items-center gap-1.5 border ${
+                shiftFilter === 'AFTERNOON'
+                  ? 'bg-orange-600 text-white border-orange-600 shadow-2xs ring-1 ring-orange-400'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-orange-50 hover:border-orange-300'
+              }`}
+            >
+              <span>🌇 กะบ่าย (16:00)</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono tabular-nums ${shiftFilter === 'AFTERNOON' ? 'bg-orange-700 text-white' : 'bg-orange-100 text-orange-800'}`}>
+                {afternoonCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShiftFilter('NIGHT')}
+              className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-all duration-150 flex items-center gap-1.5 border ${
+                shiftFilter === 'NIGHT'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs ring-1 ring-indigo-400'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-indigo-50 hover:border-indigo-300'
+              }`}
+            >
+              <span>🌙 กะดึก (24:00)</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono tabular-nums ${shiftFilter === 'NIGHT' ? 'bg-indigo-700 text-white' : 'bg-indigo-100 text-indigo-800'}`}>
+                {nightCount}
+              </span>
+            </button>
+
+            {shiftFilter !== 'ALL' && (
+              <button
+                type="button"
+                onClick={() => setShiftFilter('ALL')}
+                className="text-[11px] text-rose-600 hover:text-rose-800 font-semibold cursor-pointer underline ml-1"
+              >
+                ✕ ล้างตัวกรองกะ
+              </button>
+            )}
+          </div>
+
+          <span className="text-[11px] text-slate-400 font-medium">
+            * สแกนแรกของกะ: เช้า (08:15 น.), บ่าย (16:00 น. เริ่มตรวจ 15:30 น.), ดึก (24:00 น. เริ่มตรวจ 23:30 น.)
+          </span>
         </div>
 
         {/* Row 2: Personnel Type Quick Pills + Department Filter */}

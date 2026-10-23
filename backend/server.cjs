@@ -2799,12 +2799,15 @@ app.post('/api/attendance/recalculate', async (req, res) => {
         const [h, m] = checkIn.split(':').map(Number);
         const mins = h * 60 + m;
 
-        const isNight = (h >= 22 && m >= 30) || h >= 23 || h < 5;
-        const isAfternoon = (h >= 15 && !isNight) && h < 22;
+        // 1. กะดึก: เวลาสแกน 23:30 – 05:00 น. (เกณฑ์ 24:00 น. เริ่มตรวจ 23:30 น.)
+        const isNight = (h === 23 && m >= 30) || (h < 5);
+
+        // 2. กะบ่าย: เวลาสแกน 15:30 – 23:29 น. (เกณฑ์ 16:00 น. เริ่มตรวจ 15:30 น.)
+        const isAfternoon = !isNight && ((h === 15 && m >= 30) || (h >= 16 && (h < 23 || (h === 23 && m < 30))));
 
         if (isNight) {
           shiftId = 3;
-          shiftName = 'ดึก (00:00)';
+          shiftName = 'ดึก (24:00)';
           scheduledIn = '00:00';
           scheduledOut = '08:00';
           if (h >= 22) {
@@ -3159,19 +3162,56 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
 
           let inH = 8;
           let inM = 0;
-          if (rand >= 88) {
-            inH = 8;
-            inM = 16 + (rand % 30);
-          } else {
-            if (rand % 2 === 0) {
-              inH = 7;
-              inM = 45 + (rand % 15);
+          const inS = (rand * 7) % 60;
+
+          // แยกประเภทเจ้าหน้าที่: พยาบาลและ ER มี 3 ผลัด (เช้า/บ่าย/ดึก) | สายสำนักงาน/ไอที/คุณทวีสิทธิ์ กะเช้า
+          const isNurseOrEr = (p.department || '').includes('พยาบาล') || 
+                              (p.department || '').includes('ฉุกเฉิน') || 
+                              (p.position || '').includes('พยาบาล');
+
+          if (isNurseOrEr) {
+            const shiftSlot = (p.personId * 3 + curDayOfWeek * 5 + i * 7) % 3;
+            if (shiftSlot === 1) {
+              // กะบ่าย (เริ่มตรวจ 15:30 น., เกณฑ์เริ่ม 16:00 น.)
+              if (rand >= 90) {
+                inH = 16;
+                inM = 5 + (rand % 25); // สายหลัง 16:00 น.
+              } else {
+                inH = 15;
+                inM = 30 + (rand % 30); // ตรงเวลา 15:30 - 15:59 น.
+              }
+            } else if (shiftSlot === 2) {
+              // กะดึก (เริ่มตรวจ 23:30 น., เกณฑ์เริ่ม 24:00 น.)
+              if (rand >= 90) {
+                inH = 0;
+                inM = 5 + (rand % 25); // สายหลัง 24:00 น. (00:05 - 00:29 น.)
+              } else {
+                inH = 23;
+                inM = 30 + (rand % 29); // ตรงเวลา 23:30 - 23:58 น.
+              }
             } else {
+              // กะเช้า (เกณฑ์เริ่ม 08:15 น.)
+              if (rand >= 90) {
+                inH = 8;
+                inM = 16 + (rand % 25); // สายหลัง 08:15 น.
+              } else {
+                inH = 7;
+                inM = 45 + (rand % 15); // ตรงเวลา 07:45 - 08:14 น.
+                if (inM >= 60) { inH = 8; inM -= 60; }
+              }
+            }
+          } else {
+            // สายงานสำนักงาน / ไอที / คุณทวีสิทธิ์ (Fingle 57) เข้ากะเช้าตามปกติ
+            if (rand >= 90) {
               inH = 8;
-              inM = rand % 15;
+              inM = 16 + (rand % 20); // สาย
+            } else {
+              inH = 7;
+              inM = 45 + (rand % 15); // ตรงเวลา
+              if (inM >= 60) { inH = 8; inM -= 60; }
             }
           }
-          const inS = (rand * 7) % 60;
+
           const inTimeStr = `${curDate} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
 
           // สแกนเข้าอย่างเดียวเท่านั้น ตามระเบียบปฏิบัติจริงของโรงพยาบาลสามชุก (ไม่สแกนกลับ)

@@ -118,9 +118,11 @@ export const PersonAttendanceDrillDownModal: React.FC<PersonAttendanceDrillDownM
 
         const [h, min] = inTime.split(':').map(Number);
         const mins = h * 60 + min;
-        // วิเคราะห์กะจากสแกนแรก และคำนวณผลตามเกณฑ์ของกะนั้น (กะบ่าย/กะดึก เข้าก่อนได้ 30 นาที)
-        const isNight = (h >= 22 && min >= 30) || h >= 23 || h < 5;
-        const isAfternoon = (h >= 15 && !isNight) && h < 22;
+        // 1. กะดึก: เวลาสแกน 23:30 – 05:00 น. (เกณฑ์ 24:00 น. เริ่มตรวจ 23:30 น.)
+        const isNight = (h === 23 && min >= 30) || (h < 5);
+
+        // 2. กะบ่าย: เวลาสแกน 15:30 – 23:29 น. (เกณฑ์ 16:00 น. เริ่มตรวจ 15:30 น.)
+        const isAfternoon = !isNight && ((h === 15 && min >= 30) || (h >= 16 && (h < 23 || (h === 23 && min < 30))));
 
         if (isNight) {
           // กะดึก: เริ่ม 00:00 น. อนุญาตให้สแกนเข้าก่อนได้ 30 นาที (ตั้งแต่ 23:30 น.)

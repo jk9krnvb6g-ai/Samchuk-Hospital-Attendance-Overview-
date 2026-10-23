@@ -870,6 +870,42 @@ class AttendanceStore {
       targetPersonnel = this.state.personnel;
     }
 
+    // Pre-filter raw scans for the target date once to avoid O(P * S) full array scans
+    const beDate = date.replace(/^(\d{4})/, (_, y) => String(Number(y) + 543));
+    const [yPart, mPart, dPart] = date.split('-');
+    const thSlashDate = yPart && mPart && dPart ? `${dPart}/${mPart}/${yPart}` : null;
+
+    const dateScans = this.state.rawScans.filter(r => {
+      const rawDt = (r.scanDateTime || '').replace('T', ' ').trim();
+      return rawDt.startsWith(date) || rawDt.startsWith(beDate) || (thSlashDate != null && rawDt.startsWith(thSlashDate));
+    });
+
+    // Index date scans by fingleId, personId, and hrFullname for O(1) lookups
+    const scansByFingle = new Map<number, RawScan[]>();
+    const scansByPerson = new Map<number, RawScan[]>();
+    const scansByName = new Map<string, RawScan[]>();
+
+    for (const r of dateScans) {
+      const fid = Number(r.fingleId);
+      if (fid > 0) {
+        let arr = scansByFingle.get(fid);
+        if (!arr) { arr = []; scansByFingle.set(fid, arr); }
+        arr.push(r);
+      }
+      const pid = Number(r.personId);
+      if (pid > 0) {
+        let arr = scansByPerson.get(pid);
+        if (!arr) { arr = []; scansByPerson.set(pid, arr); }
+        arr.push(r);
+      }
+      const nm = (r.hrFullname || '').trim().toLowerCase();
+      if (nm) {
+        let arr = scansByName.get(nm);
+        if (!arr) { arr = []; scansByName.set(nm, arr); }
+        arr.push(r);
+      }
+    }
+
     targetPersonnel.forEach(p => {
       // 1. หาประเภทบุคลากรของบุคคลนั้น
       const typeName = (p.hrPersonTypeName || '').trim().toLowerCase();
@@ -879,36 +915,24 @@ class AttendanceStore {
         return tName === typeName || typeName.includes(tName) || tName.includes(typeName);
       }) || this.state.personnelTypes?.find(t => t.isActive) || this.state.personnelTypes?.[0] || DEFAULT_PERSONNEL_TYPES[0];
 
-      // 2. ข้อมูลสแกนทั้งหมดของคนนี้ในวันที่ระบุ เรียงตามเวลา (รองรับทั้ง FINGLE_ID, PersonId, ชื่อ และรูปแบบวันที่หลากหลาย)
+      // 2. ข้อมูลสแกนทั้งหมดของคนนี้ในวันที่ระบุ เรียงตามเวลา (ดึงจาก index)
       const targetFingle = Number(p.fingleId);
       const targetPersonId = Number(p.personId);
       const targetName = (p.hrFullname || '').trim().toLowerCase();
 
-      const scans = this.state.rawScans.filter(r => {
-        // ก. จับคู่ตัวบุคคล (Person Identity)
-        const rFingle = Number(r.fingleId);
-        const rPersonId = Number(r.personId);
-        const rName = (r.hrFullname || '').trim().toLowerCase();
-
-        const personMatched = (
-          (targetFingle > 0 && rFingle > 0 && rFingle === targetFingle) ||
-          (targetPersonId > 0 && rPersonId > 0 && rPersonId === targetPersonId) ||
-          (targetName && rName && (rName === targetName || rName.includes(targetName) || targetName.includes(rName)))
-        );
-        if (!personMatched) return false;
-
-        // ข. จับคู่วันที่ (Date Matching - รองรับ YYYY-MM-DD, T, พ.ศ. 2569, DD/MM/YYYY)
-        const rawDt = (r.scanDateTime || '').replace('T', ' ').trim();
-        if (rawDt.startsWith(date)) return true;
-        // รองรับ พ.ศ. เช่น 2026-10-14 เทียบกับ 2569-10-14
-        const beDate = date.replace(/^(\d{4})/, (_, y) => String(Number(y) + 543));
-        if (rawDt.startsWith(beDate)) return true;
-        // รองรับ DD/MM/YYYY
-        const [y, m, d] = date.split('-');
-        if (y && m && d && rawDt.startsWith(`${d}/${m}/${y}`)) return true;
-
-        return false;
-      }).sort((a, b) => (a.scanDateTime || '').localeCompare(b.scanDateTime || ''));
+      const matchedMap = new Map<string | number, RawScan>();
+      if (targetFingle > 0) {
+        for (const s of scansByFingle.get(targetFingle) || []) matchedMap.set(s.id, s);
+      }
+      if (targetPersonId > 0) {
+        for (const s of scansByPerson.get(targetPersonId) || []) matchedMap.set(s.id, s);
+      }
+      if (targetName) {
+        for (const s of scansByName.get(targetName) || []) {
+          matchedMap.set(s.id, s);
+        }
+      }
+      const scans = Array.from(matchedMap.values()).sort((a, b) => (a.scanDateTime || '').localeCompare(b.scanDateTime || ''));
 
       if (scans.length === 0) {
         // กรณีไม่มีการสแกนนิ้วเลยในวันนั้น
@@ -958,49 +982,53 @@ class AttendanceStore {
       let plannedEndTime = '16:00';
       let lateMinutes = 0;
 
-      const isNight = (inH >= 22 && inM >= 30) || inH >= 23 || inH < 5;
-      const isAfternoon = (inH >= 15 && !isNight) && inH < 22;
+      // 1. กะดึก: เวลาสแกน 23:30 – 05:00 น. (เกณฑ์ 24:00 น. เริ่มตรวจ 23:30 น.)
+      const isNight = (inH === 23 && inM >= 30) || (inH < 5);
+
+      // 2. กะบ่าย: เวลาสแกน 15:30 – 23:29 น. (เกณฑ์ 16:00 น. เริ่มตรวจ 15:30 น.)
+      const isAfternoon = !isNight && ((inH === 15 && inM >= 30) || (inH >= 16 && (inH < 23 || (inH === 23 && inM < 30))));
 
       if (isNight) {
         chosenShift = matchedType.nightShift;
         shiftCode = 'N';
-        shiftName = `ดึก (${matchedType.name})`;
+        shiftName = `ดึก (24:00)`;
         plannedStartTime = '00:00';
         plannedEndTime = '08:00';
-        // เกณฑ์กะดึก: เริ่ม 00:00 น. อนุญาตให้เข้าก่อนได้ 30 นาที (ตั้งแต่ 23:30 น.)
-        if (inH >= 22) {
-          // สแกนช่วงก่อนเที่ยงคืน (เช่น 23:30 - 23:59 น.) -> ตรงเวลา
+        // เกณฑ์กะดึก: เริ่ม 24:00 น. (00:00 น.) สแกนช่วง 23:30 - 24:00 น. ถือว่าตรงเวลา
+        if (inH === 23) {
           lateMinutes = 0;
         } else if (inH === 0 && inM === 0) {
           lateMinutes = 0;
         } else {
-          // หลังเที่ยงคืน (เช่น 00:05 น.) -> สาย
+          // สแกนหลัง 24:00 น. (00:01 - 05:00 น.) -> สาย
           lateMinutes = inH * 60 + inM;
         }
       } else if (isAfternoon) {
         chosenShift = matchedType.afternoonShift;
         shiftCode = 'A';
-        shiftName = `บ่าย (${matchedType.name})`;
+        shiftName = `บ่าย (16:00)`;
         plannedStartTime = '16:00';
         plannedEndTime = '24:00';
-        // เกณฑ์กะบ่าย: เริ่ม 16:00 น. อนุญาตให้เข้าก่อนได้ 30 นาที (ตั้งแต่ 15:30 น.)
+        // เกณฑ์กะบ่าย: เริ่ม 16:00 น. สแกนช่วง 15:30 - 16:00 น. ถือว่าตรงเวลา
         const afternoonTargetMins = 16 * 60; // 960
         if (inMinutes <= afternoonTargetMins) {
           lateMinutes = 0;
         } else {
+          // สแกนหลัง 16:00 น. -> สาย
           lateMinutes = inMinutes - afternoonTargetMins;
         }
       } else {
-        // กะเช้า: เกณฑ์เริ่ม 08:15 น.
+        // 3. กะเช้า: เวลาสแกนถึง 15:00 น. (เกณฑ์ 08:15 น.)
         chosenShift = matchedType.morningShift;
         shiftCode = 'M';
-        shiftName = `เช้า (${matchedType.name})`;
+        shiftName = `เช้า (08:15)`;
         plannedStartTime = '08:15';
         plannedEndTime = '16:00';
         const morningTargetMins = 8 * 60 + 15; // 495
         if (inMinutes <= morningTargetMins) {
           lateMinutes = 0;
         } else {
+          // สแกนหลัง 08:15 น. (08:16 - 15:00 น.) -> สาย
           lateMinutes = inMinutes - morningTargetMins;
         }
       }
@@ -1738,6 +1766,17 @@ class AttendanceStore {
 
     const dates = Array.from(dateSet).sort();
 
+    // Pre-calculate attendance once per date (O(D) instead of O(D * P))
+    const dateResultsMap = new Map<string, Map<number, DailyResult>>();
+    for (const d of dates) {
+      const dayResults = this.calculateAttendance(d);
+      const pMap = new Map<number, DailyResult>();
+      for (const r of dayResults) {
+        pMap.set(r.personId, r);
+      }
+      dateResultsMap.set(d, pMap);
+    }
+
     return this.state.personnel.map(person => {
       let daysWorked = 0;
       let onTimeCount = 0;
@@ -1747,9 +1786,8 @@ class AttendanceStore {
       let totalOtMinutes = 0;
       let noScanCount = 0;
 
-      dates.forEach(d => {
-        const results = this.calculateAttendance(d, person.personId);
-        const r = results[0];
+      for (const d of dates) {
+        const r = dateResultsMap.get(d)?.get(person.personId);
         if (!r || r.status === 'NO_SCAN') {
           noScanCount++;
         } else {
@@ -1762,7 +1800,7 @@ class AttendanceStore {
           if (r.earlyMinutes > 0) earlyLeaveCount++;
           if (r.otMinutes > 0) totalOtMinutes += r.otMinutes;
         }
-      });
+      }
 
       return {
         personId: person.personId,
@@ -1788,7 +1826,7 @@ class AttendanceStore {
 
   /**
    * 1.1 📊 สรุปรายงานรายวัน (Daily HR Attendance Report)
-   * แสดงรายละเอียดการลงเวลาของเจ้าหน้าที่ทุกคนในวันที่กำหนด
+   * แสดงรายละเอียดการลงเวลาของเจ้าหน้าที่ทุกคนในวันที่กำหนด (ความเร็วสูง O(1) Lookups)
    */
   public getDailyReport(date: string = '2026-10-14'): DailyPersonReport[] {
     const rawScansForDay = this.state.rawScans.filter(s => {
@@ -1796,22 +1834,47 @@ class AttendanceStore {
       return sDate === date;
     });
 
-    return this.state.personnel.map(person => {
-      // ค้นหาการคำนวณผลของวันนี้
-      const dailyResults = this.calculateAttendance(date, person.personId);
-      const res = dailyResults[0];
+    // 1. คำนวณผลสรุปของทุกคนครั้งเดียว O(1) per person lookup
+    const allResults = this.calculateAttendance(date);
+    const resMap = new Map<number, DailyResult>();
+    for (const r of allResults) {
+      resMap.set(r.personId, r);
+    }
 
-      // ค้นหาข้อมูลสแกนจริงของบุคคลนี้
-      const pScans = rawScansForDay.filter(s => 
-        Number(s.fingleId) === Number(person.fingleId) || 
-        (s.personId && Number(s.personId) === Number(person.personId))
-      ).sort((a, b) => (a.scanDateTime || '').localeCompare(b.scanDateTime || ''));
+    // 2. จัดกลุ่มสแกนดิบตาม fingleId และ personId เพื่อค้นหา O(1)
+    const scansByPersonId = new Map<number, RawScan[]>();
+    const scansByFingleId = new Map<number, RawScan[]>();
+    for (const s of rawScansForDay) {
+      const pid = Number(s.personId);
+      if (pid > 0) {
+        let arr = scansByPersonId.get(pid);
+        if (!arr) { arr = []; scansByPersonId.set(pid, arr); }
+        arr.push(s);
+      }
+      const fid = Number(s.fingleId);
+      if (fid > 0) {
+        let arr = scansByFingleId.get(fid);
+        if (!arr) { arr = []; scansByFingleId.set(fid, arr); }
+        arr.push(s);
+      }
+    }
+
+    return this.state.personnel.map(person => {
+      const res = resMap.get(person.personId);
+
+      // ค้นหาข้อมูลสแกนจริงของบุคคลนี้แบบ O(1)
+      const pidScans = scansByPersonId.get(Number(person.personId)) || [];
+      const fidScans = scansByFingleId.get(Number(person.fingleId)) || [];
+      const uniqueScansMap = new Map<string | number, RawScan>();
+      for (const s of pidScans) uniqueScansMap.set(s.id, s);
+      for (const s of fidScans) uniqueScansMap.set(s.id, s);
+      const pScans = Array.from(uniqueScansMap.values()).sort((a, b) => (a.scanDateTime || '').localeCompare(b.scanDateTime || ''));
 
       const firstScan = pScans[0];
       const lastScan = pScans.length > 1 ? pScans[pScans.length - 1] : undefined;
 
       const inTime = firstScan ? (firstScan.scanDateTime || '').replace('T', ' ').substring(11, 16) : '-';
-      const outTime = lastScan ? (lastScan.scanDateTime || '').replace('T', ' ').substring(11, 16) : (pScans.length === 1 ? '-' : '-');
+      const outTime = lastScan ? (lastScan.scanDateTime || '').replace('T', ' ').substring(11, 16) : '-';
 
       // เครื่องสแกนที่ใช้
       const machineSet = new Set(pScans.map(s => `เครื่อง ${s.machineNo || 1}`));
@@ -1858,7 +1921,7 @@ class AttendanceStore {
         hrDepSubName: person.hrDepSubName,
         hrPersonTypeName: person.hrPersonTypeName,
         workDate: date,
-        shiftName: '08:30 - 16:30 (เช้า)',
+        shiftName: res?.shiftName || 'เช้า (08:15)',
         inTime,
         outTime,
         status,
@@ -1875,7 +1938,7 @@ class AttendanceStore {
 
   /**
    * 1.2 📊 สรุปรายงานตามช่วงเวลา (Custom Date Range Report)
-   * คำนวณสรุปสถิติของเจ้าหน้าที่ทุกคนในช่วงวันที่กำหนด (dateFrom ถึง dateTo)
+   * คำนวณสรุปสถิติของเจ้าหน้าที่ทุกคนในช่วงวันที่กำหนด (dateFrom ถึง dateTo) แบบความเร็วสูง
    */
   public getRangeReport(dateFrom: string, dateTo: string): ReportSummaryItem[] {
     const dateSet = new Set<string>();
@@ -1898,6 +1961,17 @@ class AttendanceStore {
 
     const dates = Array.from(dateSet).sort();
 
+    // Pre-calculate attendance once per date (O(D) instead of O(D * P))
+    const dateResultsMap = new Map<string, Map<number, DailyResult>>();
+    for (const d of dates) {
+      const dayResults = this.calculateAttendance(d);
+      const pMap = new Map<number, DailyResult>();
+      for (const r of dayResults) {
+        pMap.set(r.personId, r);
+      }
+      dateResultsMap.set(d, pMap);
+    }
+
     return this.state.personnel.map(person => {
       let daysWorked = 0;
       let onTimeCount = 0;
@@ -1907,9 +1981,8 @@ class AttendanceStore {
       let totalOtMinutes = 0;
       let noScanCount = 0;
 
-      dates.forEach(d => {
-        const results = this.calculateAttendance(d, person.personId);
-        const r = results[0];
+      for (const d of dates) {
+        const r = dateResultsMap.get(d)?.get(person.personId);
         if (!r || r.status === 'NO_SCAN') {
           noScanCount++;
         } else {
@@ -1922,7 +1995,7 @@ class AttendanceStore {
           if (r.earlyMinutes > 0) earlyLeaveCount++;
           if (r.otMinutes > 0) totalOtMinutes += r.otMinutes;
         }
-      });
+      }
 
       const onTimeRate = daysWorked > 0 ? parseFloat(((onTimeCount / daysWorked) * 100).toFixed(1)) : 0;
       const totalHoursWorked = parseFloat((daysWorked * 8).toFixed(1));
@@ -2082,22 +2155,52 @@ class AttendanceStore {
           let inH = 8;
           let inM = 0;
           let inS = (p.personId * 7 + pIdx * 11) % 60;
-          let outH = 16;
-          let outM = (p.personId * 3 + pIdx * 9) % 45;
-          let outS = (p.personId * 5 + pIdx * 17) % 60;
 
-          if (rand >= 88) {
-            // สาย 12% (+16 ถึง +42 นาที)
-            inH = 8;
-            inM = 16 + (rand % 27);
+          // แยกประเภทเจ้าหน้าที่: พยาบาลและ ER มี 3 ผลัด (เช้า/บ่าย/ดึก) | สายสำนักงาน/ไอที/คุณทวีสิทธิ์ กะเช้า
+          const isNurseOrEr = (p.hrDepName || '').includes('พยาบาล') || 
+                              (p.hrDepName || '').includes('ฉุกเฉิน') || 
+                              (p.hrPositionName || '').includes('พยาบาล');
+
+          if (isNurseOrEr) {
+            const shiftSlot = (p.personId * 3 + dayOfWeek * 5 + pIdx * 7) % 3;
+            if (shiftSlot === 1) {
+              // กะบ่าย (เริ่มตรวจ 15:30 น., เกณฑ์เริ่ม 16:00 น.)
+              if (rand >= 90) {
+                inH = 16;
+                inM = 5 + (rand % 25); // สายหลัง 16:00 น.
+              } else {
+                inH = 15;
+                inM = 30 + (rand % 30); // ตรงเวลา 15:30 - 15:59 น.
+              }
+            } else if (shiftSlot === 2) {
+              // กะดึก (เริ่มตรวจ 23:30 น., เกณฑ์เริ่ม 24:00 น.)
+              if (rand >= 90) {
+                inH = 0;
+                inM = 5 + (rand % 25); // สายหลัง 24:00 น. (00:05 - 00:29 น.)
+              } else {
+                inH = 23;
+                inM = 30 + (rand % 29); // ตรงเวลา 23:30 - 23:58 น.
+              }
+            } else {
+              // กะเช้า (เกณฑ์เริ่ม 08:15 น.)
+              if (rand >= 90) {
+                inH = 8;
+                inM = 16 + (rand % 25); // สายหลัง 08:15 น.
+              } else {
+                inH = 7;
+                inM = 45 + (rand % 15); // ตรงเวลา 07:45 - 08:14 น.
+                if (inM >= 60) { inH = 8; inM -= 60; }
+              }
+            }
           } else {
-            // ปกติ (ตรงเวลา 85%)
-            inH = 7;
-            inM = 40 + (rand % 34);
-            if (inM >= 60) {
+            // สายงานสำนักงาน / ไอที / คุณทวีสิทธิ์ (Fingle 57) เข้ากะเช้าตามปกติ
+            if (rand >= 90) {
               inH = 8;
-              inM -= 60;
-              if (inM > 14) inM = 14;
+              inM = 16 + (rand % 20); // สาย
+            } else {
+              inH = 7;
+              inM = 45 + (rand % 15); // ตรงเวลา
+              if (inM >= 60) { inH = 8; inM -= 60; }
             }
           }
 
