@@ -208,6 +208,8 @@ export interface HrPerson {
   hrDepartmentSubId: number;
   phone?: string;
   status: 'ACTIVE' | 'INACTIVE';
+  hrStatusId?: string | number; // HP.HR_STATUS_ID เช่น '01'
+  hrStatusName?: string; // HS.HR_STATUS_NAME เช่น 'ปฏิบัติราชการ'
 }
 
 export interface HosofficePersonRow {
@@ -220,10 +222,12 @@ export interface HosofficePersonRow {
   HR_PERSON_TYPE_NAME: string;
   HR_LEVEL_NAME: string;
   FINGLE_ID?: number;
+  HR_STATUS_ID?: string | number;
+  HR_STATUS_NAME?: string;
 }
 
 export interface PersonnelFieldChange {
-  field: 'FULLNAME' | 'HR_POSITION_NAME' | 'HR_LEVEL_NAME' | 'HR_DEPARTMENT_SUB' | 'HR_PERSON_TYPE_NAME';
+  field: 'FULLNAME' | 'HR_POSITION_NAME' | 'HR_LEVEL_NAME' | 'HR_DEPARTMENT_SUB' | 'HR_PERSON_TYPE_NAME' | 'HR_STATUS_NAME';
   label: string;
   oldValue: string;
   newValue: string;

@@ -30,6 +30,7 @@ export const PersonnelPage: React.FC<PersonnelPageProps> = ({ state }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
   const [selectedType, setSelectedType] = useState<string>('ALL');
+  const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [showSqlQuery, setShowSqlQuery] = useState(false);
   const [copiedQuery, setCopiedQuery] = useState(false);
 
@@ -52,6 +53,11 @@ export const PersonnelPage: React.FC<PersonnelPageProps> = ({ state }) => {
   const filteredPersonnel = state.personnel.filter((p) => {
     if (selectedDept !== 'ALL' && p.hrDepName !== selectedDept) return false;
     if (selectedType !== 'ALL' && p.hrPersonTypeName !== selectedType) return false;
+    if (selectedStatus !== 'ALL') {
+      const pStatus = p.hrStatusName || (p.status === 'ACTIVE' ? 'ปฏิบัติราชการ' : 'ไม่ได้ปฏิบัติราชการ');
+      if (selectedStatus === 'ACTIVE' && !pStatus.includes('ปฏิบัติราชการ') && p.status !== 'ACTIVE') return false;
+      if (selectedStatus === 'INACTIVE' && (pStatus.includes('ปฏิบัติราชการ') || p.status === 'ACTIVE')) return false;
+    }
     if (searchTerm) {
       const matchName = p.hrFullname.toLowerCase().includes(searchTerm.toLowerCase());
       const matchFingle = p.fingleId.toString().includes(searchTerm);
@@ -87,7 +93,8 @@ SELECT
   COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') AS hr_dep_sub_name,
   COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') AS hr_person_type_name,
   COALESCE(hl.HR_LEVEL_NAME, '') AS hr_level_name,
-  hp.HR_STATUS_ID AS hr_status_id
+  hp.HR_STATUS_ID AS hr_status_id,
+  COALESCE(hs.HR_STATUS_NAME, 'ปฏิบัติราชการ') AS hr_status_name
 FROM active_person hp
 LEFT JOIN hr_prefix hf 
   ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
@@ -101,6 +108,8 @@ LEFT JOIN hr_person_type hpt
   ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
 LEFT JOIN hr_level hl 
   ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
+LEFT JOIN hr_status hs 
+  ON hp.HR_STATUS_ID = hs.HR_STATUS_ID
 ORDER BY hp.ID ASC;`;
 
   const handleCopyQuery = () => {
@@ -128,7 +137,9 @@ ORDER BY hp.ID ASC;`;
             HR_DEPARTMENT_NAME: r.hrDepName || r.hr_dep_name || 'โรงพยาบาลสามชุก',
             HR_DEPARTMENT_SUB: r.hrDepSubName || r.hr_dep_sub_name || '',
             HR_PERSON_TYPE_NAME: r.hrPersonTypeName || r.hr_person_type_name || 'ข้าราชการ',
-            FINGLE_ID: r.fingleId || r.fingle_id || r.id
+            FINGLE_ID: r.fingleId || r.fingle_id || r.id,
+            HR_STATUS_ID: r.hrStatusId || r.hr_status_id || '01',
+            HR_STATUS_NAME: r.hrStatusName || r.hr_status_name || 'ปฏิบัติราชการ'
           }));
         } else {
           // หากผลลัพธ์จาก API ว่างเปล่า ให้ลองโหลดจาก DB อีกครั้ง
@@ -144,7 +155,9 @@ ORDER BY hp.ID ASC;`;
               HR_DEPARTMENT_NAME: r.hrDepName || r.hr_dep_name || 'โรงพยาบาลสามชุก',
               HR_DEPARTMENT_SUB: r.hrDepSubName || r.hr_dep_sub_name || '',
               HR_PERSON_TYPE_NAME: r.hrPersonTypeName || r.hr_person_type_name || 'ข้าราชการ',
-              FINGLE_ID: r.fingleId || r.fingle_id || r.id
+              FINGLE_ID: r.fingleId || r.fingle_id || r.id,
+              HR_STATUS_ID: r.hrStatusId || r.hr_status_id || '01',
+              HR_STATUS_NAME: r.hrStatusName || r.hr_status_name || 'ปฏิบัติราชการ'
             }));
           }
         }
@@ -163,7 +176,9 @@ ORDER BY hp.ID ASC;`;
           HR_DEPARTMENT_NAME: p.hrDepName,
           HR_DEPARTMENT_SUB: p.personId === 2 ? 'งานห้องคลอดและทารกแรกเกิด' : p.hrDepSubName,
           HR_PERSON_TYPE_NAME: p.personId === 7 ? 'พนักงานกระทรวงสาธารณสุข' : p.hrPersonTypeName,
-          FINGLE_ID: p.fingleId
+          FINGLE_ID: p.fingleId,
+          HR_STATUS_ID: p.hrStatusId || '01',
+          HR_STATUS_NAME: p.hrStatusName || 'ปฏิบัติราชการ'
         })),
         {
           ID: 99,
@@ -174,7 +189,9 @@ ORDER BY hp.ID ASC;`;
           HR_DEPARTMENT_NAME: 'กลุ่มงานการแพทย์',
           HR_DEPARTMENT_SUB: 'งานศัลยกรรม',
           HR_PERSON_TYPE_NAME: 'ข้าราชการ',
-          FINGLE_ID: 155
+          FINGLE_ID: 155,
+          HR_STATUS_ID: '01',
+          HR_STATUS_NAME: 'ปฏิบัติราชการ'
         }
       ];
     }
@@ -278,12 +295,13 @@ ORDER BY hp.ID ASC;`;
             {hosofficeSqlQuery}
           </pre>
           <div className="text-[11px] font-sans text-slate-400 flex flex-wrap gap-x-2 gap-y-1">
-            <span>* คิวรี่นี้ใช้ดึง 5 ฟิลด์หลักในการตรวจสอบและอัปเดต:</span>
+            <span>* คิวรี่นี้ใช้ดึง 6 ฟิลด์หลักในการตรวจสอบและอัปเดต:</span>
             <span className="text-amber-300 font-mono">1. FULLNAME</span>
             <span className="text-amber-300 font-mono">2. HR_POSITION_NAME</span>
             <span className="text-amber-300 font-mono">3. HR_LEVEL_NAME</span>
             <span className="text-amber-300 font-mono">4. HR_DEPARTMENT_SUB</span>
             <span className="text-amber-300 font-mono">5. HR_PERSON_TYPE_NAME</span>
+            <span className="text-amber-300 font-mono">6. HR_STATUS_NAME (สถานะการปฏิบัติงาน)</span>
             <span>ร่วมกับ <code className="text-teal-300">HP.FINGLE_ID</code>, <code className="text-teal-300">HP.HR_CID</code>, และ <code className="text-teal-300">HP.ID</code></span>
           </div>
         </div>
@@ -302,19 +320,19 @@ ORDER BY hp.ID ASC;`;
             </span>
           </div>
           <p className="text-[11px] text-teal-800 leading-relaxed">
-            ระบบจะดึงข้อมูลรายชื่อ, <strong>รหัสสแกนนิ้ว (FINGLE_ID)</strong>, เลขบัตรประชาชน (CID), ตำแหน่ง, ระดับ, กลุ่มงาน และประเภทบุคลากร จากฐาน HOSOffice มาบันทึกในทำเนียบบุคลากรให้โดยตรง 
+            ระบบจะดึงข้อมูลรายชื่อ, <strong>รหัสสแกนนิ้ว (FINGLE_ID)</strong>, เลขบัตรประชาชน (CID), ตำแหน่ง, ระดับ, กลุ่มงาน, ประเภทบุคลากร และ<strong>สถานะการปฏิบัติงาน (HR_STATUS_NAME)</strong> จากฐาน HOSOffice มาบันทึกในทำเนียบบุคลากรให้โดยตรง 
             <strong> เพื่อที่เจ้าหน้าที่ฝ่ายบุคคลจะได้ไม่ต้องเสียเวลาคีย์ข้อมูลทีละคน</strong> โดยการดึงนี้เป็นการนำเข้าข้อมูลประวัติบุคลากรเท่านั้น ไม่เกี่ยวข้องกับการประมวลผลสถานะสแกนเวลา
           </p>
         </div>
       </div>
 
       {/* Filter Toolbar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
         <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
           <input
             type="text"
-            placeholder="ค้นหาชื่อ, FINGLE_ID, เลขบัตรประชาชน, ตำแหน่ง..."
+            placeholder="ค้นหาชื่อ, FINGLE_ID, เลขบัตร, ตำแหน่ง..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full bg-slate-50 border border-slate-300 rounded-lg pl-8 pr-3 py-2 text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500"
@@ -327,7 +345,7 @@ ORDER BY hp.ID ASC;`;
             onChange={(e) => setSelectedDept(e.target.value)}
             className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
           >
-            <option value="ALL">ทุกกลุ่มงาน/ฝ่ายหลัก (HR_DEPARTMENT)</option>
+            <option value="ALL">ทุกกลุ่มงาน/ฝ่ายหลัก</option>
             {departments.map((d) => (
               <option key={d} value={d}>{d}</option>
             ))}
@@ -340,10 +358,22 @@ ORDER BY hp.ID ASC;`;
             onChange={(e) => setSelectedType(e.target.value)}
             className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
           >
-            <option value="ALL">ทุกประเภทบุคลากร (HR_PERSON_TYPE)</option>
+            <option value="ALL">ทุกประเภทบุคลากร</option>
             {personTypes.map((t) => (
               <option key={t} value={t}>{t}</option>
             ))}
+          </select>
+        </div>
+
+        <div>
+          <select
+            value={selectedStatus}
+            onChange={(e) => setSelectedStatus(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-500 cursor-pointer"
+          >
+            <option value="ALL">ทุกสถานะ (HR_STATUS)</option>
+            <option value="ACTIVE">ปฏิบัติราชการ (Active / 01)</option>
+            <option value="INACTIVE">ไม่ได้ปฏิบัติราชการ (Inactive)</option>
           </select>
         </div>
       </div>
@@ -375,6 +405,7 @@ ORDER BY hp.ID ASC;`;
                 <th className="py-2.5 px-3">ระดับ (HR_LEVEL_NAME)</th>
                 <th className="py-2.5 px-3">กลุ่มงานหลัก / หน่วยงานย่อย (HR_DEPARTMENT_SUB)</th>
                 <th className="py-2.5 px-3">ประเภทบุคลากร (HR_PERSON_TYPE_NAME)</th>
+                <th className="py-2.5 px-3">สถานะ (HR_STATUS)</th>
                 <th className="py-2.5 px-3 text-right">กะปฏิบัติงานวันนี้ (คนมีได้หลายกะ)</th>
               </tr>
             </thead>
@@ -413,6 +444,23 @@ ORDER BY hp.ID ASC;`;
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       <span className="text-[11px] text-slate-700 bg-slate-100 px-2 py-0.5 rounded font-medium">
                         {person.hrPersonTypeName}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 whitespace-nowrap">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+                        person.status === 'ACTIVE' || person.hrStatusId === '01' || person.hrStatusId === 1
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : 'bg-rose-50 text-rose-800 border-rose-200'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          person.status === 'ACTIVE' || person.hrStatusId === '01' || person.hrStatusId === 1
+                            ? 'bg-emerald-500'
+                            : 'bg-rose-400'
+                        }`} />
+                        <span>{person.hrStatusName || (person.status === 'ACTIVE' ? 'ปฏิบัติราชการ' : 'ไม่ได้ปฏิบัติราชการ')}</span>
+                        {person.hrStatusId && (
+                          <span className="text-[10px] text-slate-500 font-mono">({person.hrStatusId})</span>
+                        )}
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-right">
@@ -473,7 +521,7 @@ ORDER BY hp.ID ASC;`;
 
               {filteredPersonnel.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-500">
+                  <td colSpan={10} className="py-12 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <div className="p-3 bg-teal-50 text-teal-700 rounded-full">
                         <Users className="w-8 h-8" />
@@ -624,7 +672,7 @@ ORDER BY hp.ID ASC;`;
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2">
                     <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                     <div>
-                      <strong>ตรวจพบข้อมูลใน HOSOffice มีการเปลี่ยนแปลง:</strong> ระบบได้ทำการปรับปรุงฐานข้อมูลเวลาปฏิบัติงานของเราให้ตรงกับ HOSOffice อัตโนมัติในทั้ง 5 ฟิลด์หลัก (ชื่อ-สกุล, ตำแหน่ง, ระดับ, กลุ่มงาน/หน่วยงานย่อย, ประเภทบุคลากร)
+                      <strong>ตรวจพบข้อมูลใน HOSOffice มีการเปลี่ยนแปลง:</strong> ระบบได้ทำการปรับปรุงฐานข้อมูลเวลาปฏิบัติงานของเราให้ตรงกับ HOSOffice อัตโนมัติในทั้ง 6 ฟิลด์หลัก (ชื่อ-สกุล, ตำแหน่ง, ระดับ, กลุ่มงาน/หน่วยงานย่อย, ประเภทบุคลากร, สถานะการปฏิบัติงาน)
                     </div>
                   </div>
 
@@ -703,6 +751,7 @@ ORDER BY hp.ID ASC;`;
                             <th className="p-2.5">ตำแหน่ง / ระดับ</th>
                             <th className="p-2.5">กลุ่มงาน / หน่วยงานย่อย</th>
                             <th className="p-2.5">ประเภท</th>
+                            <th className="p-2.5">สถานะ</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 font-sans">
@@ -715,6 +764,15 @@ ORDER BY hp.ID ASC;`;
                               <td className="p-2.5">
                                 <span className="bg-slate-100 px-2 py-0.5 rounded text-[11px] text-slate-700">
                                   {person.hrPersonTypeName}
+                                </span>
+                              </td>
+                              <td className="p-2.5">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
+                                  person.status === 'ACTIVE' || person.hrStatusId === '01'
+                                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                    : 'bg-rose-50 text-rose-800 border border-rose-200'
+                                }`}>
+                                  {person.hrStatusName || (person.status === 'ACTIVE' ? 'ปฏิบัติราชการ' : 'ไม่ได้ปฏิบัติราชการ')}
                                 </span>
                               </td>
                             </tr>
@@ -732,7 +790,7 @@ ORDER BY hp.ID ASC;`;
                   <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-700 flex items-start gap-2">
                     <Database className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
                     <div>
-                      <strong>เช็คแล้ว ข้อมูลดึงแล้ว ไม่ต้องดึงซ้ำ:</strong> บุคลากรเหล่านี้มีอยู่ในฐานข้อมูลอยู่แล้ว และข้อมูลทั้ง 5 ฟิลด์ตรงกับ HOSOffice 100% จึงข้ามการเพิ่มซ้ำเพื่อความปลอดภัยของข้อมูล
+                      <strong>เช็คแล้ว ข้อมูลดึงแล้ว ไม่ต้องดึงซ้ำ:</strong> บุคลากรเหล่านี้มีอยู่ในฐานข้อมูลอยู่แล้ว และข้อมูลทั้ง 6 ฟิลด์ตรงกับ HOSOffice 100% จึงข้ามการเพิ่มซ้ำเพื่อความปลอดภัยของข้อมูล
                     </div>
                   </div>
 

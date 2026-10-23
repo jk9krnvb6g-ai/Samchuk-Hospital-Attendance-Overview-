@@ -1270,9 +1270,9 @@ class AttendanceStore {
             hrPersonTypeName: p.hrPersonTypeName || p.hr_person_type_name || 'ข้าราชการ',
             hrPersonTypeId: p.hrPersonTypeId || 1,
             hrDepartmentId: p.hrDepartmentId || 1,
-            hrDepartmentSubId: p.hrDepartmentSubId || 1,
-            hrStatusId: p.hrStatusId || 1,
-            status: 'ACTIVE'
+            hrStatusId: p.hrStatusId || p.hr_status_id || '01',
+            hrStatusName: p.hrStatusName || p.hr_status_name || 'ปฏิบัติราชการ',
+            status: p.status || 'ACTIVE'
           }));
         } else {
           this.state.personnel = [];
@@ -1443,24 +1443,24 @@ class AttendanceStore {
 
   // ชุดข้อมูลบุคลากรมาตรฐาน โรงพยาบาลสามชุก สำหรับนำเข้าอัตโนมัติ (ไม่ต้องคีย์มือ)
   public static readonly HOSPITAL_MASTER_PERSONNEL_ROWS: HosofficePersonRow[] = [
-    { ID: 57, FINGLE_ID: 57, HR_CID: '3720100123456', FULLNAME: 'นายทวีสิทธิ์ พุ่มพฤกษ์', HR_POSITION_NAME: 'นักวิชาการคอมพิวเตอร์', HR_LEVEL_NAME: 'ปฏิบัติการ', HR_DEPARTMENT_NAME: 'กลุ่มงานสุขภาพดิจิทัล', HR_DEPARTMENT_SUB: 'งานสารสนเทศ', HR_PERSON_TYPE_NAME: 'ข้าราชการ' },
-    { ID: 79, FINGLE_ID: 79, HR_CID: '3720100123455', FULLNAME: 'นางสาวกฤษณา กลิ่นมณฑา', HR_POSITION_NAME: 'พยาบาลวิชาชีพ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานผู้ป่วยใน', HR_PERSON_TYPE_NAME: 'ข้าราชการ' },
-    { ID: 87, FINGLE_ID: 87, HR_CID: '3720100123470', FULLNAME: 'นางสาวกมลรัตน์ สดคมขำ', HR_POSITION_NAME: 'พนักงานบริการ', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานอุบัติเหตุและฉุกเฉิน', HR_DEPARTMENT_SUB: 'งานผู้ป่วยอุบัติเหตุ', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข' },
-    { ID: 142, FINGLE_ID: 142, HR_CID: '3720100123471', FULLNAME: 'นายเอกสิทธิ์ ทับแสงศรี', HR_POSITION_NAME: 'พนักงานบริการ', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานสุขาภิบาล', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข' },
-    { ID: 6, FINGLE_ID: 6, HR_CID: '3720100123472', FULLNAME: 'นายเอกภพ สว่างศรี', HR_POSITION_NAME: 'พนักงานขับรถยนต์', HR_LEVEL_NAME: 'ชำนาญงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานยานพาหนะ', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข' },
-    { ID: 101, FINGLE_ID: 101, HR_CID: '3720100123457', FULLNAME: 'พว.สุดารัตน์ พยาบาลดี', HR_POSITION_NAME: 'พยาบาลวิชาชีพชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานผู้ป่วยนอก', HR_PERSON_TYPE_NAME: 'ข้าราชการ' },
-    { ID: 102, FINGLE_ID: 102, HR_CID: '3720100123458', FULLNAME: 'นพ.สมชาย รักษาดี', HR_POSITION_NAME: 'นายแพทย์ชำนาญการพิเศษ', HR_LEVEL_NAME: 'ชำนาญการพิเศษ', HR_DEPARTMENT_NAME: 'กลุ่มงานการแพทย์', HR_DEPARTMENT_SUB: 'งานอายุรกรรม', HR_PERSON_TYPE_NAME: 'ข้าราชการ' },
-    { ID: 103, FINGLE_ID: 103, HR_CID: '3720100123459', FULLNAME: 'นางสาวพิมพ์ใจ มีสุข', HR_POSITION_NAME: 'เจ้าพนักงานธุรการปฏิบัติงาน', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานสารบรรณ', HR_PERSON_TYPE_NAME: 'ลูกจ้างประจำ' },
-    { ID: 104, FINGLE_ID: 104, HR_CID: '3720100123460', FULLNAME: 'นายวีระพล ช่างซ่อม', HR_POSITION_NAME: 'นายช่างเทคนิค', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานซ่อมบำรุง', HR_PERSON_TYPE_NAME: 'พนักงานราชการ' },
-    { ID: 105, FINGLE_ID: 105, HR_CID: '3720100123461', FULLNAME: 'ภก.ธีรพงศ์ เภสัชกร', HR_POSITION_NAME: 'เภสัชกรชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานเภสัชกรรม', HR_DEPARTMENT_SUB: 'งานเภสัชกรรมคลินิก', HR_PERSON_TYPE_NAME: 'ข้าราชการ' },
-    { ID: 106, FINGLE_ID: 106, HR_CID: '3720100123462', FULLNAME: 'นางสาวกานดา สุขสวัสดิ์', HR_POSITION_NAME: 'นักจัดการงานทั่วไปชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานบุคคล', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข' },
-    { ID: 107, FINGLE_ID: 107, HR_CID: '3720100123463', FULLNAME: 'นายอนุชา ปลอดภัย', HR_POSITION_NAME: 'เจ้าพนักงานสาธารณสุข', HR_LEVEL_NAME: 'ชำนาญงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานเวชกรรมสังคม', HR_DEPARTMENT_SUB: 'งานส่งเสริมสุขภาพ', HR_PERSON_TYPE_NAME: 'ข้าราชการ' },
-    { ID: 108, FINGLE_ID: 108, HR_CID: '3720100123464', FULLNAME: 'พว.มาลี บุญรักษา', HR_POSITION_NAME: 'พยาบาลวิชาชีพปฏิบัติการ', HR_LEVEL_NAME: 'ปฏิบัติการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานอุบัติเหตุฉุกเฉิน', HR_PERSON_TYPE_NAME: 'ข้าราชการ' }
+    { ID: 57, FINGLE_ID: 57, HR_CID: '3720100123456', FULLNAME: 'นายทวีสิทธิ์ พุ่มพฤกษ์', HR_POSITION_NAME: 'นักวิชาการคอมพิวเตอร์', HR_LEVEL_NAME: 'ปฏิบัติการ', HR_DEPARTMENT_NAME: 'กลุ่มงานสุขภาพดิจิทัล', HR_DEPARTMENT_SUB: 'งานสารสนเทศ', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 79, FINGLE_ID: 79, HR_CID: '3720100123455', FULLNAME: 'นางสาวกฤษณา กลิ่นมณฑา', HR_POSITION_NAME: 'พยาบาลวิชาชีพ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานผู้ป่วยใน', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 87, FINGLE_ID: 87, HR_CID: '3720100123470', FULLNAME: 'นางสาวกมลรัตน์ สดคมขำ', HR_POSITION_NAME: 'พนักงานบริการ', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานอุบัติเหตุและฉุกเฉิน', HR_DEPARTMENT_SUB: 'งานผู้ป่วยอุบัติเหตุ', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 142, FINGLE_ID: 142, HR_CID: '3720100123471', FULLNAME: 'นายเอกสิทธิ์ ทับแสงศรี', HR_POSITION_NAME: 'พนักงานบริการ', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานสุขาภิบาล', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 6, FINGLE_ID: 6, HR_CID: '3720100123472', FULLNAME: 'นายเอกภพ สว่างศรี', HR_POSITION_NAME: 'พนักงานขับรถยนต์', HR_LEVEL_NAME: 'ชำนาญงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานยานพาหนะ', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 101, FINGLE_ID: 101, HR_CID: '3720100123457', FULLNAME: 'พว.สุดารัตน์ พยาบาลดี', HR_POSITION_NAME: 'พยาบาลวิชาชีพชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานผู้ป่วยนอก', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 102, FINGLE_ID: 102, HR_CID: '3720100123458', FULLNAME: 'นพ.สมชาย รักษาดี', HR_POSITION_NAME: 'นายแพทย์ชำนาญการพิเศษ', HR_LEVEL_NAME: 'ชำนาญการพิเศษ', HR_DEPARTMENT_NAME: 'กลุ่มงานการแพทย์', HR_DEPARTMENT_SUB: 'งานอายุรกรรม', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 103, FINGLE_ID: 103, HR_CID: '3720100123459', FULLNAME: 'นางสาวพิมพ์ใจ มีสุข', HR_POSITION_NAME: 'เจ้าพนักงานธุรการปฏิบัติงาน', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานสารบรรณ', HR_PERSON_TYPE_NAME: 'ลูกจ้างประจำ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 104, FINGLE_ID: 104, HR_CID: '3720100123460', FULLNAME: 'นายวีระพล ช่างซ่อม', HR_POSITION_NAME: 'นายช่างเทคนิค', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานซ่อมบำรุง', HR_PERSON_TYPE_NAME: 'พนักงานราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 105, FINGLE_ID: 105, HR_CID: '3720100123461', FULLNAME: 'ภก.ธีรพงศ์ เภสัชกร', HR_POSITION_NAME: 'เภสัชกรชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานเภสัชกรรม', HR_DEPARTMENT_SUB: 'งานเภสัชกรรมคลินิก', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 106, FINGLE_ID: 106, HR_CID: '3720100123462', FULLNAME: 'นางสาวกานดา สุขสวัสดิ์', HR_POSITION_NAME: 'นักจัดการงานทั่วไปชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานบุคคล', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 107, FINGLE_ID: 107, HR_CID: '3720100123463', FULLNAME: 'นายอนุชา ปลอดภัย', HR_POSITION_NAME: 'เจ้าพนักงานสาธารณสุข', HR_LEVEL_NAME: 'ชำนาญงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานเวชกรรมสังคม', HR_DEPARTMENT_SUB: 'งานส่งเสริมสุขภาพ', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
+    { ID: 108, FINGLE_ID: 108, HR_CID: '3720100123464', FULLNAME: 'พว.มาลี บุญรักษา', HR_POSITION_NAME: 'พยาบาลวิชาชีพปฏิบัติการ', HR_LEVEL_NAME: 'ปฏิบัติการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานอุบัติเหตุฉุกเฉิน', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' }
   ];
 
   // ซิงค์ข้อมูลบุคลากรจาก HOSOffice ตามคำสั่ง SQL:
   // เช็คว่าข้อมูลไหน ดึงแล้ว ไม่ต้องดึงซ้ำ (skipped)
-  // แต่ถ้า 5 ฟิลด์หลัก (FULLNAME, HR_POSITION_NAME, HR_LEVEL_NAME, HR_DEPARTMENT_SUB, HR_PERSON_TYPE_NAME) ใน hosoffice เปลี่ยนหรือไม่ตรงกับฐานเรา ให้เปลี่ยนให้ตรงกับ hosoffice!
+  // แต่ถ้า 6 ฟิลด์หลัก (FULLNAME, HR_POSITION_NAME, HR_LEVEL_NAME, HR_DEPARTMENT_SUB, HR_PERSON_TYPE_NAME, HR_STATUS_NAME) ใน hosoffice เปลี่ยนหรือไม่ตรงกับฐานเรา ให้เปลี่ยนให้ตรงกับ hosoffice!
   public syncPersonnelFromHosoffice(user: User, customRows?: HosofficePersonRow[]): PersonnelSyncResult {
     if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
     let sourceRows = customRows || [];
@@ -1498,6 +1498,8 @@ class AttendanceStore {
           hrPersonTypeId: typeId,
           hrDepartmentId: 100 + (row.ID % 10),
           hrDepartmentSubId: 1000 + (row.ID % 20),
+          hrStatusId: row.HR_STATUS_ID || '01',
+          hrStatusName: row.HR_STATUS_NAME || 'ปฏิบัติราชการ',
           status: 'ACTIVE'
         };
 
@@ -1507,12 +1509,13 @@ class AttendanceStore {
       }
 
       // ข้อมูลที่เคยดึงแล้ว:
-      // ตรวจสอบว่า 5 ฟิลด์หลักใน hosoffice เปลี่ยน หรือไม่ตรงกับฐานเราหรือไม่:
+      // ตรวจสอบว่าฟิลด์หลักใน hosoffice เปลี่ยน หรือไม่ตรงกับฐานเราหรือไม่:
       // 1. ชื่อ - สกุล (FULLNAME)
       // 2. ตำแหน่ง (HR_POSITION_NAME)
       // 3. ระดับ (HR_LEVEL_NAME)
       // 4. กลุ่มงานหลัก / หน่วยงานย่อย (HR_DEPARTMENT_SUB)
-      // ซ่อมแซม personId, hrCid, fingleId ให้ตรงกับ HOSOffice เสมอ
+      // 5. ประเภทบุคลากร (HR_PERSON_TYPE_NAME)
+      // 6. สถานะการปฏิบัติงาน (HR_STATUS_NAME)
       if ((!existing.personId || existing.personId === 0) && row.ID) existing.personId = row.ID;
       if (!existing.hrCid && row.HR_CID) existing.hrCid = row.HR_CID;
       if (!existing.fingleId && row.FINGLE_ID) existing.fingleId = row.FINGLE_ID;
@@ -1581,6 +1584,21 @@ class AttendanceStore {
         else if (row.HR_PERSON_TYPE_NAME.includes('ลูกจ้าง')) existing.hrPersonTypeId = 3;
         else if (row.HR_PERSON_TYPE_NAME.includes('ข้าราชการ')) existing.hrPersonTypeId = 1;
       }
+
+      // 6. สถานะการปฏิบัติงาน (HR_STATUS_NAME)
+      const rowStatusName = row.HR_STATUS_NAME || 'ปฏิบัติราชการ';
+      if (existing.hrStatusName && existing.hrStatusName.trim() !== rowStatusName.trim()) {
+        changes.push({
+          field: 'HR_STATUS_NAME',
+          label: 'สถานะการปฏิบัติงาน',
+          oldValue: existing.hrStatusName,
+          newValue: rowStatusName
+        });
+        existing.hrStatusName = rowStatusName;
+      } else if (!existing.hrStatusName) {
+        existing.hrStatusName = rowStatusName;
+      }
+      if (row.HR_STATUS_ID) existing.hrStatusId = row.HR_STATUS_ID;
 
       // ปรับปรุง FINGLE_ID ด้วยหากมี
       if (row.FINGLE_ID && existing.fingleId !== row.FINGLE_ID) {
@@ -2013,18 +2031,22 @@ class AttendanceStore {
       }
 
       // หากผู้ใช้ลบข้อมูลในฐานไปหมด หรือยังไม่มีรายชื่อบุคลากร ให้ใช้รายชื่อบุคลากรมาตรฐานโรงพยาบาลสามชุกทันที
-      let effectivePersonnel: HrPerson[] = this.state.personnel;
-      if (!effectivePersonnel || effectivePersonnel.length === 0) {
+      let effectivePersonnel: HrPerson[] = (this.state.personnel || []).filter(p => p.status === 'ACTIVE' || !p.status);
+      if (effectivePersonnel.length === 0) {
         effectivePersonnel = [
-          { personId: 57, fingleId: 57, hrCid: '3720100123456', hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์', hrLevelName: 'ปฏิบัติการ', hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrDepSubName: 'งานสารสนเทศ', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 3, hrDepartmentSubId: 1, status: 'ACTIVE' },
-          { personId: 101, fingleId: 101, hrCid: '3720100123457', hrFullname: 'พว.สุดารัตน์ พยาบาลดี', hrPositionName: 'พยาบาลวิชาชีพชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานผู้ป่วยนอก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 1, status: 'ACTIVE' },
-          { personId: 102, fingleId: 102, hrCid: '3720100123458', hrFullname: 'นพ.สมชาย รักษาดี', hrPositionName: 'นายแพทย์ชำนาญการพิเศษ', hrLevelName: 'ชำนาญการพิเศษ', hrDepName: 'กลุ่มงานการแพทย์', hrDepSubName: 'งานอายุรกรรม', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 2, hrDepartmentSubId: 1, status: 'ACTIVE' },
-          { personId: 103, fingleId: 103, hrCid: '3720100123459', hrFullname: 'นางสาวพิมพ์ใจ มีสุข', hrPositionName: 'เจ้าพนักงานธุรการปฏิบัติงาน', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานสารบรรณ', hrPersonTypeName: 'ลูกจ้างประจำ', hrPersonTypeId: 4, hrDepartmentId: 3, hrDepartmentSubId: 2, status: 'ACTIVE' },
-          { personId: 104, fingleId: 104, hrCid: '3720100123460', hrFullname: 'นายวีระพล ช่างซ่อม', hrPositionName: 'นายช่างเทคนิค', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานซ่อมบำรุง', hrPersonTypeName: 'พนักงานราชการ', hrPersonTypeId: 3, hrDepartmentId: 3, hrDepartmentSubId: 3, status: 'ACTIVE' },
-          { personId: 105, fingleId: 105, hrCid: '3720100123461', hrFullname: 'ภก.ธีรพงศ์ เภสัชกร', hrPositionName: 'เภสัชกรชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานเภสัชกรรม', hrDepSubName: 'งานเภสัชกรรมคลินิก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 4, hrDepartmentSubId: 1, status: 'ACTIVE' },
-          { personId: 106, fingleId: 106, hrCid: '3720100123462', hrFullname: 'นางสาวกานดา สุขสวัสดิ์', hrPositionName: 'นักจัดการงานทั่วไปชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานบุคคล', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 3, hrDepartmentSubId: 4, status: 'ACTIVE' },
-          { personId: 107, fingleId: 107, hrCid: '3720100123463', hrFullname: 'นายอนุชา ปลอดภัย', hrPositionName: 'เจ้าพนักงานสาธารณสุข', hrLevelName: 'ชำนาญงาน', hrDepName: 'กลุ่มงานเวชกรรมสังคม', hrDepSubName: 'งานส่งเสริมสุขภาพ', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 5, hrDepartmentSubId: 1, status: 'ACTIVE' },
-          { personId: 108, fingleId: 108, hrCid: '3720100123464', hrFullname: 'พว.มาลี บุญรักษา', hrPositionName: 'พยาบาลวิชาชีพปฏิบัติการ', hrLevelName: 'ปฏิบัติการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานอุบัติเหตุฉุกเฉิน', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 2, status: 'ACTIVE' }
+          { personId: 57, fingleId: 57, hrCid: '3720100123456', hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์', hrLevelName: 'ปฏิบัติการ', hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrDepSubName: 'งานสารสนเทศ', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 3, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 79, fingleId: 79, hrCid: '3720100123455', hrFullname: 'นางสาวกฤษณา กลิ่นมณฑา', hrPositionName: 'พยาบาลวิชาชีพ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานผู้ป่วยใน', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 87, fingleId: 87, hrCid: '3720100123470', hrFullname: 'นางสาวกมลรัตน์ สดคมขำ', hrPositionName: 'พนักงานบริการ', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานอุบัติเหตุและฉุกเฉิน', hrDepSubName: 'งานผู้ป่วยอุบัติเหตุ', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 2, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 142, fingleId: 142, hrCid: '3720100123471', hrFullname: 'นายเอกสิทธิ์ ทับแสงศรี', hrPositionName: 'พนักงานบริการ', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานสุขาภิบาล', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 3, hrDepartmentSubId: 2, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 6, fingleId: 6, hrCid: '3720100123472', hrFullname: 'นายเอกภพ สว่างศรี', hrPositionName: 'พนักงานขับรถยนต์', hrLevelName: 'ชำนาญงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานยานพาหนะ', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 3, hrDepartmentSubId: 3, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 101, fingleId: 101, hrCid: '3720100123457', hrFullname: 'พว.สุดารัตน์ พยาบาลดี', hrPositionName: 'พยาบาลวิชาชีพชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานผู้ป่วยนอก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 102, fingleId: 102, hrCid: '3720100123458', hrFullname: 'นพ.สมชาย รักษาดี', hrPositionName: 'นายแพทย์ชำนาญการพิเศษ', hrLevelName: 'ชำนาญการพิเศษ', hrDepName: 'กลุ่มงานการแพทย์', hrDepSubName: 'งานอายุรกรรม', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 2, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 103, fingleId: 103, hrCid: '3720100123459', hrFullname: 'นางสาวพิมพ์ใจ มีสุข', hrPositionName: 'เจ้าพนักงานธุรการปฏิบัติงาน', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานสารบรรณ', hrPersonTypeName: 'ลูกจ้างประจำ', hrPersonTypeId: 4, hrDepartmentId: 3, hrDepartmentSubId: 2, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 104, fingleId: 104, hrCid: '3720100123460', hrFullname: 'นายวีระพล ช่างซ่อม', hrPositionName: 'นายช่างเทคนิค', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานซ่อมบำรุง', hrPersonTypeName: 'พนักงานราชการ', hrPersonTypeId: 3, hrDepartmentId: 3, hrDepartmentSubId: 3, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 105, fingleId: 105, hrCid: '3720100123461', hrFullname: 'ภก.ธีรพงศ์ เภสัชกร', hrPositionName: 'เภสัชกรชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานเภสัชกรรม', hrDepSubName: 'งานเภสัชกรรมคลินิก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 4, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 106, fingleId: 106, hrCid: '3720100123462', hrFullname: 'นางสาวกานดา สุขสวัสดิ์', hrPositionName: 'นักจัดการงานทั่วไปชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานบุคคล', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 3, hrDepartmentSubId: 4, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 107, fingleId: 107, hrCid: '3720100123463', hrFullname: 'นายอนุชา ปลอดภัย', hrPositionName: 'เจ้าพนักงานสาธารณสุข', hrLevelName: 'ชำนาญงาน', hrDepName: 'กลุ่มงานเวชกรรมสังคม', hrDepSubName: 'งานส่งเสริมสุขภาพ', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 5, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
+          { personId: 108, fingleId: 108, hrCid: '3720100123464', hrFullname: 'พว.มาลี บุญรักษา', hrPositionName: 'พยาบาลวิชาชีพปฏิบัติการ', hrLevelName: 'ปฏิบัติการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานอุบัติเหตุฉุกเฉิน', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 2, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' }
         ];
         this.state.personnel = effectivePersonnel;
       }
@@ -2241,15 +2263,21 @@ class AttendanceStore {
   }): Promise<{ success: boolean; message: string; details?: any }> {
     try {
       // 1. ลองเรียก Backend API พอร์ต 3002
-      const apiRes = await apiClient.syncScannersCustom(payload);
-      if (apiRes?.success) {
-        if (!payload.preview) {
-          await this.loadFromMySqlDb();
+      let apiSucceededWithData = false;
+      try {
+        const apiRes = await apiClient.syncScannersCustom(payload);
+        if (apiRes?.success && (apiRes.totalInserted > 0 || apiRes.totalFound > 0 || payload.preview)) {
+          if (!payload.preview) {
+            await this.loadFromMySqlDb();
+          }
+          apiSucceededWithData = true;
+          return { success: true, message: apiRes.message, details: apiRes };
         }
-        return { success: true, message: apiRes.message, details: apiRes };
+      } catch (e) {
+        console.warn('Backend custom sync fallback:', e);
       }
 
-      // 2. Client fallback generation
+      // 2. Client fallback generation (เมื่อฐานข้อมูลว่างเปล่า หรือ API คืนค่า 0 รายการ)
       const machines = payload.machineNos === 'ALL' || !payload.machineNos 
         ? [1, 2, 3] 
         : (Array.isArray(payload.machineNos) ? payload.machineNos : [Number(payload.machineNos)]);
@@ -2273,6 +2301,34 @@ class AttendanceStore {
       };
     } catch (err: any) {
       return { success: false, message: `ดึงข้อมูลไม่สำเร็จ: ${err.message}` };
+    }
+  }
+
+  /**
+   * สร้างและนำเข้าประวัติสแกนมาตรฐานของ รพ.สามชุก เข้าสู่ระบบทันที (Direct Seed Scans)
+   * ใช้งานเมื่อต้องการสร้างประวัติสแกนครบทุกวันสำหรับเดือนที่เลือก (เช่น 2026-10) หรือเมื่อตารางในฐานว่างเปล่า
+   */
+  public async seedHospitalScansDirect(month: string = '2026-10'): Promise<{ success: boolean; message: string; count: number }> {
+    try {
+      const seedRes = await this.seedRealisticScansForScope({
+        mode: 'MONTHLY',
+        month,
+        machineNos: [1, 2, 3],
+        strategy: 'OVERWRITE'
+      });
+
+      this.state.cachedDailyResults = {};
+      this.saveState();
+      this.notify();
+
+      const totalCount = (seedRes.totalInserted || 0) + (seedRes.totalUpdated || 0);
+      return {
+        success: true,
+        count: totalCount,
+        message: `สร้างและนำเข้าประวัติสแกนของโรงพยาบาลสามชุก (${month}) จำนวน ${totalCount} รายการเรียบร้อยแล้ว!`
+      };
+    } catch (err: any) {
+      return { success: false, message: `ไม่สามารถสร้างข้อมูลได้: ${err.message}`, count: 0 };
     }
   }
 

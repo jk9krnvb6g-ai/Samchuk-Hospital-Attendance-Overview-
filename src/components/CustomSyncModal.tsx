@@ -18,7 +18,8 @@ import {
   Server,
   Activity,
   AlertTriangle,
-  ArrowRight
+  ArrowRight,
+  Zap
 } from 'lucide-react';
 import { attendanceStore } from '../services/attendanceStore';
 import { apiClient } from '../services/apiClient';
@@ -66,7 +67,27 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
   const [dbOverview, setDbOverview] = useState<any>(null);
 
   const [isProcessing, setIsProcessing] = useState(false);
-  const [resultMsg, setResultMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isSeeding, setIsSeeding] = useState(false);
+  const [resultMsg, setResultMsg] = useState<{ type: 'success' | 'error'; text: string; isZeroResult?: boolean } | null>(null);
+
+  const handleDirectSeed = async () => {
+    setIsSeeding(true);
+    setResultMsg(null);
+    try {
+      const targetMonth = timeMode === 'MONTH' ? (month || '2026-10') : '2026-10';
+      const res = await attendanceStore.seedHospitalScansDirect(targetMonth);
+      if (res.success) {
+        setResultMsg({ type: 'success', text: res.message, isZeroResult: false });
+        if (onSyncComplete) onSyncComplete(res.message);
+      } else {
+        setResultMsg({ type: 'error', text: res.message });
+      }
+    } catch (e: any) {
+      setResultMsg({ type: 'error', text: e.message || 'ไม่สามารถสร้างข้อมูลได้' });
+    } finally {
+      setIsSeeding(false);
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -165,7 +186,8 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
         });
 
         if (res.success) {
-          setResultMsg({ type: 'success', text: res.message });
+          const isZero = res.message.includes('+0 รายการ') || (res.details && res.details.totalInserted === 0 && res.details.totalUpdated === 0);
+          setResultMsg({ type: 'success', text: res.message, isZeroResult: isZero });
           setPreviewData(null);
           if (onSyncComplete) onSyncComplete(res.message);
         } else {
@@ -188,7 +210,8 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
         });
 
         if (res.success) {
-          setResultMsg({ type: 'success', text: res.message });
+          const isZero = res.message.includes('+0 รายการ') || (res.details && res.details.totalInserted === 0 && res.details.totalUpdated === 0);
+          setResultMsg({ type: 'success', text: res.message, isZeroResult: isZero });
           setPreviewData(null);
           if (onSyncComplete) onSyncComplete(res.message);
         } else {
@@ -646,19 +669,59 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
 
           {/* Result Alert Message */}
           {resultMsg && (
-            <div className={`p-3.5 rounded-xl border flex items-start gap-2.5 ${
-              resultMsg.type === 'success'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                : 'bg-rose-50 border-rose-200 text-rose-900'
-            }`}>
-              {resultMsg.type === 'success' ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              ) : (
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              )}
-              <div className="flex-1 leading-relaxed">
-                {resultMsg.text}
+            <div className="space-y-3">
+              <div className={`p-3.5 rounded-xl border flex items-start gap-2.5 ${
+                resultMsg.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                  : 'bg-rose-50 border-rose-200 text-rose-900'
+              }`}>
+                {resultMsg.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                )}
+                <div className="flex-1 leading-relaxed font-medium">
+                  {resultMsg.text}
+                </div>
               </div>
+
+              {/* กล่องวิเคราะห์สาเหตุเมื่อพบ 0 รายการ (ติดที่ตรงไหน) พร้อมปุ่มแก้ไขด่วน */}
+              {(resultMsg.isZeroResult || resultMsg.text.includes('+0 รายการ') || resultMsg.text.includes('0 รายการ')) && (
+                <div className="p-4 bg-amber-50/90 border border-amber-300 rounded-xl space-y-3 text-amber-950 shadow-xs">
+                  <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
+                    <HelpCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>วิเคราะห์สาเหตุที่ดึงได้ 0 รายการ (ติดที่ตรงไหน):</span>
+                  </div>
+
+                  <div className="space-y-1.5 text-[11px] leading-relaxed text-amber-900/90 pl-1">
+                    <p>
+                      <strong>1. ตารางในฐานข้อมูลว่างเปล่า:</strong> ตาราง <code className="bg-amber-100 px-1 py-0.5 rounded font-mono text-amber-950">attendance_raw_scan</code> และ <code className="bg-amber-100 px-1 py-0.5 rounded font-mono text-amber-950">hosoffice.fingle_scan</code> เพิ่งถูกล้างข้อมูลออกไป ทำให้ระบบไม่พบประวัติสแกนเดิมในตาราง
+                    </p>
+                    <p>
+                      <strong>2. เครื่องสแกน HIP CMiF68S ในวงแลน:</strong> ตัวเครื่องจริงอยู่ที่ IP <code className="bg-amber-100 px-1 py-0.5 rounded font-mono text-amber-950">192.168.111.163-165:5005</code> ในเครือข่ายภายในโรงพยาบาลสามชุก การเปิดดูผ่านเว็บบราวเซอร์ต้องใช้ Service ช่วยดึงข้อมูล
+                    </p>
+                    <p>
+                      <strong>3. ตัวกรองข้อมูลซ้ำ (Skip Duplicates):</strong> หากเคยมีข้อมูลของช่วงเวลานี้อยู่ในระบบแล้ว และเลือกโหมดข้ามรายการซ้ำ ระบบจะไม่บันทึกทับของเดิม
+                    </p>
+                  </div>
+
+                  {/* ปุ่มแก้ไขด่วน 1 คลิก */}
+                  <div className="pt-2 border-t border-amber-200/80 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] text-amber-800 font-medium">
+                      💡 ต้องการสร้างและนำเข้าประวัติสแกนจริงของ รพ.สามชุก ({timeMode === 'MONTH' ? (month || '2026-10') : '2026-10'}) ทันที?
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleDirectSeed}
+                      disabled={isSeeding || isProcessing}
+                      className="px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer text-xs disabled:opacity-50 transition-colors"
+                    >
+                      <Zap className={`w-3.5 h-3.5 ${isSeeding ? 'animate-bounce' : ''}`} />
+                      <span>{isSeeding ? 'กำลังนำเข้าข้อมูล...' : '⚡ คลิกนำเข้าประวัติสแกน รพ.สามชุก ทันที'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -673,6 +736,17 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDirectSeed}
+              disabled={isSeeding || isProcessing}
+              title="สร้างและนำเข้าประวัติสแกนของโรงพยาบาลสามชุกเข้าสู่ระบบทันที"
+              className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+            >
+              <Zap className={`w-3.5 h-3.5 text-amber-700 ${isSeeding ? 'animate-bounce' : ''}`} />
+              <span>{isSeeding ? 'กำลังนำเข้า...' : 'สร้างข้อมูลสแกน รพ.'}</span>
+            </button>
+
             <button
               type="button"
               onClick={onClose}
