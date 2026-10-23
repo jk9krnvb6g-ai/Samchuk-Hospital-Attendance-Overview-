@@ -15,7 +15,8 @@ import {
   ShieldCheck,
   Building2,
   FileText,
-  Zap
+  Zap,
+  Fingerprint
 } from 'lucide-react';
 import { DailyPersonReport, ReportSummaryItem, attendanceStore } from '../services/attendanceStore';
 import { RawScan } from '../types/attendance';
@@ -537,19 +538,29 @@ export const PersonAttendanceDrillDownModal: React.FC<PersonAttendanceDrillDownM
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                     <tr>
-                      <th className="py-2.5 px-3">วัน-เวลาสแกน</th>
+                      <th className="py-2.5 px-3 bg-teal-50/80 text-teal-950 border-r border-teal-100">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <Fingerprint className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                          <span>เวลาสแกนนิ้วจริง (SCAN TIME)</span>
+                        </div>
+                      </th>
                       <th className="py-2.5 px-3">เครื่องสแกน</th>
                       <th className="py-2.5 px-3 text-center">โหมดเข้า/ออก</th>
                       <th className="py-2.5 px-3 text-center">วิธีตรวจสอบ</th>
                       <th className="py-2.5 px-3 text-center">สถานะ HosOffice</th>
-                      <th className="py-2.5 px-3 text-right">เวลาที่ดึงเข้าระบบ</th>
+                      <th className="py-2.5 px-3 text-right text-slate-500 font-normal">
+                        เวลาที่ดึงเข้าระบบ (Sync Time)
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {personRawScans.map((scan) => (
                       <tr key={scan.id} className="hover:bg-slate-50">
-                        <td className="py-2 px-3 font-mono font-bold text-slate-800">
-                          {scan.scanDateTime}
+                        <td className="py-2.5 px-3 font-mono font-bold bg-teal-50/30 border-r border-teal-100/50 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <Fingerprint className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                            <span className="text-slate-950 font-extrabold text-[12px]">{scan.scanDateTime}</span>
+                          </div>
                         </td>
                         <td className="py-2 px-3 text-slate-700">
                           เครื่อง {scan.machineNo} ({scan.deviceIp})
@@ -579,8 +590,10 @@ export const PersonAttendanceDrillDownModal: React.FC<PersonAttendanceDrillDownM
                             {scan.pushStatus}
                           </span>
                         </td>
-                        <td className="py-2 px-3 text-right font-mono text-slate-400 text-[11px]">
-                          {scan.receivedAt || '-'}
+                        <td className="py-2 px-3 text-right font-mono text-[11px] whitespace-nowrap">
+                          <span className="inline-block bg-slate-100 text-slate-500 px-2 py-0.5 rounded border border-slate-200 text-[10px]" title={`เวลาที่ระบบดึงข้อมูลเข้าฐาน: ${scan.receivedAt || '-'}`}>
+                            ดึงเข้าฐาน {scan.receivedAt ? scan.receivedAt.split(' ')[1] || scan.receivedAt : '-'}
+                          </span>
                         </td>
                       </tr>
                     ))}

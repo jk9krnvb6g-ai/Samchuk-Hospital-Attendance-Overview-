@@ -249,14 +249,19 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
               <tr>
-                <th className="py-2.5 px-3">วัน-เวลาสแกน (SCAN_DATE_TIME)</th>
+                <th className="py-2.5 px-3 bg-teal-50/90 text-teal-950 border-r border-teal-100 whitespace-nowrap">
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <Fingerprint className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                    <span>เวลาสแกนนิ้วจริง (SCAN TIME)</span>
+                  </div>
+                </th>
                 <th className="py-2.5 px-3">เครื่อง</th>
                 <th className="py-2.5 px-3">FINGLE_ID</th>
                 <th className="py-2.5 px-3">ชื่อ - นามสกุล (HR Snapshot)</th>
                 <th className="py-2.5 px-3">ตำแหน่ง / หน่วยงาน</th>
                 <th className="py-2.5 px-3">โหมด</th>
                 <th className="py-2.5 px-3">Map HR</th>
-                <th className="py-2.5 px-3">เวลาที่ดึงเข้าระบบ</th>
+                <th className="py-2.5 px-3 text-slate-500 font-normal whitespace-nowrap">เวลาที่ดึงเข้าระบบ (Sync)</th>
                 <th className="py-2.5 px-3 text-right">สถานะ hosoffice</th>
               </tr>
             </thead>
@@ -270,8 +275,11 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
               ) : (
                 filteredScans.map((scan, scanIdx) => (
                   <tr key={`${scan.id}-${scanIdx}`} className="hover:bg-slate-50">
-                    <td className="py-2.5 px-3 font-mono font-semibold text-slate-800 whitespace-nowrap">
-                      {scan.scanDateTime}
+                    <td className="py-2.5 px-3 font-mono bg-teal-50/30 border-r border-teal-100/50 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <Fingerprint className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                        <span className="font-extrabold text-slate-950 text-[12px]">{scan.scanDateTime}</span>
+                      </div>
                     </td>
                     <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap">
                       เครื่อง {scan.machineNo}
@@ -307,8 +315,10 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
                         </div>
                       )}
                     </td>
-                    <td className="py-2.5 px-3 font-mono text-[11px] text-slate-400 whitespace-nowrap">
-                      {scan.receivedAt.split(' ')[1]}
+                    <td className="py-2.5 px-3 font-mono whitespace-nowrap">
+                      <span className="inline-block bg-slate-100 text-slate-500 px-2 py-0.5 rounded border border-slate-200 text-[10px]" title={`เวลาที่ระบบดึงข้อมูลเข้าฐาน: ${scan.receivedAt || '-'}`}>
+                        ดึงเข้าฐาน {scan.receivedAt ? scan.receivedAt.split(' ')[1] || scan.receivedAt : '-'}
+                      </span>
                     </td>
                     <td className="py-2.5 px-3 text-right">
                       <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold tracking-wider ${

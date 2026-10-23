@@ -409,12 +409,16 @@ async function ensureTablesExist() {
         push_batch_id BIGINT NULL,
         push_error TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
         received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uq_scan (fingle_id, scan_date_time),
+        UNIQUE KEY uq_scan (machine_no, fingle_id, scan_date_time),
         KEY idx_push_status (push_status),
         KEY idx_scan_date (scan_date_time),
         KEY idx_person (person_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
+
+    try {
+      await pool.query(`ALTER TABLE attendance_raw_scan ADD UNIQUE KEY uq_scan (machine_no, fingle_id, scan_date_time)`);
+    } catch (e) {}
 
     // 2.2.1 ตารางบุคลากรของ samchuk_attendance (เก็บรายชื่อที่ซิงค์มาจาก hosoffice.hr_person)
     await pool.query(`
@@ -1690,6 +1694,12 @@ app.post('/api/raw-scans', async (req, res) => {
       INSERT INTO attendance_raw_scan 
       (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        device_ip = VALUES(device_ip),
+        hr_fullname = VALUES(hr_fullname),
+        hr_position_name = VALUES(hr_position_name),
+        hr_dep_name = VALUES(hr_dep_name),
+        hr_mapped = VALUES(hr_mapped)
     `, [
       s.machineNo || 1,
       s.deviceIp || '192.168.111.163',
@@ -1709,7 +1719,7 @@ app.post('/api/raw-scans', async (req, res) => {
     res.json({
       success: true,
       id: result.insertId,
-      message: `บันทึกข้อมูลสแกน ID ${result.insertId} (Fingle ${s.fingleId || 101}) ลง MySQL เรียบร้อยแล้ว`
+      message: `บันทึกข้อมูลสแกน ID ${result.insertId} (Fingle ${s.fingleId || 101}) ลง MySQL เรียบร้อยแล้ว (ไม่ซ้ำซ้อน)`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1735,8 +1745,17 @@ app.post('/api/raw-scans/batch', async (req, res) => {
           (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, hr_mapped, push_status)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE 
+            device_ip = VALUES(device_ip),
+            verify_mode = VALUES(verify_mode),
+            in_out_mode = VALUES(in_out_mode),
+            person_id = VALUES(person_id),
             hr_fullname = VALUES(hr_fullname),
-            hr_dep_name = VALUES(hr_dep_name)
+            hr_position_name = VALUES(hr_position_name),
+            hr_leavel_name = VALUES(hr_leavel_name),
+            hr_dep_name = VALUES(hr_dep_name),
+            hr_dep_sub_name = VALUES(hr_dep_sub_name),
+            hr_person_type_name = VALUES(hr_person_type_name),
+            hr_mapped = VALUES(hr_mapped)
         `, [
           s.machineNo || s.machine_no || 1,
           s.deviceIp || s.device_ip || '192.168.111.163',

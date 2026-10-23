@@ -1246,9 +1246,10 @@ class AttendanceStore {
       }
 
       // 2. ดึงข้อมูลสแกนจาก MySQL attendance_raw_scan
-      const scansRes = await apiClient.getRawScansFromDb(500);
+      const scansRes = await apiClient.getRawScansFromDb(5000);
       if (scansRes.success && Array.isArray(scansRes.data)) {
-        this.state.rawScans = scansRes.data
+        const rawMap = new Map<string, RawScan>();
+        scansRes.data
           .filter((r: any) => {
             if ((r.inOutMode ?? r.in_out_mode ?? 0) === 1) return false;
             // คุณทวีสิทธิ์ (Fingle 57) ไม่ได้สแกนวันเสาร์-อาทิตย์ กรองสแกนจำลองเดิมออก
@@ -1263,32 +1264,41 @@ class AttendanceStore {
             // เจ้าหน้าที่ท่านอื่นที่ขึ้นเวรเสาร์-อาทิตย์ (เช่น พยาบาล, ER) สแกนจริงเข้ามา ให้คงไว้ตามปกติ
             return true;
           })
-          .map((r: any) => ({
-          id: r.id,
-          machineNo: r.machineNo || r.machine_no || 1,
-          deviceIp: r.deviceIp || r.device_ip || '',
-          fingleId: r.fingleId || r.fingle_id || 0,
-          scanDateTime: r.scanDateTime || (r.scan_date_time ? String(r.scan_date_time).replace('T', ' ').substring(0, 19) : ''),
-          verifyMode: r.verifyMode ?? r.verify_mode ?? 1,
-          inOutMode: r.inOutMode ?? r.in_out_mode ?? 0,
-          personId: r.personId ?? r.person_id,
-          hrFullname: r.hrFullname || r.hr_fullname || '',
-          hrPositionName: r.hrPositionName || r.hr_position_name || '',
-          hrLeavelName: r.hrLeavelName || r.hr_leavel_name || '',
-          hrDepName: r.hrDepName || r.hr_dep_name || '',
-          hrDepSubName: r.hrDepSubName || r.hr_dep_sub_name || '',
-          hrPersonTypeName: r.hrPersonTypeName || r.hr_person_type_name || '',
-          hrPersonTypeId: r.hrPersonTypeId || r.hr_person_type_id,
-          hrDepartmentId: r.hrDepartmentId || r.hr_department_id,
-          hrDepartmentSubId: r.hrDepartmentSubId || r.hr_department_sub_id,
-          hrMapped: Boolean(r.hrMapped ?? r.hr_mapped ?? 1),
-          pushStatus: r.pushStatus || r.push_status || 'PENDING',
-          pushedAt: r.pushedAt || r.pushed_at,
-          pushedBy: r.pushedBy || r.pushed_by,
-          pushBatchId: r.pushBatchId || r.push_batch_id,
-          pushError: r.pushError || r.push_error,
-          receivedAt: r.receivedAt || r.received_at || formatDateTime()
-        }));
+          .forEach((r: any) => {
+            const scanObj: RawScan = {
+              id: r.id,
+              machineNo: r.machineNo || r.machine_no || 1,
+              deviceIp: r.deviceIp || r.device_ip || '',
+              fingleId: r.fingleId || r.fingle_id || 0,
+              scanDateTime: r.scanDateTime || (r.scan_date_time ? String(r.scan_date_time).replace('T', ' ').substring(0, 19) : ''),
+              verifyMode: r.verifyMode ?? r.verify_mode ?? 1,
+              inOutMode: r.inOutMode ?? r.in_out_mode ?? 0,
+              personId: r.personId ?? r.person_id,
+              hrFullname: r.hrFullname || r.hr_fullname || '',
+              hrPositionName: r.hrPositionName || r.hr_position_name || '',
+              hrLeavelName: r.hrLeavelName || r.hr_leavel_name || '',
+              hrDepName: r.hrDepName || r.hr_dep_name || '',
+              hrDepSubName: r.hrDepSubName || r.hr_dep_sub_name || '',
+              hrPersonTypeName: r.hrPersonTypeName || r.hr_person_type_name || '',
+              hrPersonTypeId: r.hrPersonTypeId || r.hr_person_type_id,
+              hrDepartmentId: r.hrDepartmentId || r.hr_department_id,
+              hrDepartmentSubId: r.hrDepartmentSubId || r.hr_department_sub_id,
+              hrMapped: Boolean(r.hrMapped ?? r.hr_mapped ?? 1),
+              pushStatus: r.pushStatus || r.push_status || 'PENDING',
+              pushedAt: r.pushedAt || r.pushed_at,
+              pushedBy: r.pushedBy || r.pushed_by,
+              pushBatchId: r.pushBatchId || r.push_batch_id,
+              pushError: r.pushError || r.push_error,
+              receivedAt: r.receivedAt || r.received_at || formatDateTime()
+            };
+            // Strict Unique Key: machineNo + fingleId + scanDateTime (ทับข้อมูลเดิม ไม่ซ้ำซ้อน)
+            const uniqueKey = `${scanObj.machineNo}_${scanObj.fingleId}_${scanObj.scanDateTime}`;
+            rawMap.set(uniqueKey, scanObj);
+          });
+
+        this.state.rawScans = Array.from(rawMap.values()).sort(
+          (a, b) => (b.scanDateTime || '').localeCompare(a.scanDateTime || '')
+        );
         scansCount = this.state.rawScans.length;
       }
       this.state.cachedDailyResults = {};
@@ -2253,17 +2263,17 @@ class AttendanceStore {
         }
       }
 
-      // ตรวจสอบความซ้ำกับรายการที่มีอยู่แล้วในระบบ
+      // ตรวจสอบความซ้ำกับรายการที่มีอยู่แล้วในระบบ (Unique Key: machineNo + fingleId + scanDateTime)
       const existingMap = new Map<string, RawScan>();
       for (const s of this.state.rawScans) {
-        existingMap.set(`${s.fingleId}_${s.scanDateTime}`, s);
+        existingMap.set(`${s.machineNo || 1}_${s.fingleId}_${s.scanDateTime}`, s);
       }
 
       const newItems: RawScan[] = [];
       const duplicateItems: RawScan[] = [];
 
       for (const s of newScans) {
-        const key = `${s.fingleId}_${s.scanDateTime}`;
+        const key = `${s.machineNo || 1}_${s.fingleId}_${s.scanDateTime}`;
         if (existingMap.has(key)) {
           duplicateItems.push(s);
         } else {
@@ -2292,9 +2302,9 @@ class AttendanceStore {
       let skippedCount = duplicateItems.length;
 
       if (strategy === 'OVERWRITE') {
-        // อัปเดตทับข้อมูลเดิม
+        // อัปเดตทับข้อมูลเดิม (Strict Overwrite)
         for (const s of newScans) {
-          const key = `${s.fingleId}_${s.scanDateTime}`;
+          const key = `${s.machineNo || 1}_${s.fingleId}_${s.scanDateTime}`;
           if (existingMap.has(key)) updatedCount++;
           else insertedCount++;
           existingMap.set(key, s);
@@ -2303,7 +2313,7 @@ class AttendanceStore {
       } else {
         // SKIP_DUPLICATES: เพิ่มเฉพาะข้อมูลใหม่ ไม่ทับข้อมูลเดิม
         for (const s of newItems) {
-          existingMap.set(`${s.fingleId}_${s.scanDateTime}`, s);
+          existingMap.set(`${s.machineNo || 1}_${s.fingleId}_${s.scanDateTime}`, s);
           insertedCount++;
         }
       }
