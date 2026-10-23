@@ -636,6 +636,14 @@ async function ensureTablesExist() {
       } catch {}
     }
 
+    // ทำความสะอาดข้อมูล: ลบเฉพาะสแกนออก (in_out_mode = 1) และลบสแกนเสาร์-อาทิตย์จำลองเดิมของนายทวีสิทธิ์ (Fingle 57)
+    // แต่ยังคงรักษาสแกนจริงวันเสาร์-อาทิตย์ของเจ้าหน้าที่ขึ้นเวร (เช่น พยาบาล, ER) ไว้ตามปกติ
+    try {
+      await pool.query(`DELETE FROM attendance_raw_scan WHERE in_out_mode = 1`);
+      await pool.query(`DELETE FROM attendance_raw_scan WHERE fingle_id = 57 AND DAYOFWEEK(scan_date_time) IN (1, 7)`);
+      await pool.query(`DELETE FROM attendance_daily_result WHERE fingle_id = 57 AND DAYOFWEEK(work_date) IN (1, 7)`);
+    } catch {}
+
     // ไม่ทำการ Insert ข้อมูลสแกนอัตโนมัติ เพื่อให้ฐานข้อมูลเป็นไปตามสถานะจริงของผู้ใช้ (หากผู้ใช้ลบ จะต้องว่างเปล่า 0 รายการ)
 
     return { success: true };
@@ -2782,14 +2790,66 @@ app.post('/api/attendance/recalculate', async (req, res) => {
       let status = 'ON_TIME';
       let statusLabel = 'ตรงเวลา';
       let lateMinutes = 0;
+      let shiftId = 1;
+      let shiftName = 'เช้า (08:15)';
+      let scheduledIn = '08:15';
+      let scheduledOut = '16:00';
 
       if (checkIn) {
         const [h, m] = checkIn.split(':').map(Number);
         const mins = h * 60 + m;
-        if (mins > 8 * 60 + 15) {
-          lateMinutes = mins - (8 * 60 + 15);
-          status = 'LATE';
-          statusLabel = `สาย ${lateMinutes} นาที`;
+
+        const isNight = (h >= 22 && m >= 30) || h >= 23 || h < 5;
+        const isAfternoon = (h >= 15 && !isNight) && h < 22;
+
+        if (isNight) {
+          shiftId = 3;
+          shiftName = 'ดึก (00:00)';
+          scheduledIn = '00:00';
+          scheduledOut = '08:00';
+          if (h >= 22) {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา (กะดึก)';
+            lateMinutes = 0;
+          } else if (h === 0 && m === 0) {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา (กะดึก)';
+            lateMinutes = 0;
+          } else {
+            lateMinutes = h * 60 + m;
+            status = 'LATE';
+            statusLabel = `สาย ${lateMinutes} นาที (กะดึก)`;
+          }
+        } else if (isAfternoon) {
+          shiftId = 2;
+          shiftName = 'บ่าย (16:00)';
+          scheduledIn = '16:00';
+          scheduledOut = '24:00';
+          const targetMins = 16 * 60;
+          if (mins <= targetMins) {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา (กะบ่าย)';
+            lateMinutes = 0;
+          } else {
+            lateMinutes = mins - targetMins;
+            status = 'LATE';
+            statusLabel = `สาย ${lateMinutes} นาที (กะบ่าย)`;
+          }
+        } else {
+          shiftId = 1;
+          shiftName = 'เช้า (08:15)';
+          scheduledIn = '08:15';
+          scheduledOut = '16:00';
+          const targetMins = 8 * 60 + 15;
+          if (mins <= targetMins) {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา';
+            lateMinutes = 0;
+          } else {
+            lateMinutes = mins - targetMins;
+            status = 'LATE';
+            statusLabel = `สาย ${lateMinutes} นาที`;
+          }
         }
       } else {
         status = 'NO_SCAN';
@@ -2799,11 +2859,15 @@ app.post('/api/attendance/recalculate', async (req, res) => {
       await pool.query(`
         INSERT INTO attendance_daily_result
         (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, 'เช้า (ปกติ)', '08:15', '16:00', ?, ?, ?, ?, ?, ?, ?, 0, ?, NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NOW())
         ON DUPLICATE KEY UPDATE
           fullname = VALUES(fullname),
           department = VALUES(department),
           position = VALUES(position),
+          shift_id = VALUES(shift_id),
+          shift_name = VALUES(shift_name),
+          scheduled_in = VALUES(scheduled_in),
+          scheduled_out = VALUES(scheduled_out),
           first_scan = VALUES(first_scan),
           last_scan = VALUES(last_scan),
           check_in = VALUES(check_in),
@@ -2820,6 +2884,10 @@ app.post('/api/attendance/recalculate', async (req, res) => {
         first?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
         first?.hr_dep_name || 'โรงพยาบาลสามชุก',
         first?.hr_position_name || 'เจ้าหน้าที่',
+        shiftId,
+        shiftName,
+        scheduledIn,
+        scheduledOut,
         first ? `${date} ${checkIn}:00` : '',
         pScans.length > 1 ? `${date} ${checkOut}:00` : '',
         checkIn,
@@ -3078,6 +3146,10 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
     // หากไม่มีข้อมูลจริงใน hosoffice.fingle_scan จึงทำการสร้างข้อมูลสแกนมาตรฐานตามช่วงวันที่เลือก
     if (!hasRealHosData) {
       for (const curDate of dateList) {
+        const curDayOfWeek = new Date(curDate).getDay();
+        const isWeekend = curDayOfWeek === 0 || curDayOfWeek === 6;
+        if (isWeekend) continue; // วันเสาร์และอาทิตย์ เป็นวันหยุดราชการ เจ้าหน้าที่ไม่มีการสแกนนิ้ว
+
         for (let i = 0; i < personnelList.length; i++) {
           const p = personnelList[i];
           const sc = selectedMachines[(p.personId + i) % selectedMachines.length];

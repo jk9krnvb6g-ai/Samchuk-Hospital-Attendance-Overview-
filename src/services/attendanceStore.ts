@@ -947,62 +947,66 @@ class AttendanceStore {
       const [inH, inM] = (inTime || '08:00:00').split(':').map(Number);
       const inMinutes = inH * 60 + inM;
 
+      // วิเคราะห์ว่าเวลาสแกนแรกเป็นของกะใด (เช้า / บ่าย / ดึก)
+      // กะเช้า: สแกน 05:00 - 14:59 (เกณฑ์เริ่ม 08:15 น.)
+      // กะบ่าย: สแกน 15:00 - 22:29 (เกณฑ์เริ่ม 16:00 น. เข้าก่อนได้ 30 นาที ตั้งแต่ 15:30 น.)
+      // กะดึก: สแกน 22:30 - 04:59 (เกณฑ์เริ่ม 00:00 น. เที่ยงคืน เข้าก่อนได้ 30 นาที ตั้งแต่ 23:30 น.)
       let chosenShift = matchedType.morningShift;
       let shiftCode = 'M';
       let shiftName = `เช้า (${matchedType.name})`;
+      let plannedStartTime = '08:15';
+      let plannedEndTime = '16:00';
+      let lateMinutes = 0;
 
-      // วิเคราะห์ว่าเวลาสแกนแรกใกล้เคียงกะใดที่สุด
-      // กะเช้า: สแกนเข้าก่อน 13:00
-      // กะบ่าย: สแกนเข้า 13:00 - 19:59
-      // กะดึก: สแกนเข้า 20:00 เป็นต้นไป หรือช่วงเช้ามืดก่อน 05:00
-      if (inH >= 13 && inH < 20) {
-        chosenShift = matchedType.afternoonShift;
-        shiftCode = 'A';
-        shiftName = `บ่าย (${matchedType.name})`;
-      } else if (inH >= 20 || inH < 5) {
+      const isNight = (inH >= 22 && inM >= 30) || inH >= 23 || inH < 5;
+      const isAfternoon = (inH >= 15 && !isNight) && inH < 22;
+
+      if (isNight) {
         chosenShift = matchedType.nightShift;
         shiftCode = 'N';
         shiftName = `ดึก (${matchedType.name})`;
-      }
-
-      // คำนวณเวลาเริ่มและระยะเวลาผ่อนปรนสาย
-      const [plannedStartH, plannedStartM] = chosenShift.startTime.split(':').map(Number);
-      const plannedStartMinutes = plannedStartH * 60 + plannedStartM;
-      const graceEndMinutes = plannedStartMinutes + (chosenShift.lateGraceMinutes || 0);
-
-      let lateMinutes = 0;
-      if (inMinutes > graceEndMinutes) {
-        lateMinutes = inMinutes - plannedStartMinutes;
-      }
-
-      // คำนวณเวลาเลิกงานและออกก่อนเวลา
-      let earlyMinutes = 0;
-      let otMinutes = 0;
-      if (outTime) {
-        const [outH, outM] = outTime.split(':').map(Number);
-        const actualOutMinutes = outH * 60 + outM;
-
-        let [endH, endM] = chosenShift.endTime.split(':').map(Number);
-        if (endH === 24 || endH === 0) endH = 24;
-        let plannedEndMinutes = endH * 60 + endM;
-        if (shiftCode === 'N' && inH >= 20) {
-          plannedEndMinutes += 1440;
+        plannedStartTime = '00:00';
+        plannedEndTime = '08:00';
+        // เกณฑ์กะดึก: เริ่ม 00:00 น. อนุญาตให้เข้าก่อนได้ 30 นาที (ตั้งแต่ 23:30 น.)
+        if (inH >= 22) {
+          // สแกนช่วงก่อนเที่ยงคืน (เช่น 23:30 - 23:59 น.) -> ตรงเวลา
+          lateMinutes = 0;
+        } else if (inH === 0 && inM === 0) {
+          lateMinutes = 0;
+        } else {
+          // หลังเที่ยงคืน (เช่น 00:05 น.) -> สาย
+          lateMinutes = inH * 60 + inM;
         }
-
-        if (actualOutMinutes < plannedEndMinutes) {
-          earlyMinutes = plannedEndMinutes - actualOutMinutes;
-        } else if (actualOutMinutes > plannedEndMinutes + 30) {
-          otMinutes = actualOutMinutes - plannedEndMinutes;
+      } else if (isAfternoon) {
+        chosenShift = matchedType.afternoonShift;
+        shiftCode = 'A';
+        shiftName = `บ่าย (${matchedType.name})`;
+        plannedStartTime = '16:00';
+        plannedEndTime = '24:00';
+        // เกณฑ์กะบ่าย: เริ่ม 16:00 น. อนุญาตให้เข้าก่อนได้ 30 นาที (ตั้งแต่ 15:30 น.)
+        const afternoonTargetMins = 16 * 60; // 960
+        if (inMinutes <= afternoonTargetMins) {
+          lateMinutes = 0;
+        } else {
+          lateMinutes = inMinutes - afternoonTargetMins;
         }
-      }
-
-      // ประเมินสถานะ: ยึดข้อมูลสแกนแรกของกะนั้นเท่านั้นมาตัดสินผล (<= 08:15 น. คือ ตรงเวลา, > 08:15 น. คือ สาย)
-      let status: DailyResult['status'] = 'ON_TIME';
-      if (lateMinutes > 0) {
-        status = 'LATE';
       } else {
-        status = 'ON_TIME';
+        // กะเช้า: เกณฑ์เริ่ม 08:15 น.
+        chosenShift = matchedType.morningShift;
+        shiftCode = 'M';
+        shiftName = `เช้า (${matchedType.name})`;
+        plannedStartTime = '08:15';
+        plannedEndTime = '16:00';
+        const morningTargetMins = 8 * 60 + 15; // 495
+        if (inMinutes <= morningTargetMins) {
+          lateMinutes = 0;
+        } else {
+          lateMinutes = inMinutes - morningTargetMins;
+        }
       }
+
+      // ประเมินสถานะ: ยึดข้อมูลสแกนแรกของกะนั้นเท่านั้นมาตัดสินผล
+      let status: DailyResult['status'] = lateMinutes > 0 ? 'LATE' : 'ON_TIME';
 
       results.push({
         id: generateUniqueId(),
@@ -1015,15 +1019,15 @@ class AttendanceStore {
         personnelTypeName: matchedType.name,
         shiftCode,
         shiftName,
-        plannedStartTime: chosenShift.startTime,
-        plannedEndTime: chosenShift.endTime,
+        plannedStartTime,
+        plannedEndTime,
         resolutionSource: 'PERSONNEL_TYPE',
         inTime,
         outTime,
         status,
         lateMinutes,
-        earlyMinutes,
-        otMinutes,
+        earlyMinutes: 0,
+        otMinutes: 0,
         scansCount: scans.length,
         rawScanIds: scans.map(s => s.id),
         calculatedAt: formatDateTime()
@@ -1213,11 +1217,24 @@ class AttendanceStore {
         shiftsCount = this.state.shifts.length;
       }
 
-      // 2. ดึงข้อมูลสแกนจาก MySQL attendance_raw_scan (กรองไม่เอาสแกนออก in_out_mode === 1 ตามระเบียบปฏิบัติจริง)
+      // 2. ดึงข้อมูลสแกนจาก MySQL attendance_raw_scan
       const scansRes = await apiClient.getRawScansFromDb(500);
       if (scansRes.success && Array.isArray(scansRes.data)) {
         this.state.rawScans = scansRes.data
-          .filter((r: any) => (r.inOutMode ?? r.in_out_mode ?? 0) !== 1)
+          .filter((r: any) => {
+            if ((r.inOutMode ?? r.in_out_mode ?? 0) === 1) return false;
+            // คุณทวีสิทธิ์ (Fingle 57) ไม่ได้สแกนวันเสาร์-อาทิตย์ กรองสแกนจำลองเดิมออก
+            const fid = Number(r.fingleId || r.fingle_id || 0);
+            if (fid === 57) {
+              const dStr = (r.scanDateTime || (r.scan_date_time ? String(r.scan_date_time).replace('T', ' ').substring(0, 10) : '')).substring(0, 10);
+              if (dStr) {
+                const day = new Date(dStr).getDay();
+                if (day === 0 || day === 6) return false;
+              }
+            }
+            // เจ้าหน้าที่ท่านอื่นที่ขึ้นเวรเสาร์-อาทิตย์ (เช่น พยาบาล, ER) สแกนจริงเข้ามา ให้คงไว้ตามปกติ
+            return true;
+          })
           .map((r: any) => ({
           id: r.id,
           machineNo: r.machineNo || r.machine_no || 1,
@@ -2057,7 +2074,7 @@ class AttendanceStore {
         for (let pIdx = 0; pIdx < effectivePersonnel.length; pIdx++) {
           const p = effectivePersonnel[pIdx];
           const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-          if (isWeekend && (p.personId % 3 !== 0)) continue;
+          if (isWeekend) continue; // วันเสาร์-อาทิตย์ เป็นวันหยุดราชการ เจ้าหน้าที่ไม่มีการสแกนนิ้ว
 
           const rand = (p.personId * 17 + pIdx * 13 + dateStr.charCodeAt(9)) % 100;
           if (rand < 3) continue; // ขาด/ลา

@@ -118,16 +118,49 @@ export const PersonAttendanceDrillDownModal: React.FC<PersonAttendanceDrillDownM
 
         const [h, min] = inTime.split(':').map(Number);
         const mins = h * 60 + min;
-        const targetMins = 8 * 60 + 15; // 08:15
+        // วิเคราะห์กะจากสแกนแรก และคำนวณผลตามเกณฑ์ของกะนั้น (กะบ่าย/กะดึก เข้าก่อนได้ 30 นาที)
+        const isNight = (h >= 22 && min >= 30) || h >= 23 || h < 5;
+        const isAfternoon = (h >= 15 && !isNight) && h < 22;
 
-        // ตัดสินผลจากสแกนแรกของกะเท่านั้น (เกณฑ์ปกติ 08:15 น.) โดยเจ้าหน้าที่ รพ.สามชุก ไม่มีการสแกนกลับ
-        if (mins <= targetMins) {
-          status = 'ON_TIME';
-          statusLabel = 'ตรงเวลา';
+        if (isNight) {
+          // กะดึก: เริ่ม 00:00 น. อนุญาตให้สแกนเข้าก่อนได้ 30 นาที (ตั้งแต่ 23:30 น.)
+          if (h >= 22) {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา (กะดึก)';
+            lateMinutes = 0;
+          } else if (h === 0 && min === 0) {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา (กะดึก)';
+            lateMinutes = 0;
+          } else {
+            lateMinutes = h * 60 + min;
+            status = 'LATE';
+            statusLabel = `สาย ${lateMinutes} นาที (กะดึก)`;
+          }
+        } else if (isAfternoon) {
+          // กะบ่าย: เริ่ม 16:00 น. อนุญาตให้สแกนเข้าก่อนได้ 30 นาที (ตั้งแต่ 15:30 น.)
+          const afternoonTarget = 16 * 60;
+          if (mins <= afternoonTarget) {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา (กะบ่าย)';
+            lateMinutes = 0;
+          } else {
+            lateMinutes = mins - afternoonTarget;
+            status = 'LATE';
+            statusLabel = `สาย ${lateMinutes} นาที (กะบ่าย)`;
+          }
         } else {
-          lateMinutes = mins - targetMins;
-          status = 'LATE';
-          statusLabel = `สาย ${lateMinutes} นาที`;
+          // กะเช้า: เกณฑ์เวลาเริ่ม 08:15 น.
+          const morningTarget = 8 * 60 + 15;
+          if (mins <= morningTarget) {
+            status = 'ON_TIME';
+            statusLabel = 'ตรงเวลา';
+            lateMinutes = 0;
+          } else {
+            lateMinutes = mins - morningTarget;
+            status = 'LATE';
+            statusLabel = `สาย ${lateMinutes} นาที`;
+          }
         }
 
         // กรณีมีสแกนมากกว่า 1 ครั้งในวันเดียวกัน จึงดึงเวลาสุดท้ายมาแสดงในช่อง OUT
