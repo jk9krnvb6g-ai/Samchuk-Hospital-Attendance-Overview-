@@ -3219,6 +3219,13 @@ function executeScannerReaderCli(params = {}) {
 
         if (error || finalExitCode !== 0) {
           console.error('[ScannerReader Error]', error ? error.message : `Process exited with code ${finalExitCode}`);
+          const combinedOutput = `${stdoutStr} ${stderrStr} ${error ? error.message : ''}`;
+          let userFriendlyMsg = `การทำงานของตัวอ่านล้มเหลว (Exit Code: ${finalExitCode}): ${error ? error.message : stderrStr.slice(-300)}`;
+
+          if (combinedOutput.includes('You must install .NET') || combinedOutput.includes('.NET location: Not found')) {
+            userFriendlyMsg = 'เครื่อง Server ยังไม่ได้ติดตั้ง .NET Runtime (x86) สำหรับรัน ScannerSyncCli.exe -> กรุณาติดตั้ง .NET Runtime (x86) บน Windows Server หรือเลือกดึงจาก "ตาราง HosOffice (fingle_scan)" เพื่อดึงเวลาสแกนได้ทันทีโดยไม่ต้องติดตั้ง .NET';
+          }
+
           return resolve({
             success: false,
             exePath,
@@ -3228,7 +3235,7 @@ function executeScannerReaderCli(params = {}) {
             error: error ? error.message : `กระบวนการอ่านเครื่องจบการทำงานด้วยรหัสข้อผิดพลาด ${finalExitCode}`,
             stdout: stdoutStr.slice(-2000),
             stderr: stderrStr.slice(-2000),
-            message: `การทำงานของตัวอ่านล้มเหลว (Exit Code: ${finalExitCode}): ${error ? error.message : stderrStr.slice(-300)}`
+            message: userFriendlyMsg
           });
         }
 
