@@ -100,6 +100,63 @@ class ApiClientService {
     this.setBaseUrl(DEFAULT_API_URL);
   }
 
+  private authToken: string | null = null;
+
+  public getAuthToken(): string | null {
+    if (!this.authToken && typeof window !== 'undefined') {
+      this.authToken = localStorage.getItem('samchuk_auth_token');
+    }
+    return this.authToken;
+  }
+
+  public setAuthToken(token: string | null) {
+    this.authToken = token;
+    if (typeof window !== 'undefined') {
+      if (token) localStorage.setItem('samchuk_auth_token', token);
+      else localStorage.removeItem('samchuk_auth_token');
+    }
+    this.notify();
+  }
+
+  public getAuthHeaders(extraHeaders: Record<string, string> = {}): Record<string, string> {
+    const headers: Record<string, string> = { ...extraHeaders };
+    const token = this.getAuthToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  public async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+    const customHeaders: Record<string, string> = (options.headers as Record<string, string>) || {};
+    const mergedHeaders = this.getAuthHeaders(customHeaders);
+    return fetch(url, { ...options, headers: mergedHeaders });
+  }
+
+  public async login(username: string, password: string): Promise<any> {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (data.success && data.token) {
+        this.setAuthToken(data.token);
+      }
+      return data;
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Login failed' };
+    }
+  }
+
+  public async logout(): Promise<void> {
+    try {
+      await this.fetchWithAuth(`${this.customBaseUrl}/api/auth/logout`, { method: 'POST' });
+    } catch {}
+    this.setAuthToken(null);
+  }
+
   public subscribe(listener: () => void) {
     this.listeners.push(listener);
     return () => {

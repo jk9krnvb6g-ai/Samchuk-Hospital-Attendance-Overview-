@@ -52,33 +52,35 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.API_PORT || 3002;
 
-// ข้อ 3: จำกัด CORS เฉพาะ Origin ที่ได้รับอนุญาต (ปิด origin: '*')
+// ข้อ 3 & P0.4: จำกัด CORS เฉพาะ Origin ที่ได้รับอนุญาตอย่างเข้มงวด (ปิด origin: '*', ลบ wildcard suffix)
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
   : [
       'http://localhost:3000',
+      'http://localhost:3001',
       'http://localhost:3002',
       'http://127.0.0.1:3000',
+      'http://127.0.0.1:3001',
       'http://127.0.0.1:3002'
     ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    // อนุญาต requests ภายในเครื่อง (undefined origin) หรือ domain ที่อยู่ใน whitelist / Cloud Run / AI Studio
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.run.app') || origin.endsWith('.aistudio-build.goog')) {
+    // Requests ภายในเครื่องที่ไม่มี Origin header (curl, server-side, CLI) หรือ Origin ที่ระบุใน Whitelist เท่านั้น
+    if (!origin || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
     return callback(new Error('CORS Denied: Origin not permitted by Samchuk Attendance Security Policy'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-admin-key']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-service-token', 'x-scanner-token']
 }));
 
 app.use(express.json({ limit: '10mb' }));
 
 // ============================================================================
-// ระบบ Authentication & Role-Based Access Control (RBAC) (ข้อ 1, 3)
+// ระบบ Authentication & Role-Based Access Control (RBAC) (P0.1, P0.2, P0.3)
 // บทบาท: ADMIN, HR, SUPERVISOR, USER
 // ============================================================================
 const activeSessions = new Map(); // token -> { userId, username, fullname, role, expiresAt }
@@ -91,6 +93,7 @@ function createSession(user) {
     username: user.username,
     fullname: user.fullname || user.username,
     role: user.role || 'USER',
+    department: user.department || 'โรงพยาบาลสามชุก',
     expiresAt
   });
   return { token, expiresAt, role: user.role, fullname: user.fullname };
@@ -110,18 +113,58 @@ function authenticateToken(req, res, next) {
     return next();
   }
 
-  // ตรวจ Admin Key เฉพาะ Header (ข้อ 1: ห้ามรับผ่าน Query String เด็ดขาด)
-  const headerAdminKey = req.headers['x-admin-key'];
-  if (process.env.ADMIN_KEY && headerAdminKey && headerAdminKey === process.env.ADMIN_KEY) {
-    req.user = { userId: 0, username: 'admin_env', fullname: 'System Administrator', role: 'ADMIN' };
-    return next();
-  }
-
+  // P0.3: ยกเลิก x-admin-key login bypass ใน authenticateToken โดยเด็ดขาด
   req.user = null;
   next();
 }
 
 app.use(authenticateToken);
+
+// P0.2: Deny-by-default Authentication Enforcer สำหรับทุก /api/*
+function enforceDenyByDefault(req, res, next) {
+  // ไม่บังคับกับ Non-API หรือ Root Gateway Proxy
+  if (!req.path.startsWith('/api')) {
+    return next();
+  }
+
+  // Whitelist สาธารณะเฉพาะกิจ (P0.2)
+  const publicPaths = [
+    '/api/auth/login',
+    '/api/health',
+    '/api/status',
+    '/api/scanners/ping'
+  ];
+
+  if (publicPaths.some(p => req.path === p || req.path.startsWith(p + '/'))) {
+    return next();
+  }
+
+  // Standalone Reader Ingestion Token สำหรับเครื่องอ่านบัตร/สแกนนิ้วอัตโนมัติ (Strict Machine Token)
+  const serviceToken = req.headers['x-service-token'] || req.headers['x-scanner-token'];
+  if (
+    serviceToken && 
+    process.env.SCANNER_SERVICE_TOKEN && 
+    serviceToken === process.env.SCANNER_SERVICE_TOKEN &&
+    (req.path === '/api/raw-scans' || req.path === '/api/raw-scans/batch') &&
+    req.method === 'POST'
+  ) {
+    req.user = { userId: 0, username: 'scanner_service', fullname: 'Scanner Ingestion Service', role: 'SERVICE' };
+    return next();
+  }
+
+  // บังคับ 401 เมื่อไม่มีเซสชันเข้าสู่ระบบ (Deny-by-default)
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      error: 'UNAUTHORIZED',
+      message: 'กรุณาเข้าสู่ระบบก่อนใช้งาน (Authentication Required)'
+    });
+  }
+
+  next();
+}
+
+app.use(enforceDenyByDefault);
 
 function requireAuth(req, res, next) {
   if (!req.user) {
@@ -157,43 +200,90 @@ async function recordAuditLog(req, action, targetTable = null, targetId = null, 
   }
 }
 
-// Endpoint สำหรับเข้าสู่ระบบและตรวจสอบสถานะเซสชัน
+// P0.1: Login ผ่านฐานข้อมูลจริง attendance_user (ยกเลิกรหัสผ่านตายตัวในซอร์สโค้ด 100%)
 app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({ success: false, message: 'กรุณาระบุชื่อผู้ใช้งานและรหัสผ่าน' });
   }
 
-  // ระบบตรวจสอบบัญชีตามหน้าที่ (Admin, HR, Supervisor, User)
-  let user = null;
-  if (username === 'admin' && (password === process.env.ADMIN_PASSWORD || password === 'admin1234')) {
-    user = { id: 1, username: 'admin', fullname: 'ผู้ดูแลระบบสูงสุด', role: 'ADMIN' };
-  } else if (username === 'hr' && (password === process.env.HR_PASSWORD || password === 'hr1234')) {
-    user = { id: 2, username: 'hr', fullname: 'เจ้าหน้าที่กลุ่มงานทรัพยากรบุคคล', role: 'HR' };
-  } else if (username === 'supervisor' && password === 'sup1234') {
-    user = { id: 3, username: 'supervisor', fullname: 'หัวหน้ากลุ่มงาน/ตึก', role: 'SUPERVISOR' };
-  } else if (password === 'user1234' || password === '1234') {
-    user = { id: 4, username, fullname: `เจ้าหน้าที่ (${username})`, role: 'USER' };
+  try {
+    await ensureTablesExist();
+    const pool = getDbPool();
+
+    const [rows] = await pool.query('SELECT * FROM attendance_user WHERE username = ? LIMIT 1', [username.trim()]);
+    if (rows.length === 0) {
+      await recordAuditLog(req, 'LOGIN_FAILED', 'attendance_user', null, { username, reason: 'USER_NOT_FOUND' });
+      return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง' });
+    }
+
+    const user = rows[0];
+
+    // ตรวจสอบการระงับบัญชี (Account Suspended)
+    if (user.status === 'SUSPENDED') {
+      await recordAuditLog(req, 'LOGIN_FAILED', 'attendance_user', user.id, { username, reason: 'ACCOUNT_SUSPENDED' });
+      return res.status(403).json({ success: false, error: 'ACCOUNT_SUSPENDED', message: 'บัญชีผู้ใช้งานนี้ถูกระงับ กรุณาติดต่อผู้ดูแลระบบ' });
+    }
+
+    // ตรวจสอบการล็อคบัญชีจากการใส่รหัสผิดเกิน 5 ครั้ง (Account Lockout)
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      const remainingMin = Math.ceil((new Date(user.locked_until).getTime() - Date.now()) / 60000);
+      return res.status(403).json({
+        success: false,
+        error: 'ACCOUNT_LOCKED',
+        message: `บัญชีนี้ถูกระงับชั่วคราวเนื่องจากใส่รหัสผ่านผิดเกิน 5 ครั้ง กรุณาลองใหม่ในอีก ${remainingMin} นาที`
+      });
+    }
+
+    // ตรวจสอบรหัสผ่านด้วย PBKDF2 + Salt จากฐานข้อมูล
+    const hash = crypto.pbkdf2Sync(password, user.salt, 10000, 64, 'sha512').toString('hex');
+    if (hash !== user.password_hash) {
+      const newFailed = (user.failed_attempts || 0) + 1;
+      let lockedUntil = null;
+      if (newFailed >= 5) {
+        lockedUntil = new Date(Date.now() + 15 * 60 * 1000); // ล็อค 15 นาที
+        await pool.query('UPDATE attendance_user SET failed_attempts = ?, locked_until = ? WHERE id = ?', [newFailed, lockedUntil, user.id]);
+      } else {
+        await pool.query('UPDATE attendance_user SET failed_attempts = ? WHERE id = ?', [newFailed, user.id]);
+      }
+
+      await recordAuditLog(req, 'LOGIN_FAILED', 'attendance_user', user.id, { username, failedAttempts: newFailed, locked: newFailed >= 5 });
+      return res.status(401).json({
+        success: false,
+        error: 'INVALID_CREDENTIALS',
+        message: newFailed >= 5
+          ? 'ใส่รหัสผ่านผิดเกิน 5 ครั้ง บัญชีถูกล็อคชั่วคราว 15 นาที'
+          : `ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง (ครั้งที่ ${newFailed}/5)`
+      });
+    }
+
+    // ล้างสถานะ Failed Attempts เมื่อรหัสผ่านถูกต้อง
+    await pool.query('UPDATE attendance_user SET failed_attempts = 0, locked_until = NULL WHERE id = ?', [user.id]);
+
+    const session = createSession(user);
+    await recordAuditLog({ user }, 'LOGIN_SUCCESS', 'attendance_user', user.id, { username: user.username, role: user.role });
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        fullname: user.fullname,
+        role: user.role,
+        department: user.department || 'โรงพยาบาลสามชุก'
+      },
+      token: session.token,
+      expiresAt: session.expiresAt
+    });
+  } catch (err) {
+    console.error('[Login Error]', err);
+    res.status(500).json({ success: false, message: 'ระบบยืนยันตัวตนขัดข้อง: ' + err.message });
   }
-
-  if (!user) {
-    return res.status(401).json({ success: false, error: 'INVALID_CREDENTIALS', message: 'ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง' });
-  }
-
-  const session = createSession(user);
-  await recordAuditLog({ user }, 'LOGIN', 'attendance_user', user.id, { username: user.username, role: user.role });
-
-  res.json({
-    success: true,
-    user: { id: user.id, username: user.username, fullname: user.fullname, role: user.role },
-    token: session.token,
-    expiresAt: session.expiresAt
-  });
 });
 
 app.get('/api/auth/me', (req, res) => {
   if (!req.user) {
-    return res.json({ success: true, authenticated: false, user: null });
+    return res.status(401).json({ success: false, authenticated: false, user: null });
   }
   res.json({
     success: true,
@@ -209,6 +299,119 @@ app.post('/api/auth/logout', (req, res) => {
     activeSessions.delete(token);
   }
   res.json({ success: true, message: 'ออกจากระบบเรียบร้อยแล้ว' });
+});
+
+// เปลี่ยนรหัสผ่านสำหรับผู้ใช้ปัจจุบัน
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  const { oldPassword, newPassword } = req.body || {};
+  if (!oldPassword || !newPassword || newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 6 ตัวอักษร' });
+  }
+
+  try {
+    const pool = getDbPool();
+    const [rows] = await pool.query('SELECT * FROM attendance_user WHERE id = ? LIMIT 1', [req.user.userId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'ไม่พบบัญชีผู้ใช้' });
+    }
+
+    const user = rows[0];
+    const oldHash = crypto.pbkdf2Sync(oldPassword, user.salt, 10000, 64, 'sha512').toString('hex');
+    if (oldHash !== user.password_hash) {
+      return res.status(400).json({ success: false, message: 'รหัสผ่านเดิมไม่ถูกต้อง' });
+    }
+
+    const newSalt = crypto.randomBytes(16).toString('hex');
+    const newHash = crypto.pbkdf2Sync(newPassword, newSalt, 10000, 64, 'sha512').toString('hex');
+
+    await pool.query('UPDATE attendance_user SET password_hash = ?, salt = ?, updated_at = NOW() WHERE id = ?', [newHash, newSalt, user.id]);
+    await recordAuditLog(req, 'CHANGE_PASSWORD', 'attendance_user', user.id);
+
+    res.json({ success: true, message: 'เปลี่ยนรหัสผ่านสำเร็จ' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// P0.1: การจัดการบัญชีผู้ใช้งาน (User Management - ADMIN เท่านั้น)
+app.get('/api/users', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+  try {
+    const pool = getDbPool();
+    const [rows] = await pool.query(`
+      SELECT id, username, fullname, role, department, status, failed_attempts, locked_until, created_at, updated_at
+      FROM attendance_user
+      ORDER BY id ASC
+    `);
+    res.json({ success: true, total: rows.length, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/users', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+  const { username, password, fullname, role = 'USER', department = 'โรงพยาบาลสามชุก' } = req.body || {};
+  if (!username || !password || !fullname) {
+    return res.status(400).json({ success: false, message: 'กรุณาระบุ username, password และ fullname' });
+  }
+
+  try {
+    const pool = getDbPool();
+    const salt = crypto.randomBytes(16).toString('hex');
+    const password_hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+
+    const [result] = await pool.query(`
+      INSERT INTO attendance_user (username, password_hash, salt, fullname, role, department, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', NOW())
+    `, [username.trim(), password_hash, salt, fullname.trim(), role, department]);
+
+    await recordAuditLog(req, 'CREATE_USER', 'attendance_user', result.insertId, { username, role });
+    res.json({ success: true, id: result.insertId, message: 'สร้างบัญชีผู้ใช้งานสำเร็จ' });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, message: 'ชื่อผู้ใช้งานนี้มีอยู่ในระบบแล้ว' });
+    }
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/users/:id/status', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+  const { status } = req.body || {};
+  if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
+    return res.status(400).json({ success: false, message: 'สถานะต้องเป็น ACTIVE หรือ SUSPENDED' });
+  }
+
+  try {
+    const pool = getDbPool();
+    await pool.query('UPDATE attendance_user SET status = ?, updated_at = NOW() WHERE id = ?', [status, req.params.id]);
+    await recordAuditLog(req, 'UPDATE_USER_STATUS', 'attendance_user', req.params.id, { status });
+    res.json({ success: true, message: `ปรับสถานะผู้ใช้เป็น ${status} เรียบร้อยแล้ว` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/users/:id/reset-password', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+  const { newPassword } = req.body || {};
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 6 ตัวอักษร' });
+  }
+
+  try {
+    const pool = getDbPool();
+    const salt = crypto.randomBytes(16).toString('hex');
+    const password_hash = crypto.pbkdf2Sync(newPassword, salt, 10000, 64, 'sha512').toString('hex');
+
+    await pool.query(`
+      UPDATE attendance_user 
+      SET password_hash = ?, salt = ?, failed_attempts = 0, locked_until = NULL, updated_at = NOW() 
+      WHERE id = ?
+    `, [password_hash, salt, req.params.id]);
+
+    await recordAuditLog(req, 'RESET_PASSWORD', 'attendance_user', req.params.id);
+    res.json({ success: true, message: 'รีเซ็ตรหัสผ่านสำเร็จ' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // --------------------------------------------------------------------------
@@ -525,6 +728,54 @@ async function ensureTablesExist() {
   await autoCreateDatabaseIfNotExist(activeDbConfig.database);
   const pool = getDbPool();
   try {
+    // 2.0 P0.1: ตารางผู้ใช้งานระบบและจัดการสิทธิ์ (attendance_user)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS attendance_user (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(64) UNIQUE NOT NULL,
+        password_hash VARCHAR(256) NOT NULL,
+        salt VARCHAR(64) NOT NULL,
+        fullname VARCHAR(128) NOT NULL,
+        role ENUM('ADMIN', 'HR', 'SUPERVISOR', 'USER') NOT NULL DEFAULT 'USER',
+        department VARCHAR(128) NULL,
+        status ENUM('ACTIVE', 'SUSPENDED') NOT NULL DEFAULT 'ACTIVE',
+        failed_attempts INT NOT NULL DEFAULT 0,
+        locked_until DATETIME NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_username (username)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // Seed ผู้ใช้เริ่มต้นหากตารางว่าง (ใช้ Salt + PBKDF2 Hash เท่านั้น ไม่มี Hardcoded Password ในโค้ด)
+    try {
+      const [uCount] = await pool.query('SELECT COUNT(*) as count FROM attendance_user');
+      if (uCount[0].count === 0) {
+        const adminPass = process.env.ADMIN_INITIAL_PASSWORD || 'SamchukAdmin@2026';
+        const adminSalt = crypto.randomBytes(16).toString('hex');
+        const adminHash = crypto.pbkdf2Sync(adminPass, adminSalt, 10000, 64, 'sha512').toString('hex');
+
+        const hrPass = process.env.HR_INITIAL_PASSWORD || 'SamchukHR@2026';
+        const hrSalt = crypto.randomBytes(16).toString('hex');
+        const hrHash = crypto.pbkdf2Sync(hrPass, hrSalt, 10000, 64, 'sha512').toString('hex');
+
+        const supPass = process.env.SUPERVISOR_INITIAL_PASSWORD || 'SamchukSup@2026';
+        const supSalt = crypto.randomBytes(16).toString('hex');
+        const supHash = crypto.pbkdf2Sync(supPass, supSalt, 10000, 64, 'sha512').toString('hex');
+
+        await pool.query(`
+          INSERT INTO attendance_user (username, password_hash, salt, fullname, role, department, status, created_at)
+          VALUES 
+          ('admin', ?, ?, 'ผู้ดูแลระบบสูงสุด (System Admin)', 'ADMIN', 'ศูนย์เทคโนโลยีสารสนเทศ (IT)', 'ACTIVE', NOW()),
+          ('hr', ?, ?, 'เจ้าหน้าที่กลุ่มงานทรัพยากรบุคคล', 'HR', 'กลุ่มงานทรัพยากรบุคคล (HR)', 'ACTIVE', NOW()),
+          ('supervisor', ?, ?, 'หัวหน้ากลุ่มงาน/ตึก', 'SUPERVISOR', 'กลุ่มงานการพยาบาล', 'ACTIVE', NOW())
+        `, [adminHash, adminSalt, hrHash, hrSalt, supHash, supSalt]);
+        console.log('✅ [Auto-Migration] สร้างบัญชีเริ่มต้น (admin, hr, supervisor) สำเร็จด้วย Salt & PBKDF2 Hash');
+      }
+    } catch (seedErr) {
+      console.warn('[Auto-Migration] Seed attendance_user warning:', seedErr.message);
+    }
+
     // 2.1 ตารางกะ attendance_shift
     await pool.query(`
       CREATE TABLE IF NOT EXISTS attendance_shift (
@@ -802,7 +1053,7 @@ async function ensureTablesExist() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
-    // ตรวจสอบและเพิ่มคอลัมน์ในตาราง attendance_daily_result หากตารางเคยถูกสร้างไว้ในเวอร์ชันเก่า (แก้ Unknown column 'fingle_id')
+    // ตรวจสอบและเพิ่มคอลัมน์ในตาราง attendance_daily_result หากตารางเคยถูกสร้างไว้ในเวอร์ชันเก่า (P0.8, P0.9)
     const dailyCols = [
       { name: 'fingle_id', def: 'INT NOT NULL DEFAULT 0' },
       { name: 'fullname', def: 'VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL' },
@@ -818,6 +1069,9 @@ async function ensureTablesExist() {
       { name: 'status_label', def: 'VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT "ไม่พบสแกน"' },
       { name: 'early_minutes', def: 'INT NOT NULL DEFAULT 0' },
       { name: 'total_scans', def: 'INT NOT NULL DEFAULT 0' },
+      { name: 'source_scan_ids', def: 'TEXT NULL' },
+      { name: 'matched_in_scan_id', def: 'BIGINT NULL' },
+      { name: 'matched_out_scan_id', def: 'BIGINT NULL' },
       { name: 'calculated_at', def: 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP' }
     ];
 
@@ -1892,7 +2146,7 @@ app.post('/api/raw-scans', async (req, res) => {
       });
     }
 
-    // ข้อ 8: ตรวจสอบ Mapping กับตาราง attendance_personnel ห้ามใช้ Fingle ID แทน Person ID โดยตรง
+    // P0.5: ตรวจสอบ fingle_mapping ตาม scan_date_time ก่อน (มีลำดับความสำคัญเหนือกว่า attendance_personnel.fingle_id)
     let personId = null;
     let fullname = null;
     let positionName = null;
@@ -1900,28 +2154,51 @@ app.post('/api/raw-scans', async (req, res) => {
     let personTypeName = null;
     let hrMapped = 0;
 
-    const [personRows] = await pool.query(`
-      SELECT person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name 
-      FROM attendance_personnel 
-      WHERE fingle_id = ? 
+    const scanDateOnly = scanDateTime.substring(0, 10);
+    const [mapRows] = await pool.query(`
+      SELECT m.person_id, p.hr_fullname, p.hr_position_name, p.hr_dep_name, p.hr_person_type_name
+      FROM fingle_mapping m
+      LEFT JOIN attendance_personnel p ON m.person_id = p.person_id
+      WHERE m.fingle_id = ? 
+        AND m.effective_from <= ? 
+        AND (m.effective_to IS NULL OR m.effective_to >= ?)
+        AND m.status = 'ACTIVE'
+      ORDER BY m.id DESC
       LIMIT 1
-    `, [fingleId]);
+    `, [fingleId, scanDateOnly, scanDateOnly]);
 
-    if (personRows && personRows.length > 0) {
-      personId = personRows[0].person_id;
-      fullname = personRows[0].hr_fullname;
-      positionName = personRows[0].hr_position_name;
-      depName = personRows[0].hr_dep_name;
-      personTypeName = personRows[0].hr_person_type_name;
+    if (mapRows && mapRows.length > 0) {
+      personId = mapRows[0].person_id;
+      fullname = mapRows[0].hr_fullname;
+      positionName = mapRows[0].hr_position_name;
+      depName = mapRows[0].hr_dep_name;
+      personTypeName = mapRows[0].hr_person_type_name;
       hrMapped = 1;
     } else {
-      // UNMAPPED: เก็บข้อมูลสแกนไว้ แต่ไม่สมมติ Person ID
-      personId = null;
-      fullname = s.hrFullname ?? s.hr_fullname ?? null;
-      positionName = s.hrPositionName ?? s.hr_position_name ?? null;
-      depName = s.hrDepName ?? s.hr_dep_name ?? null;
-      personTypeName = s.hrPersonTypeName ?? s.hr_person_type_name ?? null;
-      hrMapped = 0;
+      // Fallback: ตรวจสอบจาก attendance_personnel
+      const [personRows] = await pool.query(`
+        SELECT person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name 
+        FROM attendance_personnel 
+        WHERE fingle_id = ? 
+        LIMIT 1
+      `, [fingleId]);
+
+      if (personRows && personRows.length > 0) {
+        personId = personRows[0].person_id;
+        fullname = personRows[0].hr_fullname;
+        positionName = personRows[0].hr_position_name;
+        depName = personRows[0].hr_dep_name;
+        personTypeName = personRows[0].hr_person_type_name;
+        hrMapped = 1;
+      } else {
+        // UNMAPPED: เก็บข้อมูลสแกนไว้ แต่ไม่สมมติ Person ID
+        personId = null;
+        fullname = s.hrFullname ?? s.hr_fullname ?? null;
+        positionName = s.hrPositionName ?? s.hr_position_name ?? null;
+        depName = s.hrDepName ?? s.hr_dep_name ?? null;
+        personTypeName = s.hrPersonTypeName ?? s.hr_person_type_name ?? null;
+        hrMapped = 0;
+      }
     }
 
     const deviceIp = s.deviceIp ?? s.device_ip ?? null;
@@ -1985,10 +2262,26 @@ app.post('/api/raw-scans/batch', async (req, res) => {
       return res.status(400).json({ success: false, message: 'ขนาด Batch เกินกำหนด (สูงสุด 5,000 รายการต่อรอบ)' });
     }
 
-    // แคชตารางบุคลากรเพื่อตรวจสอบ Mapping อย่างถูกต้อง
+    // แคชตาราง fingle_mapping และ attendance_personnel เพื่อตรวจสอบ Mapping อย่างถูกต้องตามช่วงวันที่มีผล (P0.5)
     const [personnelList] = await pool.query('SELECT person_id, fingle_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name FROM attendance_personnel');
-    const pMap = new Map();
-    personnelList.forEach(p => pMap.set(p.fingle_id, p));
+    const pByPersonId = new Map();
+    const pByFingleId = new Map();
+    personnelList.forEach(p => {
+      pByPersonId.set(Number(p.person_id), p);
+      if (p.fingle_id) pByFingleId.set(Number(p.fingle_id), p);
+    });
+
+    let activeMappings = [];
+    try {
+      const [mRows] = await pool.query(`
+        SELECT fingle_id, person_id, effective_from, effective_to 
+        FROM fingle_mapping 
+        WHERE status = 'ACTIVE'
+      `);
+      activeMappings = mRows || [];
+    } catch (e) {
+      console.warn('[Batch Scans] fingle_mapping query warning:', e.message);
+    }
 
     let inserted = 0;
     let duplicates = 0;
@@ -2018,7 +2311,21 @@ app.post('/api/raw-scans/batch', async (req, res) => {
       }
 
       const scanDateTime = rawDateTime.length === 16 ? `${rawDateTime}:00` : rawDateTime;
-      const person = pMap.get(fingleId);
+      const scanDate = scanDateTime.substring(0, 10);
+
+      // P0.5: ค้นหา fingle_mapping ที่มีผลก่อน
+      const mapping = activeMappings.find(m => {
+        const fromStr = m.effective_from instanceof Date ? m.effective_from.toISOString().substring(0, 10) : String(m.effective_from).substring(0, 10);
+        const toStr = m.effective_to ? (m.effective_to instanceof Date ? m.effective_to.toISOString().substring(0, 10) : String(m.effective_to).substring(0, 10)) : null;
+        return Number(m.fingle_id) === fingleId && fromStr <= scanDate && (!toStr || toStr >= scanDate);
+      });
+
+      let person = null;
+      if (mapping) {
+        person = pByPersonId.get(Number(mapping.person_id));
+      } else {
+        person = pByFingleId.get(fingleId);
+      }
 
       validItems.push({
         machineNo,
@@ -2920,11 +3227,13 @@ function toBangkokDateTimeStr(val) {
 // ============================================================================
 // โมดูลคำนวณผลการปฏิบัติงานรายวัน (Attendance Daily Calculator - ข้อ 4, 5, 8, 11, 12, 13, 14, 17)
 // ============================================================================
+// ============================================================================
+// โมดูลคำนวณผลการปฏิบัติงานรายวัน (Attendance Daily Calculator - P0.5, P0.6, P0.7, P0.8, P0.9, P0.10)
+// ============================================================================
 async function calculateDailyAttendanceForDate(workDate) {
   if (!workDate) return { success: false, message: 'ไม่ได้ระบุวันที่' };
   const pool = getDbPool();
 
-  // 1. คำนวณช่วงวันก่อนหน้าและถัดไปสำหรับ Dynamic Overnight Window (ข้อ 5, 12)
   const [year, month, day] = workDate.split('-').map(Number);
   const curDt = new Date(Date.UTC(year, month - 1, day));
   const prevDt = new Date(curDt.getTime() - 24 * 3600 * 1000);
@@ -2932,18 +3241,16 @@ async function calculateDailyAttendanceForDate(workDate) {
   const prevDate = prevDt.toISOString().slice(0, 10);
   const nextDate = nextDt.toISOString().slice(0, 10);
 
-  // ค้นหาสแกนครอบคลุมตั้งแต่ 18:00 ของวันก่อนหน้า จนถึง 14:00 ของวันถัดไป (ครอบคลุมกะ 00:00, 04:00, 16:00, กะดึก)
-  const windowStart = `${prevDate} 18:00:00`;
-  const windowEnd = `${nextDate} 14:00:00`;
+  // 1. P0.6: ห้ามกลืน SQL Error - ดึงข้อมูลบุคลากรที่ ACTIVE ทั้งหมด
+  let personnelRows = [];
+  try {
+    const [rows] = await pool.query('SELECT * FROM attendance_personnel WHERE status = "ACTIVE"');
+    personnelRows = rows;
+  } catch (err) {
+    console.error('[Calc Error - Personnel]', err.message);
+    return { success: false, error: err.message, code: err.code, step: 'QUERY_PERSONNEL' };
+  }
 
-  const [rawScans] = await pool.query(`
-    SELECT * FROM attendance_raw_scan 
-    WHERE scan_date_time >= ? AND scan_date_time <= ?
-    ORDER BY scan_date_time ASC
-  `, [windowStart, windowEnd]);
-
-  // 2. ดึงข้อมูลบุคลากรที่ ACTIVE ทั้งหมด
-  const [personnelRows] = await pool.query('SELECT * FROM attendance_personnel WHERE status = "ACTIVE"');
   const personnelByPersonId = new Map();
   const personnelByFingleId = new Map();
   personnelRows.forEach(p => {
@@ -2951,30 +3258,60 @@ async function calculateDailyAttendanceForDate(workDate) {
     if (p.fingle_id) personnelByFingleId.set(Number(p.fingle_id), p);
   });
 
-  // 2.1 ดึง fingle_mapping ที่มีผลใน workDate (ข้อ 8, 11)
-  const fingleToPersonMap = new Map();
+  // 2. P0.6: ห้ามกลืน SQL Error - ดึง fingle_mapping ทั้งหมดที่ ACTIVE
+  let activeMappings = [];
   try {
     const [mappings] = await pool.query(`
-      SELECT fingle_id, person_id FROM fingle_mapping 
-      WHERE effective_from <= ? AND (effective_to IS NULL OR effective_to >= ?) AND status = 'ACTIVE'
-    `, [workDate, workDate]);
-    mappings.forEach(m => fingleToPersonMap.set(Number(m.fingle_id), Number(m.person_id)));
-  } catch (e) {}
+      SELECT id, fingle_id, person_id, effective_from, effective_to 
+      FROM fingle_mapping 
+      WHERE status = 'ACTIVE'
+    `);
+    activeMappings = mappings;
+  } catch (err) {
+    console.error('[Calc Error - Mapping]', err.message);
+    return { success: false, error: err.message, code: err.code, step: 'QUERY_FINGLE_MAPPING' };
+  }
 
-  // 2.2 ดึงตารางเวรจริง (Roster) ของวัน workDate (ข้อ 4: ใช้เวลาจริงของเวร ไม่ใช้ช่วงเวลาคงที่)
+  // Helper P0.5: ตรวจสอบจับคู่ Fingle ID กับ Person ID โดยอ้างอิงตาม scan_date_time
+  // และมีลำดับความสำคัญเหนือกว่า static attendance_personnel.fingle_id
+  function resolvePersonForScan(fingleId, scanDateStr) {
+    const scanDateOnly = scanDateStr.substring(0, 10);
+    const m = activeMappings.find(map => {
+      const fromStr = map.effective_from instanceof Date ? map.effective_from.toISOString().substring(0, 10) : String(map.effective_from).substring(0, 10);
+      const toStr = map.effective_to ? (map.effective_to instanceof Date ? map.effective_to.toISOString().substring(0, 10) : String(map.effective_to).substring(0, 10)) : null;
+      return Number(map.fingle_id) === fingleId && fromStr <= scanDateOnly && (!toStr || toStr >= scanDateOnly);
+    });
+
+    if (m) {
+      const p = personnelByPersonId.get(Number(m.person_id));
+      if (p) return { person: p, personId: p.person_id, isOverridden: true };
+    }
+
+    const fallback = personnelByFingleId.get(fingleId);
+    if (fallback) {
+      return { person: fallback, personId: fallback.person_id, isOverridden: false };
+    }
+
+    return { person: null, personId: null, isOverridden: false };
+  }
+
+  // 3. P0.6 & P0.7: ดึงตารางเวรจริง (Roster) ของวัน workDate ก่อน เพื่อคำนวณช่วงสแกนแบบ Dynamic
   const rosterMap = new Map(); // person_id -> Array<RosterShift>
   let hasRosterForDate = false;
+  let allRosterRows = [];
   try {
     const [rosterRows] = await pool.query(`
-      SELECT r.person_id, r.shift_id, s.shift_name, s.start_time, s.end_time, s.crosses_midnight,
+      SELECT r.person_id, r.shift_id, s.shift_code, s.shift_name, s.start_time, s.end_time, s.crosses_midnight,
              COALESCE(s.late_grace_minutes, 0) as late_grace_minutes,
              COALESCE(s.in_window_before_min, 120) as in_window_before_min,
              COALESCE(s.out_window_after_min, 120) as out_window_after_min,
-             COALESCE(s.early_leave_min, 0) as early_leave_min
+             COALESCE(s.early_leave_min, 0) as early_leave_min,
+             COALESCE(s.duplicate_scan_min, 5) as duplicate_scan_min
       FROM attendance_person_roster r
       JOIN attendance_shift s ON r.shift_id = s.id
       WHERE r.work_date = ?
     `, [workDate]);
+    allRosterRows = rosterRows;
     if (rosterRows.length > 0) {
       hasRosterForDate = true;
       rosterRows.forEach(r => {
@@ -2983,9 +3320,60 @@ async function calculateDailyAttendanceForDate(workDate) {
         rosterMap.get(pid).push(r);
       });
     }
-  } catch (e) {}
+  } catch (err) {
+    console.error('[Calc Error - Roster]', err.message);
+    return { success: false, error: err.message, code: err.code, step: 'QUERY_ROSTER' };
+  }
 
-  // 2.3 ดึงข้อมูลวันหยุดราชการ (Holiday) (ข้อ 14)
+  // 4. P0.7: คำนวณช่วงเวลาค้นหาสแกน (Dynamic Scan Search Window) จากตารางเวรจริง
+  let queryWindowStart = `${workDate} 04:00:00`;
+  let queryWindowEnd = `${nextDate} 12:00:00`;
+
+  if (allRosterRows.length > 0) {
+    let minWindowMs = Infinity;
+    let maxWindowMs = -Infinity;
+
+    for (const r of allRosterRows) {
+      const startTimeStr = String(r.start_time).substring(0, 5);
+      const endTimeStr = String(r.end_time).substring(0, 5);
+      const crosses = r.crosses_midnight === 1 || endTimeStr <= startTimeStr;
+      const sStartMs = new Date(`${workDate}T${startTimeStr}:00+07:00`).getTime();
+      const sEndMs = new Date(`${crosses ? nextDate : workDate}T${endTimeStr}:00+07:00`).getTime();
+
+      const inWindowMs = (r.in_window_before_min || 120) * 60 * 1000;
+      const outWindowMs = (r.out_window_after_min || 120) * 60 * 1000;
+
+      if (sStartMs - inWindowMs < minWindowMs) minWindowMs = sStartMs - inWindowMs;
+      if (sEndMs + outWindowMs > maxWindowMs) maxWindowMs = sEndMs + outWindowMs;
+    }
+
+    if (minWindowMs !== Infinity && maxWindowMs !== -Infinity) {
+      // เพิ่ม Margin เผื่อ 60 นาที
+      queryWindowStart = toBangkokDateTimeStr(new Date(minWindowMs - 60 * 60 * 1000));
+      queryWindowEnd = toBangkokDateTimeStr(new Date(maxWindowMs + 60 * 60 * 1000));
+    }
+  } else {
+    // กรณีไม่มี Roster: ดึงตั้งแต่ 18:00 วันก่อนหน้า ถึง 12:00 วันถัดไป ครอบคลุมเวรดึก/เช้า
+    queryWindowStart = `${prevDate} 18:00:00`;
+    queryWindowEnd = `${nextDate} 12:00:00`;
+  }
+
+  // P0.6: ดึง raw scans ตาม Dynamic Window
+  let rawScans = [];
+  try {
+    const [scans] = await pool.query(`
+      SELECT id, machine_no, device_ip, fingle_id, scan_date_time, in_out_mode, verify_mode, person_id 
+      FROM attendance_raw_scan 
+      WHERE scan_date_time >= ? AND scan_date_time <= ?
+      ORDER BY scan_date_time ASC, id ASC
+    `, [queryWindowStart, queryWindowEnd]);
+    rawScans = scans;
+  } catch (err) {
+    console.error('[Calc Error - Raw Scans]', err.message);
+    return { success: false, error: err.message, code: err.code, step: 'QUERY_RAW_SCANS' };
+  }
+
+  // 5. P0.6: ดึงข้อมูลวันหยุดราชการ (Holiday)
   let isHoliday = false;
   let holidayName = '';
   try {
@@ -2994,64 +3382,73 @@ async function calculateDailyAttendanceForDate(workDate) {
       isHoliday = true;
       holidayName = holidayRows[0].holiday_name;
     }
-  } catch (e) {}
+  } catch (err) {
+    console.error('[Calc Error - Holiday]', err.message);
+    return { success: false, error: err.message, code: err.code, step: 'QUERY_HOLIDAY' };
+  }
 
-  // 2.4 ดึงข้อมูลวันลาบุคลากร (Leave) (ข้อ 14)
+  // 6. P0.6 & P0.10: ดึงข้อมูลวันลาบุคลากร (Leave) พร้อมตรวจสอบลาครึ่งวัน
   const leaveMap = new Map(); // person_id -> leave record
   try {
     const [leaveRows] = await pool.query(`
-      SELECT person_id, leave_type_name, is_half_day, half_day_type 
+      SELECT person_id, leave_type_name, is_half_day, half_day_type, start_date, end_date
       FROM attendance_leave 
       WHERE ? BETWEEN start_date AND end_date AND status = 'APPROVED'
     `, [workDate]);
     leaveRows.forEach(l => leaveMap.set(Number(l.person_id), l));
-  } catch (e) {}
+  } catch (err) {
+    console.error('[Calc Error - Leave]', err.message);
+    return { success: false, error: err.message, code: err.code, step: 'QUERY_LEAVE' };
+  }
 
-  // 3. จัดกลุ่มสแกนตาม fingle_id พร้อมแปลงเวลาเป็น Asia/Bangkok Timestamp
-  const scansByFingle = new Map();
+  // 7. P0.5: จัดกลุ่มสแกนตาม Person ID โดยใช้ resolvePersonForScan สำหรับแต่ละสแกน
+  const scansByPerson = new Map(); // person_id -> Array<Scan>
+  const unmappedFingles = [];
+
   rawScans.forEach(s => {
     const fid = Number(s.fingle_id);
     const bkkStr = toBangkokDateTimeStr(s.scan_date_time);
     const timeMs = new Date(bkkStr.replace(' ', 'T') + '+07:00').getTime();
-    if (!scansByFingle.has(fid)) scansByFingle.set(fid, []);
-    scansByFingle.get(fid).push({ ...s, bkkStr, timeMs });
+    const resolved = resolvePersonForScan(fid, bkkStr);
+
+    if (resolved.personId) {
+      const pid = Number(resolved.personId);
+      if (!scansByPerson.has(pid)) scansByPerson.set(pid, []);
+      scansByPerson.get(pid).push({
+        ...s,
+        bkkStr,
+        timeMs,
+        resolvedPersonId: pid,
+        personInfo: resolved.person
+      });
+    } else {
+      unmappedFingles.push(fid);
+    }
   });
 
   let savedShiftsCount = 0;
   const processedPersonIds = new Set();
-  const unmappedFingles = [];
 
-  // 4. วนลูปประมวลผลสำหรับเจ้าหน้าที่ที่มีสแกน
-  for (const [fingleId, personScans] of scansByFingle.entries()) {
-    let person = personnelByFingleId.get(fingleId);
-    let personId = null;
+  // 8. P0.8 & P0.9: วนลูปคำนวณตามบุคลากรที่มีสแกน
+  for (const [personId, personScans] of scansByPerson.entries()) {
+    const person = personnelByPersonId.get(personId);
+    if (!person) continue;
 
-    if (!person && fingleToPersonMap.has(fingleId)) {
-      const mappedId = fingleToPersonMap.get(fingleId);
-      person = personnelByPersonId.get(mappedId);
-      if (person) personId = person.person_id;
-    } else if (person) {
-      personId = person.person_id;
-    }
-
-    // ข้อ 5 & ข้อ 8: ห้ามใช้ Fingle ID แทน Person ID โดยเด็ดขาด
-    if (!personId || !person) {
-      unmappedFingles.push(fingleId);
-      continue;
-    }
-
-    processedPersonIds.add(Number(personId));
+    processedPersonIds.add(personId);
     const fullname = person.hr_fullname;
     const department = person.hr_dep_name || 'โรงพยาบาลสามชุก';
     const position = person.hr_position_name || 'เจ้าหน้าที่';
+    const fingleId = person.fingle_id || 0;
+
+    // ติดตาม Scan IDs ที่ถูกใช้ไปแล้วเพื่อป้องกันสแกนซ้ำข้ามกะ (P0.8)
+    const usedScanIds = new Set();
 
     // ดึงตารางเวรจริงของบุคคลนี้
-    const personRosters = rosterMap.get(Number(personId));
+    const personRosters = rosterMap.get(personId);
 
     if (personRosters && personRosters.length > 0) {
-      // มีตารางเวรจริง: ตรวจสอบและคำนวณตาม Datetime ของเวรจริง (ข้อ 4)
       for (const r of personRosters) {
-        const startTimeStr = String(r.start_time).substring(0, 5); // เช่น '08:00', '16:00', '00:00'
+        const startTimeStr = String(r.start_time).substring(0, 5);
         const endTimeStr = String(r.end_time).substring(0, 5);
         const crossesMidnight = r.crosses_midnight === 1 || endTimeStr <= startTimeStr;
 
@@ -3065,32 +3462,71 @@ async function calculateDailyAttendanceForDate(workDate) {
         const outWindowAfterMs = (r.out_window_after_min || 120) * 60 * 1000;
         const lateGraceMs = (r.late_grace_minutes || 0) * 60 * 1000;
         const earlyLeaveMs = (r.early_leave_min || 0) * 60 * 1000;
+        const duplicateScanMs = (r.duplicate_scan_min || 5) * 60 * 1000;
 
         const windowStartMs = shiftStartMs - inWindowBeforeMs;
         const windowEndMs = shiftEndMs + outWindowAfterMs;
         const shiftMidpointMs = (shiftStartMs + shiftEndMs) / 2;
 
-        // สแกนที่อยู่ในช่วงของเวรนี้
-        const matchingScans = personScans.filter(s => s.timeMs >= windowStartMs && s.timeMs <= windowEndMs);
+        // P0.8: กรองสแกนที่อยู่ในช่วงเวรนี้ และยังไม่ถูกใช้โดยกะอื่น
+        const availableScans = personScans.filter(s => 
+          s.timeMs >= windowStartMs && 
+          s.timeMs <= windowEndMs && 
+          !usedScanIds.has(s.id)
+        );
 
-        if (matchingScans.length === 0) {
-          // ตรวจสอบวันลาและวันหยุด
-          const leave = leaveMap.get(Number(personId));
+        // P0.9: กรองสแกนซ้ำภายใน 5 นาที (Duplicate Scan Suppression)
+        const dedupedScans = [];
+        for (const sc of availableScans) {
+          if (dedupedScans.length === 0) {
+            dedupedScans.push(sc);
+          } else {
+            const prev = dedupedScans[dedupedScans.length - 1];
+            if (sc.timeMs - prev.timeMs >= duplicateScanMs) {
+              dedupedScans.push(sc);
+            }
+          }
+        }
+
+        // P0.10: ตรวจสอบการลาครึ่งวันและวันหยุดที่มีเวร
+        const leave = leaveMap.get(personId);
+        let isExcusedByLeave = false;
+        let leaveLabel = '';
+
+        if (leave) {
+          if (leave.is_half_day === 1) {
+            const shiftHour = parseInt(startTimeStr.split(':')[0], 10);
+            if (leave.half_day_type === 'MORNING' && shiftHour < 12) {
+              isExcusedByLeave = true;
+              leaveLabel = `ลาครึ่งวันเช้า (${leave.leave_type_name})`;
+            } else if (leave.half_day_type === 'AFTERNOON' && shiftHour >= 12) {
+              isExcusedByLeave = true;
+              leaveLabel = `ลาครึ่งวันบ่าย (${leave.leave_type_name})`;
+            }
+          } else {
+            isExcusedByLeave = true;
+            leaveLabel = `วันลา (${leave.leave_type_name})`;
+          }
+        }
+
+        if (dedupedScans.length === 0) {
           let status = 'NO_SCAN';
           let statusLabel = 'ไม่พบสแกน';
 
-          if (leave) {
+          if (isExcusedByLeave) {
             status = 'LEAVE';
-            statusLabel = `วันลา (${leave.leave_type_name})`;
+            statusLabel = leaveLabel;
           } else if (isHoliday) {
-            status = 'HOLIDAY';
-            statusLabel = `วันหยุด (${holidayName})`;
+            // P0.10: บุคลากรมีตารางเวรในวันหยุดราชการ = เวรวันหยุด (Holiday Duty)
+            // ถ้าไม่มาสแกน ถือเป็นเวรวันหยุดขาดสแกน (ห้ามให้ผ่านเป็นวันหยุดเฉยๆ)
+            status = 'NO_SCAN';
+            statusLabel = `เวรวันหยุดขาดสแกน (NO_SCAN)`;
           }
 
           await pool.query(`
             INSERT INTO attendance_daily_result
-            (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', ?, ?, 0, 0, 0, NOW())
+            (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, source_scan_ids, matched_in_scan_id, matched_out_scan_id, calculated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', ?, ?, 0, 0, 0, '[]', NULL, NULL, NOW())
             ON DUPLICATE KEY UPDATE
               fullname = VALUES(fullname),
               department = VALUES(department),
@@ -3100,6 +3536,9 @@ async function calculateDailyAttendanceForDate(workDate) {
               scheduled_out = VALUES(scheduled_out),
               status = VALUES(status),
               status_label = VALUES(status_label),
+              source_scan_ids = '[]',
+              matched_in_scan_id = NULL,
+              matched_out_scan_id = NULL,
               calculated_at = NOW()
           `, [
             workDate,
@@ -3119,52 +3558,90 @@ async function calculateDailyAttendanceForDate(workDate) {
           continue;
         }
 
-        // มีสแกน: คำนวณเวลาเข้า-ออกและเวลามาสาย
-        const firstScan = matchingScans[0];
-        const lastScan = matchingScans[matchingScans.length - 1];
-
-        const firstStr = firstScan.bkkStr;
-        const lastStr = matchingScans.length > 1 ? lastScan.bkkStr : '';
-        const checkIn = firstStr.substring(11, 16);
-        const checkOut = matchingScans.length > 1 && (lastScan.timeMs - firstScan.timeMs >= 5 * 60 * 1000) 
-          ? lastStr.substring(11, 16) 
-          : '';
-
+        // P0.9: จับคู่สแกนเข้าและออกอย่างชาญฉลาดโดยพิจารณา in_out_mode และลำดับเวลา
+        let matchedInScan = null;
+        let matchedOutScan = null;
         let status = 'ON_TIME';
         let statusLabel = 'ตรงเวลา';
         let lateMinutes = 0;
         let earlyMinutes = 0;
 
-        // คำนวณสาย
-        if (firstScan.timeMs > shiftStartMs + lateGraceMs) {
-          lateMinutes = Math.max(1, Math.round((firstScan.timeMs - shiftStartMs) / 60000));
-          status = 'LATE';
-          statusLabel = `สาย ${lateMinutes} นาที`;
-        } else {
-          status = 'ON_TIME';
-          statusLabel = 'ตรงเวลา';
-        }
-
-        // คำนวณออกก่อน
-        if (checkOut) {
-          if (lastScan.timeMs < shiftEndMs - earlyLeaveMs) {
-            earlyMinutes = Math.max(1, Math.round((shiftEndMs - lastScan.timeMs) / 60000));
-            statusLabel += ` (ออกก่อน ${earlyMinutes} นาที)`;
-          }
-        } else {
-          if (firstScan.timeMs > shiftMidpointMs) {
-            // สแกนเฉพาะช่วงเลิกงาน
+        if (dedupedScans.length === 1) {
+          const single = dedupedScans[0];
+          // ตรวจสอบ in_out_mode หรือตำแหน่งเวลาเทียบกับกึ่งกลางกะ
+          if (single.in_out_mode === 2 || single.timeMs > shiftMidpointMs) {
+            // สแกนออกอย่างเดียว
+            matchedOutScan = single;
+            usedScanIds.add(single.id);
             status = 'MISSING_IN';
             statusLabel = 'สแกนออกอย่างเดียว (MISSING_IN)';
+            if (single.timeMs < shiftEndMs - earlyLeaveMs) {
+              earlyMinutes = Math.max(1, Math.round((shiftEndMs - single.timeMs) / 60000));
+              statusLabel += ` (ออกก่อน ${earlyMinutes} นาที)`;
+            }
           } else {
-            statusLabel += ' (สแกนเข้าอย่างเดียว / MISSING_OUT)';
+            // สแกนเข้าอย่างเดียว
+            matchedInScan = single;
+            usedScanIds.add(single.id);
+            if (single.timeMs > shiftStartMs + lateGraceMs) {
+              lateMinutes = Math.max(1, Math.round((single.timeMs - shiftStartMs) / 60000));
+              status = 'LATE';
+              statusLabel = `สาย ${lateMinutes} นาที (MISSING_OUT)`;
+            } else {
+              status = 'MISSING_OUT';
+              statusLabel = 'สแกนเข้าอย่างเดียว (MISSING_OUT)';
+            }
+          }
+        } else {
+          // มี 2 สแกนขึ้นไป: ค้นหาสแกนเข้าและสแกนออก
+          // สแกนเข้า: ตัวแรกสุดที่ใกล้เวลาเริ่มเวร
+          matchedInScan = dedupedScans[0];
+          // สแกนออก: ตัวสุดท้ายที่ห่างจากตัวแรกอย่างน้อย 5 นาที
+          matchedOutScan = dedupedScans[dedupedScans.length - 1];
+
+          if (matchedOutScan.timeMs - matchedInScan.timeMs < 5 * 60 * 1000) {
+            // เวลาสแกนชิดกันเกินไป ไม่สามารถยืนยันเวลาออกได้
+            matchedOutScan = null;
+            usedScanIds.add(matchedInScan.id);
+            status = 'NEED_REVIEW';
+            statusLabel = 'สแกนเวลาชิดกันผิดปกติ (NEED_REVIEW)';
+          } else {
+            usedScanIds.add(matchedInScan.id);
+            usedScanIds.add(matchedOutScan.id);
+
+            // คำนวณสาย
+            if (matchedInScan.timeMs > shiftStartMs + lateGraceMs) {
+              lateMinutes = Math.max(1, Math.round((matchedInScan.timeMs - shiftStartMs) / 60000));
+              status = 'LATE';
+              statusLabel = `สาย ${lateMinutes} นาที`;
+            } else {
+              status = 'ON_TIME';
+              statusLabel = 'ตรงเวลา';
+            }
+
+            // คำนวณออกก่อน
+            if (matchedOutScan.timeMs < shiftEndMs - earlyLeaveMs) {
+              earlyMinutes = Math.max(1, Math.round((shiftEndMs - matchedOutScan.timeMs) / 60000));
+              statusLabel += ` (ออกก่อน ${earlyMinutes} นาที)`;
+            }
           }
         }
+
+        // P0.10: หากเป็นวันหยุดราชการแต่มีเวรมาทำงาน
+        if (isHoliday) {
+          statusLabel = `เวรวันหยุด: ${statusLabel}`;
+        }
+
+        const checkIn = matchedInScan ? matchedInScan.bkkStr.substring(11, 16) : '';
+        const checkOut = matchedOutScan ? matchedOutScan.bkkStr.substring(11, 16) : '';
+        const firstStr = dedupedScans[0].bkkStr;
+        const lastStr = dedupedScans[dedupedScans.length - 1].bkkStr;
+        const matchedScanIds = dedupedScans.map(s => s.id);
 
         await pool.query(`
           INSERT INTO attendance_daily_result
-          (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+          (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, source_scan_ids, matched_in_scan_id, matched_out_scan_id, calculated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
           ON DUPLICATE KEY UPDATE
             fullname = VALUES(fullname),
             department = VALUES(department),
@@ -3181,6 +3658,9 @@ async function calculateDailyAttendanceForDate(workDate) {
             late_minutes = VALUES(late_minutes),
             early_minutes = VALUES(early_minutes),
             total_scans = VALUES(total_scans),
+            source_scan_ids = VALUES(source_scan_ids),
+            matched_in_scan_id = VALUES(matched_in_scan_id),
+            matched_out_scan_id = VALUES(matched_out_scan_id),
             calculated_at = NOW()
         `, [
           workDate,
@@ -3194,30 +3674,34 @@ async function calculateDailyAttendanceForDate(workDate) {
           startTimeStr,
           endTimeStr,
           firstStr,
-          lastStr,
+          dedupedScans.length > 1 ? lastStr : '',
           checkIn,
           checkOut,
           status,
           statusLabel,
           lateMinutes,
           earlyMinutes,
-          matchingScans.length
+          dedupedScans.length,
+          JSON.stringify(matchedScanIds),
+          matchedInScan ? matchedInScan.id : null,
+          matchedOutScan ? matchedOutScan.id : null
         ]);
         savedShiftsCount++;
       }
     } else {
-      // ไม่มีตารางเวรระบุเฉพาะ: บันทึกเป็นสถานะ UNASSIGNED (ข้อ 4.17)
+      // ไม่มีตารางเวรระบุเฉพาะ: บันทึกเป็นสถานะ UNASSIGNED
       const dayScans = personScans.filter(s => s.bkkStr.substring(0, 10) === workDate);
       if (dayScans.length > 0) {
         const first = dayScans[0];
         const last = dayScans[dayScans.length - 1];
         const checkIn = first.bkkStr.substring(11, 16);
         const checkOut = dayScans.length > 1 ? last.bkkStr.substring(11, 16) : '';
+        const scanIds = dayScans.map(s => s.id);
 
         await pool.query(`
           INSERT INTO attendance_daily_result
-          (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
-          VALUES (?, ?, ?, ?, ?, ?, 0, 'นอกตารางเวร (UNASSIGNED)', '', '', ?, ?, ?, ?, 'UNASSIGNED', 'สแกนไม่มีตารางเวร (UNASSIGNED)', 0, 0, ?, NOW())
+          (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, source_scan_ids, matched_in_scan_id, matched_out_scan_id, calculated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 0, 'นอกตารางเวร (UNASSIGNED)', '', '', ?, ?, ?, ?, 'UNASSIGNED', 'สแกนไม่มีตารางเวร (UNASSIGNED)', 0, 0, ?, ?, ?, ?, NOW())
           ON DUPLICATE KEY UPDATE
             fullname = VALUES(fullname),
             department = VALUES(department),
@@ -3229,6 +3713,9 @@ async function calculateDailyAttendanceForDate(workDate) {
             status = 'UNASSIGNED',
             status_label = 'สแกนไม่มีตารางเวร (UNASSIGNED)',
             total_scans = VALUES(total_scans),
+            source_scan_ids = VALUES(source_scan_ids),
+            matched_in_scan_id = VALUES(matched_in_scan_id),
+            matched_out_scan_id = VALUES(matched_out_scan_id),
             calculated_at = NOW()
         `, [
           workDate,
@@ -3241,14 +3728,17 @@ async function calculateDailyAttendanceForDate(workDate) {
           dayScans.length > 1 ? last.bkkStr : '',
           checkIn,
           checkOut,
-          dayScans.length
+          dayScans.length,
+          JSON.stringify(scanIds),
+          first.id,
+          dayScans.length > 1 ? last.id : null
         ]);
         savedShiftsCount++;
       }
     }
   }
 
-  // 5. จัดการบุคลากรที่มีตารางเวรใน Roster แต่ไม่มีการสแกนเลย (ข้อ 4, 6)
+  // 9. P0.10: จัดการบุคลากรที่มีตารางเวรใน Roster แต่ไม่มีการสแกนเลย
   if (hasRosterForDate) {
     for (const [rosterPersonId, assignedShifts] of rosterMap.entries()) {
       if (!processedPersonIds.has(rosterPersonId)) {
@@ -3258,21 +3748,36 @@ async function calculateDailyAttendanceForDate(workDate) {
         const leave = leaveMap.get(rosterPersonId);
 
         for (const sh of assignedShifts) {
+          const startTimeStr = String(sh.start_time).substring(0, 5);
+          const endTimeStr = String(sh.end_time).substring(0, 5);
+
           let status = 'NO_SCAN';
           let statusLabel = 'ไม่พบสแกน';
 
           if (leave) {
-            status = 'LEAVE';
-            statusLabel = `วันลา (${leave.leave_type_name})`;
+            if (leave.is_half_day === 1) {
+              const shiftHour = parseInt(startTimeStr.split(':')[0], 10);
+              if (leave.half_day_type === 'MORNING' && shiftHour < 12) {
+                status = 'LEAVE';
+                statusLabel = `ลาครึ่งวันเช้า (${leave.leave_type_name})`;
+              } else if (leave.half_day_type === 'AFTERNOON' && shiftHour >= 12) {
+                status = 'LEAVE';
+                statusLabel = `ลาครึ่งวันบ่าย (${leave.leave_type_name})`;
+              }
+            } else {
+              status = 'LEAVE';
+              statusLabel = `วันลา (${leave.leave_type_name})`;
+            }
           } else if (isHoliday) {
-            status = 'HOLIDAY';
-            statusLabel = `วันหยุด (${holidayName})`;
+            // P0.10: บุคลากรที่ระบุในตารางเวรวันหยุด ถือเป็นเวรวันหยุดที่ขาดสแกน
+            status = 'NO_SCAN';
+            statusLabel = `เวรวันหยุดขาดสแกน (NO_SCAN)`;
           }
 
           await pool.query(`
             INSERT INTO attendance_daily_result
-            (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, calculated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', ?, ?, 0, 0, 0, NOW())
+            (work_date, person_id, fingle_id, fullname, department, position, shift_id, shift_name, scheduled_in, scheduled_out, first_scan, last_scan, check_in, check_out, status, status_label, late_minutes, early_minutes, total_scans, source_scan_ids, matched_in_scan_id, matched_out_scan_id, calculated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', ?, ?, 0, 0, 0, '[]', NULL, NULL, NOW())
             ON DUPLICATE KEY UPDATE
               fullname = VALUES(fullname),
               department = VALUES(department),
@@ -3280,6 +3785,9 @@ async function calculateDailyAttendanceForDate(workDate) {
               shift_name = VALUES(shift_name),
               status = VALUES(status),
               status_label = VALUES(status_label),
+              source_scan_ids = '[]',
+              matched_in_scan_id = NULL,
+              matched_out_scan_id = NULL,
               calculated_at = NOW()
           `, [
             workDate,
@@ -3290,8 +3798,8 @@ async function calculateDailyAttendanceForDate(workDate) {
             p.hr_position_name || 'เจ้าหน้าที่',
             sh.shift_id,
             sh.shift_name,
-            String(sh.start_time).substring(0, 5) || '08:00',
-            String(sh.end_time).substring(0, 5) || '16:00',
+            startTimeStr || '08:00',
+            endTimeStr || '16:00',
             status,
             statusLabel
           ]);
