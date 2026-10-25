@@ -124,23 +124,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     });
   };
 
-  // Seed demo data for today if needed
-  const handleSeedToday = async () => {
-    try {
-      const res = await attendanceStore.seedRealisticScansForScope({
-        mode: 'DAILY',
-        date: selectedDate
-      });
-      if (res.success) {
-        setActionMsg({ type: 'success', text: res.message });
-      } else {
-        setActionMsg({ type: 'error', text: res.message });
-      }
-    } catch (e: any) {
-      setActionMsg({ type: 'error', text: e.message });
-    }
-  };
-
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Executive Command Header */}
@@ -205,18 +188,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <RefreshCw className="w-3.5 h-3.5" />
             <span>⚡ ดึงข้อมูลสแกน</span>
           </button>
-
-          {/* Seed Demo Button */}
-          {presentCount === 0 && (
-            <button
-              onClick={handleSeedToday}
-              className="flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-              title="จำลองข้อมูลสแกนนิ้วสำหรับวันนี้เพื่อดูรายงานทันที"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>🧪 จำลองสแกนวันนี้</span>
-            </button>
-          )}
 
           {/* Push to Hosoffice Quick Button */}
           {isAdmin && (

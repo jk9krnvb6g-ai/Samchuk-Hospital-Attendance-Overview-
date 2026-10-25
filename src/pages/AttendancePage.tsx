@@ -232,27 +232,6 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
                 <span>{isRecalculating ? 'กำลังคำนวณ...' : 'คำนวณใหม่'}</span>
               </button>
 
-              {/* Seed Scans Demo Button */}
-              <button
-                onClick={async () => {
-                  setIsRecalculating(true);
-                  try {
-                    const res = await attendanceStore.seedRealisticMonthScans(selectedDate.substring(0, 7), 14);
-                    setSaveDbMsg({ type: res.success ? 'success' : 'error', text: res.message });
-                  } catch (e: any) {
-                    setSaveDbMsg({ type: 'error', text: e.message });
-                  } finally {
-                    setIsRecalculating(false);
-                  }
-                }}
-                disabled={isRecalculating}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-slate-950 text-xs font-bold rounded-lg shadow-2xs cursor-pointer disabled:opacity-50 transition-all duration-150"
-                title="สร้างข้อมูลสแกนตัวอย่างทั้งโรงพยาบาล (ปกติ/สาย) และคำนวณทันที"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-slate-950" />
-                <span>🧪 สร้างสแกน (ปกติ/สาย)</span>
-              </button>
-
               {/* Clear Daily Attendance (Red/Rose) */}
               <button
                 onClick={async () => {

@@ -162,7 +162,10 @@ ORDER BY hp.ID ASC;`;
           }
         }
       } catch (err: any) {
-        console.warn('Sync personnel failed, falling back to hospital master data:', err);
+        console.error('Sync personnel failed:', err);
+        alert(`ดึงข้อมูลบุคลากรไม่สำเร็จ: ${err.message || 'การเชื่อมต่อ HOSOffice ขัดข้อง'}`);
+        setIsSyncing(false);
+        return;
       }
     } else {
       // Create an on-the-fly change to test dynamic update

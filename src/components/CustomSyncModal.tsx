@@ -67,27 +67,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
   const [dbOverview, setDbOverview] = useState<any>(null);
 
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
   const [resultMsg, setResultMsg] = useState<{ type: 'success' | 'error'; text: string; isZeroResult?: boolean } | null>(null);
-
-  const handleDirectSeed = async () => {
-    setIsSeeding(true);
-    setResultMsg(null);
-    try {
-      const targetMonth = timeMode === 'MONTH' ? (month || '2026-10') : '2026-10';
-      const res = await attendanceStore.seedHospitalScansDirect(targetMonth);
-      if (res.success) {
-        setResultMsg({ type: 'success', text: res.message, isZeroResult: false });
-        if (onSyncComplete) onSyncComplete(res.message);
-      } else {
-        setResultMsg({ type: 'error', text: res.message });
-      }
-    } catch (e: any) {
-      setResultMsg({ type: 'error', text: e.message || 'ไม่สามารถสร้างข้อมูลได้' });
-    } finally {
-      setIsSeeding(false);
-    }
-  };
 
   useEffect(() => {
     if (isOpen) {
@@ -704,22 +684,6 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                       <strong>3. ตัวกรองข้อมูลซ้ำ (Skip Duplicates):</strong> หากเคยมีข้อมูลของช่วงเวลานี้อยู่ในระบบแล้ว และเลือกโหมดข้ามรายการซ้ำ ระบบจะไม่บันทึกทับของเดิม
                     </p>
                   </div>
-
-                  {/* ปุ่มแก้ไขด่วน 1 คลิก */}
-                  <div className="pt-2 border-t border-amber-200/80 flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[11px] text-amber-800 font-medium">
-                      💡 ต้องการสร้างและนำเข้าประวัติสแกนจริงของ รพ.สามชุก ({timeMode === 'MONTH' ? (month || '2026-10') : '2026-10'}) ทันที?
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleDirectSeed}
-                      disabled={isSeeding || isProcessing}
-                      className="px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer text-xs disabled:opacity-50 transition-colors"
-                    >
-                      <Zap className={`w-3.5 h-3.5 ${isSeeding ? 'animate-bounce' : ''}`} />
-                      <span>{isSeeding ? 'กำลังนำเข้าข้อมูล...' : '⚡ คลิกนำเข้าประวัติสแกน รพ.สามชุก ทันที'}</span>
-                    </button>
-                  </div>
                 </div>
               )}
             </div>
@@ -736,16 +700,6 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleDirectSeed}
-              disabled={isSeeding || isProcessing}
-              title="สร้างและนำเข้าประวัติสแกนของโรงพยาบาลสามชุกเข้าสู่ระบบทันที"
-              className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
-            >
-              <Zap className={`w-3.5 h-3.5 text-amber-700 ${isSeeding ? 'animate-bounce' : ''}`} />
-              <span>{isSeeding ? 'กำลังนำเข้า...' : 'สร้างข้อมูลสแกน รพ.'}</span>
-            </button>
 
             <button
               type="button"

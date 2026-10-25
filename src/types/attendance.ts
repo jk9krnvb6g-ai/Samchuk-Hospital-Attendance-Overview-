@@ -75,6 +75,7 @@ export interface RawScan {
   scanDateTime: string; // YYYY-MM-DD HH:mm:ss in Gregorian (A.D.)
   verifyMode: number;
   inOutMode: number;
+  source?: string; // 'DEVICE' | 'IMPORT' | 'MANUAL'
   
   // HR Snapshot from hosoffice.hr_person
   personId?: number;

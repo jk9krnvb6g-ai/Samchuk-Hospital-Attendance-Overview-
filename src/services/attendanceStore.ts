@@ -354,53 +354,60 @@ class AttendanceStore {
   }
 
   // Scanner Sync logic - Section 7: Background scanner sync
-  // Reads scanner -> stores directly in MySQL attendance_raw_scan & calculates attendance_daily_result
-  public async triggerScannerSync(machineNo?: number): Promise<{ totalRead: number; totalNew: number; duplicates: number; processedCount: number }> {
-    if (!this.state.personnel || this.state.personnel.length === 0) {
-      this.state.personnel = INITIAL_PERSONNEL;
-    }
-
-    // 1. Call Backend to sync from physical CMiF68S / socket and insert directly to MySQL
+  // Reads scanner via C# Standalone CLI (ScannerSyncCli.exe) -> attendance_raw_scan & calculates attendance_daily_result (N1, N2, N3, N5)
+  public async triggerScannerSync(machineNo?: number, options?: { days?: number; preview?: boolean }): Promise<{ totalRead: number; totalNew: number; duplicates: number; processedCount: number; message?: string }> {
+    // 1. Call Backend to trigger ScannerSyncCli.exe via execFile
     let backendSyncResult: any = null;
     try {
-      backendSyncResult = await apiClient.syncFromScanners(machineNo, '2026-10-14');
+      backendSyncResult = await apiClient.syncFromScanners(machineNo, options);
     } catch (e) {
       console.warn('Backend scanner sync request warning:', e);
     }
 
-    // 2. Local fallback sync if backend was unreachable
-    const targets = machineNo 
-      ? this.state.scanners.filter(s => s.machineNo === machineNo && s.enabled)
-      : this.state.scanners.filter(s => s.enabled);
-
-    let grandTotalRead = backendSyncResult?.totalRead || 0;
-    let grandTotalNew = backendSyncResult?.totalNew || 0;
-    let grandDuplicates = backendSyncResult?.duplicates || 0;
+    const grandTotalRead = backendSyncResult?.totalRead || 0;
+    const grandTotalNew = backendSyncResult?.totalNew || 0;
+    const grandDuplicates = backendSyncResult?.duplicates || 0;
     const now = formatDateTime();
 
-    if (!backendSyncResult?.success) {
-      // เมื่อไม่มีข้อมูลจาก Backend หรือเครื่องสแกนยังไม่มีสแกนใหม่
-      // ห้ามสุ่มสร้างข้อมูลปลอมไปทับฐานข้อมูลอย่างเด็ดขาดตามคำสั่งของผู้ใช้งาน
-      targets.forEach(scanner => {
-        scanner.lastSync = now;
-        const pendingCount = this.state.rawScans.filter(r => r.pushStatus === 'PENDING').length;
-        const syncLog: SyncLog = {
-          id: generateUniqueId(),
-          timestamp: now,
-          scannerId: scanner.id,
-          scannerName: scanner.name,
-          machineNo: scanner.machineNo,
-          ip: scanner.ip,
-          status: 'SUCCESS',
-          recordsTotal: grandTotalRead,
-          recordsNew: grandTotalNew,
-          recordsDuplicate: grandDuplicates,
-          recordsPending: pendingCount,
-          durationMs: 120,
-          message: `ตรวจสอบสถานะเครื่องสแกน #${scanner.machineNo} (${scanner.ip}) สำเร็จ ไม่มีการสุ่มสร้างข้อมูลทับ`
-        };
-        this.state.syncLogs = [syncLog, ...this.state.syncLogs];
-      });
+    // 2. ดึงสถานะเครื่องสแกนและบันทึกล่าสุดจาก N4 (/api/scanners/sync-log)
+    try {
+      const syncLogRes = await apiClient.getScannerSyncLog();
+      if (syncLogRes.success && Array.isArray(syncLogRes.machines)) {
+        this.state.scanners = this.state.scanners.map(s => {
+          const found = syncLogRes.machines.find((m: any) => m.machineNo === s.machineNo);
+          if (found) {
+            return {
+              ...s,
+              status: found.status === 'ONLINE' ? 'ONLINE' : (found.status === 'ERROR' ? 'OFFLINE' : s.status),
+              lastSync: found.lastSyncAt ? String(found.lastSyncAt).replace('T', ' ').substring(0, 19) : now,
+              lastError: found.lastError || undefined
+            };
+          }
+          return s;
+        });
+
+        if (syncLogRes.latestSync) {
+          const ls = syncLogRes.latestSync;
+          const syncLog: SyncLog = {
+            id: ls.id || generateUniqueId(),
+            timestamp: ls.created_at ? String(ls.created_at).replace('T', ' ').substring(0, 19) : now,
+            scannerId: ls.machine_no || 1,
+            scannerName: `เครื่องสแกน #${ls.machine_no || 'ALL'}`,
+            machineNo: ls.machine_no || 1,
+            ip: '',
+            status: ls.exit_code === 0 ? 'SUCCESS' : 'FAILED',
+            recordsTotal: ls.total_read || grandTotalRead,
+            recordsNew: ls.total_new || grandTotalNew,
+            recordsDuplicate: ls.duplicates || grandDuplicates,
+            recordsPending: 0,
+            durationMs: ls.duration_ms || 0,
+            message: ls.error_message || `ซิงค์เครื่องสแกนสำเร็จ (อ่าน ${ls.total_read || grandTotalRead}, ใหม่ ${ls.total_new || grandTotalNew}, ซ้ำ ${ls.duplicates || grandDuplicates})`
+          };
+          this.state.syncLogs = [syncLog, ...this.state.syncLogs.slice(0, 49)];
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch N4 sync log:', e);
     }
 
     // 3. โหลดข้อมูลสดจาก MySQL เพื่ออัปเดตหน้าจอให้ตรงกับฐานข้อมูลจริง 100%
@@ -411,7 +418,8 @@ class AttendanceStore {
       totalRead: grandTotalRead,
       totalNew: grandTotalNew,
       duplicates: grandDuplicates,
-      processedCount: this.state.rawScans.length
+      processedCount: this.state.rawScans.length,
+      message: backendSyncResult?.message
     };
   }
 
@@ -1249,52 +1257,38 @@ class AttendanceStore {
       const scansRes = await apiClient.getRawScansFromDb(5000);
       if (scansRes.success && Array.isArray(scansRes.data)) {
         const rawMap = new Map<string, RawScan>();
-        scansRes.data
-          .filter((r: any) => {
-            if ((r.inOutMode ?? r.in_out_mode ?? 0) === 1) return false;
-            // คุณทวีสิทธิ์ (Fingle 57) ไม่ได้สแกนวันเสาร์-อาทิตย์ กรองสแกนจำลองเดิมออก
-            const fid = Number(r.fingleId || r.fingle_id || 0);
-            if (fid === 57) {
-              const dStr = (r.scanDateTime || (r.scan_date_time ? String(r.scan_date_time).replace('T', ' ').substring(0, 10) : '')).substring(0, 10);
-              if (dStr) {
-                const day = new Date(dStr).getDay();
-                if (day === 0 || day === 6) return false;
-              }
-            }
-            // เจ้าหน้าที่ท่านอื่นที่ขึ้นเวรเสาร์-อาทิตย์ (เช่น พยาบาล, ER) สแกนจริงเข้ามา ให้คงไว้ตามปกติ
-            return true;
-          })
-          .forEach((r: any) => {
-            const scanObj: RawScan = {
-              id: r.id,
-              machineNo: r.machineNo || r.machine_no || 1,
-              deviceIp: r.deviceIp || r.device_ip || '',
-              fingleId: r.fingleId || r.fingle_id || 0,
-              scanDateTime: r.scanDateTime || (r.scan_date_time ? String(r.scan_date_time).replace('T', ' ').substring(0, 19) : ''),
-              verifyMode: r.verifyMode ?? r.verify_mode ?? 1,
-              inOutMode: r.inOutMode ?? r.in_out_mode ?? 0,
-              personId: r.personId ?? r.person_id,
-              hrFullname: r.hrFullname || r.hr_fullname || '',
-              hrPositionName: r.hrPositionName || r.hr_position_name || '',
-              hrLeavelName: r.hrLeavelName || r.hr_leavel_name || '',
-              hrDepName: r.hrDepName || r.hr_dep_name || '',
-              hrDepSubName: r.hrDepSubName || r.hr_dep_sub_name || '',
-              hrPersonTypeName: r.hrPersonTypeName || r.hr_person_type_name || '',
-              hrPersonTypeId: r.hrPersonTypeId || r.hr_person_type_id,
-              hrDepartmentId: r.hrDepartmentId || r.hr_department_id,
-              hrDepartmentSubId: r.hrDepartmentSubId || r.hr_department_sub_id,
-              hrMapped: Boolean(r.hrMapped ?? r.hr_mapped ?? 1),
-              pushStatus: r.pushStatus || r.push_status || 'PENDING',
-              pushedAt: r.pushedAt || r.pushed_at,
-              pushedBy: r.pushedBy || r.pushed_by,
-              pushBatchId: r.pushBatchId || r.push_batch_id,
-              pushError: r.pushError || r.push_error,
-              receivedAt: r.receivedAt || r.received_at || formatDateTime()
-            };
-            // Strict Unique Key: machineNo + fingleId + scanDateTime (ทับข้อมูลเดิม ไม่ซ้ำซ้อน)
-            const uniqueKey = `${scanObj.machineNo}_${scanObj.fingleId}_${scanObj.scanDateTime}`;
-            rawMap.set(uniqueKey, scanObj);
-          });
+        scansRes.data.forEach((r: any) => {
+          const scanObj: RawScan = {
+            id: r.id,
+            machineNo: r.machineNo || r.machine_no || 1,
+            deviceIp: r.deviceIp || r.device_ip || '',
+            fingleId: r.fingleId || r.fingle_id || 0,
+            scanDateTime: r.scanDateTime || (r.scan_date_time ? String(r.scan_date_time).replace('T', ' ').substring(0, 19) : ''),
+            verifyMode: r.verifyMode ?? r.verify_mode ?? 1,
+            inOutMode: r.inOutMode ?? r.in_out_mode ?? 0,
+            source: r.source || 'DEVICE',
+            personId: r.personId ?? r.person_id,
+            hrFullname: r.hrFullname || r.hr_fullname || '',
+            hrPositionName: r.hrPositionName || r.hr_position_name || '',
+            hrLeavelName: r.hrLeavelName || r.hr_leavel_name || '',
+            hrDepName: r.hrDepName || r.hr_dep_name || '',
+            hrDepSubName: r.hrDepSubName || r.hr_dep_sub_name || '',
+            hrPersonTypeName: r.hrPersonTypeName || r.hr_person_type_name || '',
+            hrPersonTypeId: r.hrPersonTypeId || r.hr_person_type_id,
+            hrDepartmentId: r.hrDepartmentId || r.hr_department_id,
+            hrDepartmentSubId: r.hrDepartmentSubId || r.hr_department_sub_id,
+            hrMapped: Boolean(r.hrMapped ?? r.hr_mapped ?? 1),
+            pushStatus: r.pushStatus || r.push_status || 'PENDING',
+            pushedAt: r.pushedAt || r.pushed_at,
+            pushedBy: r.pushedBy || r.pushed_by,
+            pushBatchId: r.pushBatchId || r.push_batch_id,
+            pushError: r.pushError || r.push_error,
+            receivedAt: r.receivedAt || r.received_at || formatDateTime()
+          };
+          // Strict Unique Key: fingleId + scanDateTime (ตรงกับ Reader R8 และ HOSOffice)
+          const uniqueKey = `${scanObj.fingleId}_${scanObj.scanDateTime}`;
+          rawMap.set(uniqueKey, scanObj);
+        });
 
         this.state.rawScans = Array.from(rawMap.values()).sort(
           (a, b) => (b.scanDateTime || '').localeCompare(a.scanDateTime || '')
@@ -1359,7 +1353,7 @@ class AttendanceStore {
       }
 
       // 4. ดึงผลประมวลผลเวลาจาก MySQL attendance_daily_result
-      const todayStr = '2026-10-14';
+      const todayStr = formatDate(new Date());
       try {
         const dailyRes = await apiClient.getDailyAttendanceFromDb(todayStr);
         if (dailyRes.success && Array.isArray(dailyRes.data) && dailyRes.data.length > 0) {
@@ -1492,31 +1486,23 @@ class AttendanceStore {
     }
   }
 
-  // ชุดข้อมูลบุคลากรมาตรฐาน โรงพยาบาลสามชุก สำหรับนำเข้าอัตโนมัติ (ไม่ต้องคีย์มือ)
-  public static readonly HOSPITAL_MASTER_PERSONNEL_ROWS: HosofficePersonRow[] = [
-    { ID: 57, FINGLE_ID: 57, HR_CID: '3720100123456', FULLNAME: 'นายทวีสิทธิ์ พุ่มพฤกษ์', HR_POSITION_NAME: 'นักวิชาการคอมพิวเตอร์', HR_LEVEL_NAME: 'ปฏิบัติการ', HR_DEPARTMENT_NAME: 'กลุ่มงานสุขภาพดิจิทัล', HR_DEPARTMENT_SUB: 'งานสารสนเทศ', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 79, FINGLE_ID: 79, HR_CID: '3720100123455', FULLNAME: 'นางสาวกฤษณา กลิ่นมณฑา', HR_POSITION_NAME: 'พยาบาลวิชาชีพ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานผู้ป่วยใน', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 87, FINGLE_ID: 87, HR_CID: '3720100123470', FULLNAME: 'นางสาวกมลรัตน์ สดคมขำ', HR_POSITION_NAME: 'พนักงานบริการ', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานอุบัติเหตุและฉุกเฉิน', HR_DEPARTMENT_SUB: 'งานผู้ป่วยอุบัติเหตุ', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 142, FINGLE_ID: 142, HR_CID: '3720100123471', FULLNAME: 'นายเอกสิทธิ์ ทับแสงศรี', HR_POSITION_NAME: 'พนักงานบริการ', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานสุขาภิบาล', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 6, FINGLE_ID: 6, HR_CID: '3720100123472', FULLNAME: 'นายเอกภพ สว่างศรี', HR_POSITION_NAME: 'พนักงานขับรถยนต์', HR_LEVEL_NAME: 'ชำนาญงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานยานพาหนะ', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 101, FINGLE_ID: 101, HR_CID: '3720100123457', FULLNAME: 'พว.สุดารัตน์ พยาบาลดี', HR_POSITION_NAME: 'พยาบาลวิชาชีพชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานผู้ป่วยนอก', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 102, FINGLE_ID: 102, HR_CID: '3720100123458', FULLNAME: 'นพ.สมชาย รักษาดี', HR_POSITION_NAME: 'นายแพทย์ชำนาญการพิเศษ', HR_LEVEL_NAME: 'ชำนาญการพิเศษ', HR_DEPARTMENT_NAME: 'กลุ่มงานการแพทย์', HR_DEPARTMENT_SUB: 'งานอายุรกรรม', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 103, FINGLE_ID: 103, HR_CID: '3720100123459', FULLNAME: 'นางสาวพิมพ์ใจ มีสุข', HR_POSITION_NAME: 'เจ้าพนักงานธุรการปฏิบัติงาน', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานสารบรรณ', HR_PERSON_TYPE_NAME: 'ลูกจ้างประจำ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 104, FINGLE_ID: 104, HR_CID: '3720100123460', FULLNAME: 'นายวีระพล ช่างซ่อม', HR_POSITION_NAME: 'นายช่างเทคนิค', HR_LEVEL_NAME: 'ปฏิบัติงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานซ่อมบำรุง', HR_PERSON_TYPE_NAME: 'พนักงานราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 105, FINGLE_ID: 105, HR_CID: '3720100123461', FULLNAME: 'ภก.ธีรพงศ์ เภสัชกร', HR_POSITION_NAME: 'เภสัชกรชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานเภสัชกรรม', HR_DEPARTMENT_SUB: 'งานเภสัชกรรมคลินิก', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 106, FINGLE_ID: 106, HR_CID: '3720100123462', FULLNAME: 'นางสาวกานดา สุขสวัสดิ์', HR_POSITION_NAME: 'นักจัดการงานทั่วไปชำนาญการ', HR_LEVEL_NAME: 'ชำนาญการ', HR_DEPARTMENT_NAME: 'กลุ่มงานบริหารทั่วไป', HR_DEPARTMENT_SUB: 'งานบุคคล', HR_PERSON_TYPE_NAME: 'พนักงานกระทรวงสาธารณสุข', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 107, FINGLE_ID: 107, HR_CID: '3720100123463', FULLNAME: 'นายอนุชา ปลอดภัย', HR_POSITION_NAME: 'เจ้าพนักงานสาธารณสุข', HR_LEVEL_NAME: 'ชำนาญงาน', HR_DEPARTMENT_NAME: 'กลุ่มงานเวชกรรมสังคม', HR_DEPARTMENT_SUB: 'งานส่งเสริมสุขภาพ', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' },
-    { ID: 108, FINGLE_ID: 108, HR_CID: '3720100123464', FULLNAME: 'พว.มาลี บุญรักษา', HR_POSITION_NAME: 'พยาบาลวิชาชีพปฏิบัติการ', HR_LEVEL_NAME: 'ปฏิบัติการ', HR_DEPARTMENT_NAME: 'กลุ่มงานการพยาบาล', HR_DEPARTMENT_SUB: 'งานอุบัติเหตุฉุกเฉิน', HR_PERSON_TYPE_NAME: 'ข้าราชการ', HR_STATUS_ID: '01', HR_STATUS_NAME: 'ปฏิบัติราชการ' }
-  ];
-
   // ซิงค์ข้อมูลบุคลากรจาก HOSOffice ตามคำสั่ง SQL:
   // เช็คว่าข้อมูลไหน ดึงแล้ว ไม่ต้องดึงซ้ำ (skipped)
   // แต่ถ้า 6 ฟิลด์หลัก (FULLNAME, HR_POSITION_NAME, HR_LEVEL_NAME, HR_DEPARTMENT_SUB, HR_PERSON_TYPE_NAME, HR_STATUS_NAME) ใน hosoffice เปลี่ยนหรือไม่ตรงกับฐานเรา ให้เปลี่ยนให้ตรงกับ hosoffice!
   public syncPersonnelFromHosoffice(user: User, customRows?: HosofficePersonRow[]): PersonnelSyncResult {
     if (user.role !== 'ADMIN') throw new Error('ไม่อนุญาต: สิทธิ์เฉพาะ ADMIN');
-    let sourceRows = customRows || [];
+    const sourceRows = customRows || [];
     if (sourceRows.length === 0) {
-      sourceRows = [...AttendanceStore.HOSPITAL_MASTER_PERSONNEL_ROWS];
+      return { 
+        totalFromHosoffice: 0,
+        insertedCount: 0,
+        updatedCount: 0,
+        skippedCount: 0,
+        inserted: [], 
+        updated: [], 
+        skipped: [],
+        syncedAt: formatDateTime()
+      };
     }
     const now = formatDateTime();
 
@@ -2045,307 +2031,7 @@ class AttendanceStore {
   }
 
   /**
-   * สร้างข้อมูลสแกนตัวอย่างทั้งโรงพยาบาล (ปกติ/สาย/ออกก่อน) และบันทึกลง MySQL ทันที
-   */
-  public async seedRealisticMonthScans(month: string = '2026-10', days: number = 14): Promise<{ success: boolean; message: string }> {
-    return this.seedRealisticScansForScope({
-      mode: 'MONTHLY',
-      month,
-      days
-    });
-  }
-
-  /**
-   * สร้างข้อมูลสแกนจำลองตามเงื่อนไข (รายวัน, รายเดือน, รายปี, หรือช่วงวันที่)
-   */
-  public async seedRealisticScansForScope(options: {
-    mode: 'DAILY' | 'MONTHLY' | 'YEARLY' | 'CUSTOM';
-    date?: string;
-    month?: string;
-    year?: string;
-    dateFrom?: string;
-    dateTo?: string;
-    days?: number;
-    machineNos?: number[];
-    strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
-    preview?: boolean;
-  }): Promise<{ 
-    success: boolean; 
-    message: string; 
-    preview?: boolean;
-    totalFound?: number;
-    newCount?: number;
-    duplicateCount?: number;
-    strategy?: string;
-    sampleNew?: RawScan[];
-    sampleDuplicates?: RawScan[];
-    totalInserted?: number;
-    totalUpdated?: number;
-    totalSkipped?: number;
-  }> {
-    try {
-      const dates: string[] = [];
-      const nowObj = new Date();
-      const currentYear = nowObj.getFullYear();
-      const currentMonth = String(nowObj.getMonth() + 1).padStart(2, '0');
-      const currentDay = nowObj.getDate();
-      const todayStr = `${currentYear}-${currentMonth}-${String(currentDay).padStart(2, '0')}`;
-
-      if (options.mode === 'DAILY' || (options.mode as string) === 'TODAY' || (options.mode as string) === 'DATE') {
-        dates.push(options.date || todayStr);
-      } else if (options.mode === 'MONTHLY' || (options.mode as string) === 'MONTH') {
-        const m = options.month || '2026-10';
-        const [yStr, mStr] = m.split('-');
-        const yNum = Number(yStr);
-        const mNum = Number(mStr);
-        const daysInMonth = new Date(yNum, mNum, 0).getDate();
-        // ถ้าเป็นเดือนปัจจุบัน ให้ดึงถึงวันปัจจุบัน (เช่น วันที่ 22 ต.ค. 2026) หรือครบ 31 วันตามที่มีการบันทึก
-        const maxDay = (yNum === currentYear && mStr === currentMonth) ? Math.min(daysInMonth, Math.max(22, currentDay)) : daysInMonth;
-        for (let d = 1; d <= maxDay; d++) {
-          dates.push(`${m}-${String(d).padStart(2, '0')}`);
-        }
-      } else if (options.mode === 'YEARLY' || (options.mode as string) === 'YEAR') {
-        const y = Number(options.year || '2026') > 2400 ? Number(options.year) - 543 : Number(options.year || '2026');
-        for (let m = 1; m <= 12; m++) {
-          const mStr = `${y}-${String(m).padStart(2, '0')}`;
-          for (let d = 1; d <= 5; d++) {
-            dates.push(`${mStr}-${String(d).padStart(2, '0')}`);
-          }
-        }
-      } else if ((options.mode === 'CUSTOM' || (options.mode as string) === 'RANGE') && options.dateFrom && options.dateTo) {
-        let cur = new Date(options.dateFrom);
-        const end = new Date(options.dateTo);
-        let count = 0;
-        while (cur <= end && count < 62) {
-          dates.push(cur.toISOString().substring(0, 10));
-          cur.setDate(cur.getDate() + 1);
-          count++;
-        }
-      } else {
-        dates.push(todayStr);
-      }
-
-      // หากผู้ใช้ลบข้อมูลในฐานไปหมด หรือยังไม่มีรายชื่อบุคลากร ให้ใช้รายชื่อบุคลากรมาตรฐานโรงพยาบาลสามชุกทันที
-      let effectivePersonnel: HrPerson[] = (this.state.personnel || []).filter(p => p.status === 'ACTIVE' || !p.status);
-      if (effectivePersonnel.length === 0) {
-        effectivePersonnel = [
-          { personId: 57, fingleId: 57, hrCid: '3720100123456', hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hrPositionName: 'นักวิชาการคอมพิวเตอร์', hrLevelName: 'ปฏิบัติการ', hrDepName: 'กลุ่มงานสุขภาพดิจิทัล', hrDepSubName: 'งานสารสนเทศ', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 3, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 79, fingleId: 79, hrCid: '3720100123455', hrFullname: 'นางสาวกฤษณา กลิ่นมณฑา', hrPositionName: 'พยาบาลวิชาชีพ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานผู้ป่วยใน', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 87, fingleId: 87, hrCid: '3720100123470', hrFullname: 'นางสาวกมลรัตน์ สดคมขำ', hrPositionName: 'พนักงานบริการ', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานอุบัติเหตุและฉุกเฉิน', hrDepSubName: 'งานผู้ป่วยอุบัติเหตุ', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 2, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 142, fingleId: 142, hrCid: '3720100123471', hrFullname: 'นายเอกสิทธิ์ ทับแสงศรี', hrPositionName: 'พนักงานบริการ', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานสุขาภิบาล', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 3, hrDepartmentSubId: 2, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 6, fingleId: 6, hrCid: '3720100123472', hrFullname: 'นายเอกภพ สว่างศรี', hrPositionName: 'พนักงานขับรถยนต์', hrLevelName: 'ชำนาญงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานยานพาหนะ', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 3, hrDepartmentSubId: 3, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 101, fingleId: 101, hrCid: '3720100123457', hrFullname: 'พว.สุดารัตน์ พยาบาลดี', hrPositionName: 'พยาบาลวิชาชีพชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานผู้ป่วยนอก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 102, fingleId: 102, hrCid: '3720100123458', hrFullname: 'นพ.สมชาย รักษาดี', hrPositionName: 'นายแพทย์ชำนาญการพิเศษ', hrLevelName: 'ชำนาญการพิเศษ', hrDepName: 'กลุ่มงานการแพทย์', hrDepSubName: 'งานอายุรกรรม', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 2, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 103, fingleId: 103, hrCid: '3720100123459', hrFullname: 'นางสาวพิมพ์ใจ มีสุข', hrPositionName: 'เจ้าพนักงานธุรการปฏิบัติงาน', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานสารบรรณ', hrPersonTypeName: 'ลูกจ้างประจำ', hrPersonTypeId: 4, hrDepartmentId: 3, hrDepartmentSubId: 2, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 104, fingleId: 104, hrCid: '3720100123460', hrFullname: 'นายวีระพล ช่างซ่อม', hrPositionName: 'นายช่างเทคนิค', hrLevelName: 'ปฏิบัติงาน', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานซ่อมบำรุง', hrPersonTypeName: 'พนักงานราชการ', hrPersonTypeId: 3, hrDepartmentId: 3, hrDepartmentSubId: 3, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 105, fingleId: 105, hrCid: '3720100123461', hrFullname: 'ภก.ธีรพงศ์ เภสัชกร', hrPositionName: 'เภสัชกรชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานเภสัชกรรม', hrDepSubName: 'งานเภสัชกรรมคลินิก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 4, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 106, fingleId: 106, hrCid: '3720100123462', hrFullname: 'นางสาวกานดา สุขสวัสดิ์', hrPositionName: 'นักจัดการงานทั่วไปชำนาญการ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานบริหารทั่วไป', hrDepSubName: 'งานบุคคล', hrPersonTypeName: 'พนักงานกระทรวงสาธารณสุข', hrPersonTypeId: 2, hrDepartmentId: 3, hrDepartmentSubId: 4, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 107, fingleId: 107, hrCid: '3720100123463', hrFullname: 'นายอนุชา ปลอดภัย', hrPositionName: 'เจ้าพนักงานสาธารณสุข', hrLevelName: 'ชำนาญงาน', hrDepName: 'กลุ่มงานเวชกรรมสังคม', hrDepSubName: 'งานส่งเสริมสุขภาพ', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 5, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 108, fingleId: 108, hrCid: '3720100123464', hrFullname: 'พว.มาลี บุญรักษา', hrPositionName: 'พยาบาลวิชาชีพปฏิบัติการ', hrLevelName: 'ปฏิบัติการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานอุบัติเหตุฉุกเฉิน', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 2, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' },
-          { personId: 260, fingleId: 260, hrCid: '3720600117918', hrFullname: 'นางกัญภร ไชยพัชรกุล', hrPositionName: 'พยาบาลวิชาชีพ', hrLevelName: 'ชำนาญการ', hrDepName: 'กลุ่มงานการพยาบาล', hrDepSubName: 'งานการพยาบาลผู้ป่วยนอก', hrPersonTypeName: 'ข้าราชการ', hrPersonTypeId: 1, hrDepartmentId: 1, hrDepartmentSubId: 1, hrStatusId: '01', hrStatusName: 'ปฏิบัติราชการ', status: 'ACTIVE' }
-        ];
-        this.state.personnel = effectivePersonnel;
-      }
-
-      const scannerIps = ['192.168.111.163', '192.168.111.164', '192.168.111.165'];
-      const allowedMachines = options.machineNos && options.machineNos.length > 0 ? options.machineNos : [1, 2, 3];
-      const newScans: RawScan[] = [];
-      const now = formatDateTime();
-
-      for (const dateStr of dates) {
-        const dayOfWeek = new Date(dateStr).getDay();
-        for (let pIdx = 0; pIdx < effectivePersonnel.length; pIdx++) {
-          const p = effectivePersonnel[pIdx];
-          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-          if (isWeekend) continue; // วันเสาร์-อาทิตย์ เป็นวันหยุดราชการ เจ้าหน้าที่ไม่มีการสแกนนิ้ว
-
-          const rand = (p.personId * 17 + pIdx * 13 + dateStr.charCodeAt(9)) % 100;
-          if (rand < 3) continue; // ขาด/ลา
-
-          let inH = 8;
-          let inM = 0;
-          let inS = (p.personId * 7 + pIdx * 11) % 60;
-
-          // แยกประเภทเจ้าหน้าที่: พยาบาลและ ER มี 3 ผลัด (เช้า/บ่าย/ดึก) | สายสำนักงาน/ไอที/คุณทวีสิทธิ์ กะเช้า
-          const isNurseOrEr = (p.hrDepName || '').includes('พยาบาล') || 
-                              (p.hrDepName || '').includes('ฉุกเฉิน') || 
-                              (p.hrPositionName || '').includes('พยาบาล');
-
-          if (isNurseOrEr) {
-            const shiftSlot = (p.personId * 3 + dayOfWeek * 5 + pIdx * 7) % 3;
-            if (shiftSlot === 1) {
-              // กะบ่าย (เริ่มตรวจ 15:30 น., เกณฑ์เริ่ม 16:00 น.)
-              if (rand >= 90) {
-                inH = 16;
-                inM = 5 + (rand % 25); // สายหลัง 16:00 น.
-              } else {
-                inH = 15;
-                inM = 30 + (rand % 30); // ตรงเวลา 15:30 - 15:59 น.
-              }
-            } else if (shiftSlot === 2) {
-              // กะดึก (เริ่มตรวจ 23:30 น., เกณฑ์เริ่ม 24:00 น.)
-              if (rand >= 90) {
-                inH = 0;
-                inM = 5 + (rand % 25); // สายหลัง 24:00 น. (00:05 - 00:29 น.)
-              } else {
-                inH = 23;
-                inM = 30 + (rand % 29); // ตรงเวลา 23:30 - 23:58 น.
-              }
-            } else {
-              // กะเช้า (เกณฑ์เริ่ม 08:15 น.)
-              if (rand >= 90) {
-                inH = 8;
-                inM = 16 + (rand % 25); // สายหลัง 08:15 น.
-              } else {
-                inH = 7;
-                inM = 45 + (rand % 15); // ตรงเวลา 07:45 - 08:14 น.
-                if (inM >= 60) { inH = 8; inM -= 60; }
-              }
-            }
-          } else {
-            // สายงานสำนักงาน / ไอที / คุณทวีสิทธิ์ (Fingle 57) เข้ากะเช้าตามปกติ
-            if (rand >= 90) {
-              inH = 8;
-              inM = 16 + (rand % 20); // สาย
-            } else {
-              inH = 7;
-              inM = 45 + (rand % 15); // ตรงเวลา
-              if (inM >= 60) { inH = 8; inM -= 60; }
-            }
-          }
-
-          let inTimeStr = `${dateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
-          
-          const mNo = allowedMachines[(p.personId + pIdx) % allowedMachines.length];
-          const sIp = scannerIps[mNo - 1] || '192.168.111.163';
-
-          // กรณีพิเศษ: นายทวีสิทธิ์ พุ่มพฤกษ์ (fingleId: 57)
-          if (p.fingleId === 57 && dateStr === '2026-10-20') {
-            inTimeStr = '2026-10-20 08:12:00';
-            // สแกนเช้าเวลา 08:12:00 ครั้งเดียวเท่านั้น
-            newScans.push({
-              id: generateUniqueId(),
-              machineNo: 2,
-              deviceIp: '192.168.111.164',
-              fingleId: 57,
-              scanDateTime: '2026-10-20 08:12:00',
-              verifyMode: 1,
-              inOutMode: 0,
-              personId: p.personId,
-              hrFullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์',
-              hrPositionName: 'นักวิชาการคอมพิวเตอร์',
-              hrDepName: 'กลุ่มงานสุขภาพดิจิทัล',
-              hrPersonTypeName: 'ข้าราชการ',
-              hrMapped: true,
-              pushStatus: 'PUSHED',
-              receivedAt: now
-            });
-            continue;
-          }
-
-          newScans.push({
-            id: generateUniqueId(),
-            machineNo: mNo,
-            deviceIp: sIp,
-            fingleId: p.fingleId,
-            scanDateTime: inTimeStr,
-            verifyMode: 1,
-            inOutMode: 0,
-            personId: p.personId,
-            hrFullname: p.hrFullname,
-            hrPositionName: p.hrPositionName,
-            hrDepName: p.hrDepName,
-            hrPersonTypeName: p.hrPersonTypeName,
-            hrMapped: true,
-            pushStatus: 'PENDING',
-            receivedAt: now
-          });
-        }
-      }
-
-      // ตรวจสอบความซ้ำกับรายการที่มีอยู่แล้วในระบบ (Unique Key: machineNo + fingleId + scanDateTime)
-      const existingMap = new Map<string, RawScan>();
-      for (const s of this.state.rawScans) {
-        existingMap.set(`${s.machineNo || 1}_${s.fingleId}_${s.scanDateTime}`, s);
-      }
-
-      const newItems: RawScan[] = [];
-      const duplicateItems: RawScan[] = [];
-
-      for (const s of newScans) {
-        const key = `${s.machineNo || 1}_${s.fingleId}_${s.scanDateTime}`;
-        if (existingMap.has(key)) {
-          duplicateItems.push(s);
-        } else {
-          newItems.push(s);
-        }
-      }
-
-      // หากเป็นโหมด Preview ไม่บันทึกลง Store
-      if (options.preview) {
-        return {
-          success: true,
-          preview: true,
-          totalFound: newScans.length,
-          newCount: newItems.length,
-          duplicateCount: duplicateItems.length,
-          strategy: options.strategy || 'SKIP_DUPLICATES',
-          sampleNew: newItems.slice(0, 5),
-          sampleDuplicates: duplicateItems.slice(0, 5),
-          message: `ตรวจสอบล่วงหน้าพบข้อมูล ${newScans.length} รายการ: ข้อมูลใหม่ +${newItems.length} รายการ | มีในระบบแล้ว (ซ้ำ) ${duplicateItems.length} รายการ`
-        };
-      }
-
-      const strategy = options.strategy || 'SKIP_DUPLICATES';
-      let insertedCount = 0;
-      let updatedCount = 0;
-      let skippedCount = duplicateItems.length;
-
-      if (strategy === 'OVERWRITE') {
-        // อัปเดตทับข้อมูลเดิม (Strict Overwrite)
-        for (const s of newScans) {
-          const key = `${s.machineNo || 1}_${s.fingleId}_${s.scanDateTime}`;
-          if (existingMap.has(key)) updatedCount++;
-          else insertedCount++;
-          existingMap.set(key, s);
-        }
-        skippedCount = 0;
-      } else {
-        // SKIP_DUPLICATES: เพิ่มเฉพาะข้อมูลใหม่ ไม่ทับข้อมูลเดิม
-        for (const s of newItems) {
-          existingMap.set(`${s.machineNo || 1}_${s.fingleId}_${s.scanDateTime}`, s);
-          insertedCount++;
-        }
-      }
-
-      this.state.rawScans = Array.from(existingMap.values()).sort(
-        (a, b) => new Date(b.scanDateTime).getTime() - new Date(a.scanDateTime).getTime()
-      );
-
-      // บันทึกลง Backend MySQL
-      apiClient.batchAddRawScans(newItems).catch(() => {});
-      this.state.cachedDailyResults = {};
-      this.saveState();
-      this.notify();
-
-      return {
-        success: true,
-        strategy,
-        totalFound: newScans.length,
-        totalInserted: insertedCount,
-        totalUpdated: updatedCount,
-        totalSkipped: skippedCount,
-        message: strategy === 'SKIP_DUPLICATES'
-          ? `ดึงเฉพาะข้อมูลใหม่สำเร็จ: บันทึกข้อมูลใหม่ +${insertedCount} รายการ (ข้ามรายการซ้ำ ${skippedCount} รายการ ไม่ทับของเดิม)`
-          : `อัปเดตข้อมูลสำเร็จ: บันทึกใหม่ +${insertedCount} รายการ และอัปเดตทับข้อมูลเดิม ${updatedCount} รายการ`
-      };
-    } catch (err: any) {
-      return { success: false, message: `เกิดข้อผิดพลาด: ${err.message}` };
-    }
-  }
-
-  /**
-   * ดึงข้อมูลสแกนแบบกำหนดเอง (Custom Scanner Sync: เลือกเครื่องสแกน, วันที่, ช่วงเวลา, รายเดือน, รายปี)
+   * ดึงข้อมูลสแกนแบบกำหนดเอง (Custom Scanner Sync: ส่งคำสั่งไปยัง Backend API เรียก Scanner Reader CLI หรือ HOSOffice)
    */
   public async syncScannersCustom(payload: {
     machineNos?: number[] | 'ALL';
@@ -2359,169 +2045,23 @@ class AttendanceStore {
     recalculate?: boolean;
     strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
     preview?: boolean;
+    syncSource?: 'SCANNERS' | 'HOSOFFICE';
   }): Promise<{ success: boolean; message: string; details?: any }> {
     try {
-      // 1. ลองเรียก Backend API พอร์ต 3002
-      let apiSucceededWithData = false;
-      try {
-        const apiRes = await apiClient.syncScannersCustom(payload);
-        if (apiRes?.success && (apiRes.totalInserted > 0 || apiRes.totalFound > 0 || payload.preview)) {
-          if (!payload.preview) {
-            await this.loadFromMySqlDb();
-          }
-          apiSucceededWithData = true;
-          return { success: true, message: apiRes.message, details: apiRes };
+      const apiRes = await apiClient.syncScannersCustom(payload);
+      if (apiRes?.success) {
+        if (!payload.preview) {
+          await this.loadFromMySqlDb();
         }
-      } catch (e) {
-        console.warn('Backend custom sync fallback:', e);
+        return { success: true, message: apiRes.message, details: apiRes };
       }
-
-      // 2. Client fallback generation (เมื่อฐานข้อมูลว่างเปล่า หรือ API คืนค่า 0 รายการ)
-      const machines = payload.machineNos === 'ALL' || !payload.machineNos 
-        ? [1, 2, 3] 
-        : (Array.isArray(payload.machineNos) ? payload.machineNos : [Number(payload.machineNos)]);
-
-      const seedRes: any = await this.seedRealisticScansForScope({
-        mode: (payload.mode === 'RANGE' ? 'CUSTOM' : payload.mode === 'TODAY' ? 'DAILY' : payload.mode === 'MONTH' ? 'MONTHLY' : payload.mode === 'YEAR' ? 'YEARLY' : payload.mode) as any,
-        date: payload.date,
-        dateFrom: payload.dateFrom,
-        dateTo: payload.dateTo,
-        month: payload.month,
-        year: payload.year,
-        machineNos: machines,
-        strategy: payload.strategy || 'SKIP_DUPLICATES',
-        preview: payload.preview
-      });
-
-      return {
-        success: true,
-        message: seedRes.message,
-        details: seedRes
+      return { 
+        success: false, 
+        message: apiRes?.message || 'ดึงข้อมูลไม่สำเร็จ', 
+        details: apiRes 
       };
     } catch (err: any) {
       return { success: false, message: `ดึงข้อมูลไม่สำเร็จ: ${err.message}` };
-    }
-  }
-
-  /**
-   * สร้างและนำเข้าประวัติสแกนมาตรฐานของ รพ.สามชุก เข้าสู่ระบบทันที (Direct Seed Scans)
-   * ใช้งานเมื่อต้องการสร้างประวัติสแกนครบทุกวันสำหรับเดือนที่เลือก (เช่น 2026-10) หรือเมื่อตารางในฐานว่างเปล่า
-   */
-  public async seedHospitalScansDirect(month: string = '2026-10'): Promise<{ success: boolean; message: string; count: number }> {
-    try {
-      const seedRes = await this.seedRealisticScansForScope({
-        mode: 'MONTHLY',
-        month,
-        machineNos: [1, 2, 3],
-        strategy: 'OVERWRITE'
-      });
-
-      this.state.cachedDailyResults = {};
-      this.saveState();
-      this.notify();
-
-      const totalCount = (seedRes.totalInserted || 0) + (seedRes.totalUpdated || 0);
-      return {
-        success: true,
-        count: totalCount,
-        message: `สร้างและนำเข้าประวัติสแกนของโรงพยาบาลสามชุก (${month}) จำนวน ${totalCount} รายการเรียบร้อยแล้ว!`
-      };
-    } catch (err: any) {
-      return { success: false, message: `ไม่สามารถสร้างข้อมูลได้: ${err.message}`, count: 0 };
-    }
-  }
-
-  /**
-   * สร้างประวัติสแกนสำหรับบุคลากรคนใดคนหนึ่งโดยเฉพาะ (เมื่อไม่มีข้อมูลหรือเพิ่งล้างฐาน)
-   */
-  public async seedScansForPerson(personId: number, fingleId: number, month: string = '2026-10'): Promise<{ success: boolean; count: number; message: string }> {
-    try {
-      const person = this.state.personnel.find(p => p.personId === personId || p.fingleId === fingleId) || {
-        personId,
-        fingleId,
-        hrFullname: 'เจ้าหน้าที่',
-        hrPositionName: 'เจ้าหน้าที่',
-        hrDepName: 'โรงพยาบาลสามชุก',
-        hrPersonTypeName: 'ข้าราชการ'
-      };
-
-      const [y, m] = month.split('-').map(Number);
-      const daysInMonth = new Date(y, m, 0).getDate();
-      const newItems: RawScan[] = [];
-      const now = formatDateTime();
-
-      // ล้างข้อมูลสแกนเดิมของบุคคลนี้ในเดือนดังกล่าว (รวมถึงสแกนกลับ 16:xx น. ที่เคยมี)
-      this.state.rawScans = this.state.rawScans.filter(s => {
-        const matches = Number(s.fingleId) === Number(fingleId) || (s.personId && Number(s.personId) === Number(personId));
-        const sMonth = (s.scanDateTime || '').replace('T', ' ').substring(0, 7);
-        return !(matches && sMonth === month);
-      });
-
-      for (let day = 1; day <= daysInMonth; day++) {
-        const curDateStr = `${month}-${String(day).padStart(2, '0')}`;
-        const dayOfWeek = new Date(curDateStr).getDay();
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-        if (isWeekend) continue;
-
-        const rand = (fingleId * 17 + day * 13) % 100;
-        if (rand < 2) continue; // ลา ~2%
-
-        let inH = 7;
-        let inM = 45 + (rand % 25);
-        if (inM >= 60) {
-          inH = 8;
-          inM -= 60;
-        }
-        if (rand >= 90) {
-          inH = 8;
-          inM = 16 + (rand % 15);
-        }
-        const inS = (rand * 7) % 60;
-        const inTimeStr = `${curDateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
-
-        const machineNo = ((fingleId + day) % 3) + 1;
-        const ips = ['192.168.111.163', '192.168.111.164', '192.168.111.165'];
-
-        // สแกนเข้าอย่างเดียวเท่านั้น ตามข้อเท็จจริงของเจ้าหน้าที่ รพ.สามชุก ที่ไม่มีการสแกนกลับ
-        newItems.push({
-          id: generateUniqueId(),
-          machineNo,
-          deviceIp: ips[machineNo - 1],
-          fingleId,
-          scanDateTime: inTimeStr,
-          verifyMode: 1,
-          inOutMode: 0,
-          personId,
-          hrFullname: person.hrFullname,
-          hrPositionName: person.hrPositionName,
-          hrDepName: person.hrDepName,
-          hrPersonTypeName: person.hrPersonTypeName,
-          hrMapped: true,
-          pushStatus: 'PENDING',
-          receivedAt: now
-        });
-      }
-
-      const existingKeySet = new Set(this.state.rawScans.map(s => `${s.fingleId}_${s.scanDateTime}`));
-      const toAdd = newItems.filter(s => !existingKeySet.has(`${s.fingleId}_${s.scanDateTime}`));
-
-      this.state.rawScans = [...toAdd, ...this.state.rawScans].sort(
-        (a, b) => b.scanDateTime.localeCompare(a.scanDateTime)
-      );
-
-      this.state.cachedDailyResults = {};
-      this.saveState();
-      this.notify();
-
-      apiClient.batchAddRawScans(toAdd).catch(() => {});
-
-      return {
-        success: true,
-        count: toAdd.length,
-        message: `สร้างและบันทึกประวัติการสแกนของ ${person.hrFullname} จำนวน ${toAdd.length} รายการเรียบร้อยแล้ว!`
-      };
-    } catch (err: any) {
-      return { success: false, count: 0, message: err.message || 'ไม่สามารถสร้างข้อมูลได้' };
     }
   }
 

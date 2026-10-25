@@ -104,6 +104,27 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
   const [uploadedFileSize, setUploadedFileSize] = useState<string | null>(null);
   const [uploadedFileInfo, setUploadedFileInfo] = useState<string | null>(null);
 
+  // Real DB Scanner Sync Logs from scanner_sync_log (N4, N5)
+  const [dbSyncLogs, setDbSyncLogs] = useState<any[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState<boolean>(false);
+
+  const fetchDbSyncLogs = React.useCallback(async () => {
+    setIsLoadingLogs(true);
+    try {
+      const res = await apiClient.getScannerSyncLogs(20);
+      if (res?.success && Array.isArray(res.data)) {
+        setDbSyncLogs(res.data);
+      }
+    } catch {}
+    finally {
+      setIsLoadingLogs(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    fetchDbSyncLogs();
+  }, [fetchDbSyncLogs, isSyncing]);
+
   const handleOpenAddModal = () => {
     const nextMachineNo = state.scanners.length > 0 
       ? Math.max(...state.scanners.map(s => s.machineNo)) + 1 
@@ -791,6 +812,119 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
                 ดูการตั้งค่าทั้งหมด ➔
               </button>
             </div>
+          </div>
+
+          {/* Scanner Sync Logs (N4, N5: Real Database Audit Log) */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-teal-600" />
+                  <span>ประวัติการ Sync เครื่องสแกน (Audit Log ใน MySQL ตาราง scanner_sync_log)</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  บันทึกประวัติการเรียก ScannerSyncCli.exe ทุกรอบทั้งแบบ Auto และ Manual พร้อมจำนวนรายการที่พบและวันที่คำนวณผลใหม่
+                </p>
+              </div>
+
+              <button
+                onClick={fetchDbSyncLogs}
+                disabled={isLoadingLogs}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 cursor-pointer transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLogs ? 'animate-spin text-teal-600' : ''}`} />
+                <span>รีเฟรชประวัติ Log</span>
+              </button>
+            </div>
+
+            {dbSyncLogs.length === 0 ? (
+              <div className="text-center py-8 text-xs text-slate-400">
+                ยังไม่มีประวัติการ Sync ในตาราง scanner_sync_log กดปุ่ม "Sync ทุกเครื่อง" หรือ "ดึงข้อมูลตามเงื่อนไข" เพื่อเริ่มการดึงข้อมูล
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 font-semibold">
+                      <th className="py-2.5 px-3">เวลาที่ Sync</th>
+                      <th className="py-2.5 px-3">โหมด</th>
+                      <th className="py-2.5 px-3">เครื่อง</th>
+                      <th className="py-2.5 px-3">สถานะ</th>
+                      <th className="py-2.5 px-3 text-right">อ่านได้</th>
+                      <th className="py-2.5 px-3 text-right">รายการใหม่</th>
+                      <th className="py-2.5 px-3 text-right">รายการซ้ำ</th>
+                      <th className="py-2.5 px-3">วันที่คำนวณผลใหม่ (Affected Dates)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {dbSyncLogs.map((log: any) => {
+                      let parsedDates: string[] = [];
+                      if (log.affected_dates) {
+                        try {
+                          parsedDates = typeof log.affected_dates === 'string' ? JSON.parse(log.affected_dates) : log.affected_dates;
+                        } catch {
+                          parsedDates = [String(log.affected_dates)];
+                        }
+                      }
+                      const isSuccess = log.status === 'SUCCESS';
+                      return (
+                        <tr key={log.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="py-2.5 px-3 font-mono text-slate-700 whitespace-nowrap">
+                            {log.created_at ? new Date(log.created_at).toLocaleString('th-TH') : '-'}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-slate-100 text-slate-700 font-medium">
+                              {log.sync_mode}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-slate-800">
+                            {log.machine_no ? `เครื่อง ${log.machine_no}` : 'ทุกเครื่อง'}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {isSuccess ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                <CheckCircle className="w-3 h-3 text-emerald-600" />
+                                สำเร็จ
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200" title={log.error_message || ''}>
+                                <XCircle className="w-3 h-3 text-rose-600" />
+                                ล้มเหลว
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-800">
+                            {(log.total_read || 0).toLocaleString()}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-600">
+                            +{(log.total_new || 0).toLocaleString()}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono text-slate-400">
+                            {(log.duplicates || 0).toLocaleString()}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            {parsedDates && parsedDates.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {parsedDates.slice(0, 5).map((d: string) => (
+                                  <span key={d} className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-teal-50 text-teal-700 border border-teal-200">
+                                    {d}
+                                  </span>
+                                ))}
+                                {parsedDates.length > 5 && (
+                                  <span className="text-[10px] text-slate-400">+{parsedDates.length - 5} วัน</span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 text-[11px]">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

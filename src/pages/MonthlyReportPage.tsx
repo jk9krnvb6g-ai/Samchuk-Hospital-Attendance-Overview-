@@ -161,30 +161,6 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
     return `ช่วงวันที่ ${dateFrom} ถึง ${dateTo}`;
   };
 
-  // Seed scans for the active mode
-  const handleSeedForCurrentScope = async () => {
-    setIsProcessing(true);
-    setActionMsg(null);
-    try {
-      const res = await attendanceStore.seedRealisticScansForScope({
-        mode: reportMode,
-        date: selectedDay,
-        month: selectedMonth,
-        year: selectedYear,
-        dateFrom,
-        dateTo
-      });
-      if (res.success) {
-        setActionMsg({ type: 'success', text: res.message });
-      } else {
-        setActionMsg({ type: 'error', text: res.message });
-      }
-    } catch (e: any) {
-      setActionMsg({ type: 'error', text: e.message });
-    } finally {
-      setIsProcessing(false);
-    }
-  };
 
   // Import from HosOffice
   const handleImportHosoffice = async () => {
@@ -341,16 +317,6 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
           >
             <RefreshCw className="w-3.5 h-3.5" />
             <span>⚡ ดึงข้อมูลจากเครื่องสแกน</span>
-          </button>
-
-          <button
-            onClick={handleSeedForCurrentScope}
-            disabled={isProcessing}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-lg shadow-xs cursor-pointer transition-colors disabled:opacity-50"
-            title="สร้างข้อมูลสแกนตัวอย่างจำลอง (ตรงเวลา/สาย) สำหรับช่วงเวลานี้"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-slate-950" />
-            <span>{isProcessing ? 'กำลังประมวลผล...' : '🧪 สร้างข้อมูลสแกน (ปกติ/สาย)'}</span>
           </button>
 
           <button

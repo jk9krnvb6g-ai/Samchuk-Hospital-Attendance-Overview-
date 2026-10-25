@@ -332,14 +332,19 @@ class ApiClientService {
   }
 
   /**
-   * สั่งให้ Backend ดึงข้อมูลสแกนจริงจากเครื่องสแกนและบันทึกลง MySQL ทันที
+   * สั่งให้ Backend ดึงข้อมูลสแกนจริงจากเครื่องสแกนผ่าน Reader CLI (N1, N2, N5)
    */
-  public async syncFromScanners(machineNo?: number, date?: string) {
+  public async syncFromScanners(machineNo?: number, options?: { auto?: boolean; days?: number; preview?: boolean }) {
     try {
       const res = await fetch(`${this.customBaseUrl}/api/scanners/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ machineNo, date })
+        body: JSON.stringify({
+          machineNo,
+          auto: machineNo ? false : (options?.auto !== false),
+          days: options?.days || 3,
+          preview: options?.preview || false
+        })
       });
       return await res.json();
     } catch (err: unknown) {
@@ -347,6 +352,30 @@ class ApiClientService {
         success: false,
         message: err instanceof Error ? err.message : 'Sync failed'
       };
+    }
+  }
+
+  /**
+   * ดึงสถานะการซิงค์ล่าสุดของแต่ละเครื่อง (N4)
+   */
+  public async getScannerSyncLog() {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/scanners/sync-log`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed to fetch sync log' };
+    }
+  }
+
+  /**
+   * ดึงประวัติการซิงค์ย้อนหลัง (N4)
+   */
+  public async getScannerSyncLogs(limit: number = 30) {
+    try {
+      const res = await fetch(`${this.customBaseUrl}/api/scanners/sync-logs?limit=${limit}`);
+      return await res.json();
+    } catch (err: unknown) {
+      return { success: false, message: err instanceof Error ? err.message : 'Failed to fetch sync logs' };
     }
   }
 
