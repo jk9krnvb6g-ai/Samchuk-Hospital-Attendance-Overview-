@@ -16,7 +16,9 @@ obj/
 TestResults/
 *.local
 
-# Published artifacts and native dlls (user downloads/copies from zip)
-*.dll
-*.exe
+# Published artifacts and native dlls
+!ScannerSyncCli*
+!backend/ScannerSyncCli*
+!backend/*.dll
+!backend/bin/*
 !backend/**/FK623Attend.dll.example

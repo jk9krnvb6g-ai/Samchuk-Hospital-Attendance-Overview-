@@ -4610,6 +4610,8 @@ app.post('/api/attendance/seed-month', async (req, res) => {
 // 4.13 ตรวจสอบไฟล์ DLL
 app.get('/api/scanners/check-dll', (req, res) => {
   const dllPaths = [
+    path.join(__dirname, 'FK623Attend.dll'),
+    path.join(__dirname, 'bin', 'FK623Attend.dll'),
     'C:\\Windows\\SysWOW64\\FK623Attend.dll',
     'C:\\Windows\\System32\\FK623Attend.dll',
     path.join(__dirname, 'SamchukAttendance.Api', 'FK623Attend.dll'),
