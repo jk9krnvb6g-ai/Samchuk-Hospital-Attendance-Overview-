@@ -1121,164 +1121,22 @@ app.get('/api/db/probe', async (req, res) => {
   });
 });
 
-// 4.2.4 Probe บัญชีผู้ใช้ MySQL ทั่วไปอัตโนมัติ (Credentials Diagnostic)
-app.get('/api/db/probe-auth', async (req, res) => {
-  const host = req.query.host || activeDbConfig.host;
-  const port = parseInt(req.query.port || activeDbConfig.port, 10);
-  const candidates = [
-    { label: 'ค่าปัจจุบันที่ตั้งไว้', user: activeDbConfig.user, password: activeDbConfig.password },
-    { label: 'sa / sa (มาตรฐาน HOSxP)', user: 'sa', password: 'sa' },
-    { label: 'sa / (รหัสว่าง)', user: 'sa', password: '' },
-    { label: 'root / (รหัสว่าง)', user: 'root', password: '' },
-    { label: 'root / root', user: 'root', password: 'root' },
-    { label: 'root / admin', user: 'root', password: 'admin' },
-    { label: 'attendance_app / (รหัสว่าง)', user: 'attendance_app', password: '' },
-    { label: 'samchuk_sync / (รหัสว่าง)', user: 'samchuk_sync', password: '' }
-  ];
-
-  const results = [];
-  let workingConfig = null;
-
-  for (const c of candidates) {
-    try {
-      const conn = await mysql.createConnection({
-        host,
-        port,
-        user: c.user,
-        password: c.password,
-        connectTimeout: 2000
-      });
-      const [v] = await conn.query('SELECT VERSION() as ver');
-      let dbs = [];
-      try {
-        const [d] = await conn.query('SHOW DATABASES');
-        dbs = d.map(item => Object.values(item)[0]);
-      } catch {}
-      await conn.end();
-
-      const itemResult = {
-        label: c.label,
-        user: c.user,
-        password: c.password ? '******' : '(ว่าง)',
-        rawPassword: c.password,
-        success: true,
-        version: v[0]?.ver,
-        databases: dbs,
-        message: 'เชื่อมต่อสำเร็จ!'
-      };
-      results.push(itemResult);
-      if (!workingConfig) {
-        workingConfig = { host, port, user: c.user, password: c.password, databases: dbs };
-      }
-    } catch (err) {
-      results.push({
-        label: c.label,
-        user: c.user,
-        password: c.password ? '******' : '(ว่าง)',
-        success: false,
-        code: err.code,
-        message: err.message
-      });
-    }
-  }
-
-  res.json({
-    success: results.some(r => r.success),
-    host,
-    port,
-    workingConfig,
-    results
+// ข้อ 6: ปิด API ทดลองรหัสผ่านฐานข้อมูล probe-auth ใน Production (ป้องกันการรั่วไหลของ Credentials)
+app.get('/api/db/probe-auth', (req, res) => {
+  return res.status(403).json({
+    success: false,
+    error: 'PROHIBITED_ENDPOINT',
+    message: 'Endpoint probe-auth ถูกปิดใช้งานถาวรเพื่อความปลอดภัย การกำหนดค่าฐานข้อมูลต้องทำผ่าน Environment Variables บนเซิร์ฟเวอร์เท่านั้น'
   });
 });
 
-// 4.2.5 ปรับเปลี่ยนการตั้งค่าเชื่อมต่อ MySQL และบันทึกลง .env ทันที
-app.post('/api/db/configure', async (req, res) => {
-  const { host, port, user, password, database, hosofficeDb, hosofficeUser, hosofficePassword } = req.body;
-  if (!host) {
-    return res.status(400).json({ success: false, message: 'กรุณาระบุ Host' });
-  }
-
-  const testConfig = {
-    host: host.trim(),
-    port: parseInt(port || 3306, 10),
-    user: (user || 'root').trim(),
-    password: password !== undefined ? password : '',
-    database: (database || 'samchuk_attendance').trim()
-  };
-
-  if (hosofficeDb) {
-    hosofficeDbName = hosofficeDb.trim();
-  }
-  if (hosofficeUser) {
-    process.env.HOSOFFICE_USER = hosofficeUser.trim();
-  }
-  if (hosofficePassword !== undefined) {
-    process.env.HOSOFFICE_PASSWORD = hosofficePassword;
-  }
-
-  try {
-    // 1. เชื่อมต่อเซิร์ฟเวอร์ MySQL โดยตรง (ไม่ต้องระบุ database ก่อนเพื่อป้องกัน ER_BAD_DB_ERROR)
-    const testConn = await mysql.createConnection({
-      host: testConfig.host,
-      port: testConfig.port,
-      user: testConfig.user,
-      password: testConfig.password,
-      connectTimeout: 3500
-    });
-    
-    // 2. สร้างฐานข้อมูล samchuk_attendance ทันทีหากยังไม่มี
-    await testConn.query(`CREATE DATABASE IF NOT EXISTS \`${testConfig.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-    
-    // 3. ดูรายชื่อฐานข้อมูลทั้งหมดบน MySQL
-    let dbList = [];
-    try {
-      const [dbs] = await testConn.query('SHOW DATABASES');
-      dbList = dbs.map(d => Object.values(d)[0]);
-    } catch {}
-    await testConn.end();
-
-    // 4. บันทึกและรีเซ็ต pool
-    resetDbPool(testConfig);
-
-    // 5. บันทึกลง .env เพื่อให้ค่าคงอยู่ข้ามการรีสตาร์ท
-    const envPath = path.join(process.cwd(), '.env');
-    let envData = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-    const updateKey = (key, val) => {
-      const regex = new RegExp(`^${key}=.*$`, 'm');
-      if (regex.test(envData)) envData = envData.replace(regex, `${key}="${val}"`);
-      else envData += `\n${key}="${val}"`;
-    };
-    updateKey('DB_HOST', testConfig.host);
-    updateKey('DB_PORT', testConfig.port);
-    updateKey('DB_USER', testConfig.user);
-    updateKey('DB_PASSWORD', testConfig.password);
-    updateKey('DB_NAME', testConfig.database);
-    if (hosofficeDb) updateKey('HOSOFFICE_DB', hosofficeDbName);
-    if (hosofficeUser) updateKey('HOSOFFICE_USER', hosofficeUser.trim());
-    if (hosofficePassword !== undefined) updateKey('HOSOFFICE_PASSWORD', hosofficePassword);
-    fs.writeFileSync(envPath, envData.trim() + '\n', 'utf8');
-
-    // 6. สร้างตารางเริ่มต้นอัตโนมัติ
-    await ensureTablesExist();
-
-    res.json({
-      success: true,
-      config: { ...testConfig, password: testConfig.password ? '******' : '(ว่าง)' },
-      databases: dbList,
-      message: `เชื่อมต่อและบันทึกการตั้งค่า MySQL ${testConfig.host}:${testConfig.port} สำเร็จเรียบร้อยแล้ว!`
-    });
-  } catch (err) {
-    res.status(500).json({
-      success: false,
-      code: err.code,
-      message: `ทดสอบเชื่อมต่อ ${testConfig.host}:${testConfig.port} ล้มเหลว: ${err.message}`,
-      help: err.code === 'ER_ACCESS_DENIED_ERROR'
-        ? `รหัสผ่านหรือ User '${testConfig.user}' ไม่ถูกต้อง กรุณาลองใช้ 'sa' หรือ 'root'`
-        : err.code === 'ETIMEDOUT'
-        ? `ติดต่อ ${testConfig.host}:${testConfig.port} ไม่ได้ (Timeout) กรุณาตรวจสอบ Firewall`
-        : err.message
-    });
-  }
+// ข้อ 6: ปิด API ปรับเปลี่ยนการตั้งค่าเชื่อมต่อฐานข้อมูล /api/db/configure ใน Production
+app.post('/api/db/configure', (req, res) => {
+  return res.status(403).json({
+    success: false,
+    error: 'FORBIDDEN_CONFIGURATION',
+    message: 'ปฏิเสธการแก้ไขการเชื่อมต่อฐานข้อมูลผ่าน API กรุณาแก้ไขไฟล์ .env หรือ Environment Variable บนเครื่องเซิร์ฟเวอร์โดยตรง'
+  });
 });
 
 // 4.3 สร้างตารางทั้งหมดลง MySQL 10.2.0.201 ทันที
@@ -1740,108 +1598,233 @@ app.get('/api/raw-scans', async (req, res) => {
   }
 });
 
-// บันทึกสแกนใหม่ 1 รายการลง MySQL attendance_raw_scan
+// บันทึกสแกนใหม่ 1 รายการลง MySQL attendance_raw_scan (ข้อ 2, ข้อ 3: ตรวจสอบความถูกต้อง ห้ามเติมค่าปลอม)
 app.post('/api/raw-scans', async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
-    const s = req.body;
-    const scanDateTime = s.scanDateTime || s.scan_date_time || new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const s = req.body || {};
+
+    // ข้อ 2, ข้อ 3: บังคับตรวจ Fingle ID และ Scan DateTime ห้ามใช้ค่าสมมติ
+    const fingleId = Number(s.fingleId ?? s.fingle_id);
+    if (!fingleId || isNaN(fingleId) || fingleId <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_FINGLE_ID',
+        message: 'ข้อมูลสแกนไม่ถูกต้อง: ต้องระบุ fingleId เป็นตัวเลขจำนวนเต็มบวก ห้ามเว้นว่างหรือสมมติค่า'
+      });
+    }
+
+    const rawDateTime = (s.scanDateTime ?? s.scan_date_time ?? '').toString().trim();
+    if (!rawDateTime || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(rawDateTime)) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_SCAN_DATETIME',
+        message: 'ข้อมูลสแกนไม่ถูกต้อง: ต้องระบุ scanDateTime ในรูปแบบ YYYY-MM-DD HH:mm:ss ห้ามใช้เวลาปัจจุบันแทนเวลาสแกน'
+      });
+    }
+    const scanDateTime = rawDateTime.length === 16 ? `${rawDateTime}:00` : rawDateTime;
+
+    const machineNo = Number(s.machineNo ?? s.machine_no);
+    if (!machineNo || isNaN(machineNo) || machineNo <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_MACHINE_NO',
+        message: 'ข้อมูลสแกนไม่ถูกต้อง: ต้องระบุหมายเลขเครื่อง machineNo ที่เป็นตัวเลขถูกต้อง'
+      });
+    }
+
+    // ข้อ 8: ตรวจสอบ Mapping กับตาราง attendance_personnel ห้ามใช้ Fingle ID แทน Person ID โดยตรง
+    let personId = null;
+    let fullname = null;
+    let positionName = null;
+    let depName = null;
+    let personTypeName = null;
+    let hrMapped = 0;
+
+    const [personRows] = await pool.query(`
+      SELECT person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name 
+      FROM attendance_personnel 
+      WHERE fingle_id = ? 
+      LIMIT 1
+    `, [fingleId]);
+
+    if (personRows && personRows.length > 0) {
+      personId = personRows[0].person_id;
+      fullname = personRows[0].hr_fullname;
+      positionName = personRows[0].hr_position_name;
+      depName = personRows[0].hr_dep_name;
+      personTypeName = personRows[0].hr_person_type_name;
+      hrMapped = 1;
+    } else {
+      // UNMAPPED: เก็บข้อมูลสแกนไว้ แต่ไม่สมมติ Person ID
+      personId = null;
+      fullname = s.hrFullname ?? s.hr_fullname ?? null;
+      positionName = s.hrPositionName ?? s.hr_position_name ?? null;
+      depName = s.hrDepName ?? s.hr_dep_name ?? null;
+      personTypeName = s.hrPersonTypeName ?? s.hr_person_type_name ?? null;
+      hrMapped = 0;
+    }
+
+    const deviceIp = s.deviceIp ?? s.device_ip ?? null;
+    const verifyMode = s.verifyMode ?? s.verify_mode ?? 1;
+    const inOutMode = s.inOutMode ?? s.in_out_mode ?? 0;
 
     const [result] = await pool.query(`
       INSERT INTO attendance_raw_scan 
-      (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'MANUAL_API')
       ON DUPLICATE KEY UPDATE
-        device_ip = VALUES(device_ip),
+        device_ip = COALESCE(VALUES(device_ip), device_ip),
+        verify_mode = VALUES(verify_mode),
+        in_out_mode = VALUES(in_out_mode),
+        person_id = VALUES(person_id),
         hr_fullname = VALUES(hr_fullname),
         hr_position_name = VALUES(hr_position_name),
         hr_dep_name = VALUES(hr_dep_name),
+        hr_person_type_name = VALUES(hr_person_type_name),
         hr_mapped = VALUES(hr_mapped)
     `, [
-      s.machineNo || 1,
-      s.deviceIp || '192.168.111.163',
-      s.fingleId || 101,
+      machineNo,
+      deviceIp,
+      fingleId,
       scanDateTime,
-      s.verifyMode || 1,
-      s.inOutMode || 0,
-      s.personId || 1,
-      s.hrFullname || 'ทดสอบ บันทึกเวลา',
-      s.hrPositionName || 'พยาบาลวิชาชีพปฏิบัติการ',
-      s.hrDepName || 'กลุ่มงานการพยาบาล',
-      s.hrPersonTypeName || 'ข้าราชการ',
-      1,
-      s.pushStatus || 'PENDING'
+      verifyMode,
+      inOutMode,
+      personId,
+      fullname,
+      positionName,
+      depName,
+      personTypeName,
+      hrMapped
     ]);
 
     res.json({
       success: true,
       id: result.insertId,
-      message: `บันทึกข้อมูลสแกน ID ${result.insertId} (Fingle ${s.fingleId || 101}) ลง MySQL เรียบร้อยแล้ว (ไม่ซ้ำซ้อน)`
+      fingleId,
+      scanDateTime,
+      mapped: Boolean(hrMapped),
+      personId,
+      message: `บันทึกข้อมูลสแกน Fingle ID ${fingleId} (${scanDateTime}) ลงฐานข้อมูลเรียบร้อยแล้ว [${hrMapped ? 'จับคู่บุคลากรสำเร็จ' : 'UNMAPPED รอจับคู่'}]`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// บันทึกสแกนแบบกลุ่ม (Batch Insert / Sync จากเครื่องสแกน) ลง MySQL attendance_raw_scan
+// บันทึกสแกนแบบกลุ่ม (Batch Insert) ลง MySQL attendance_raw_scan พร้อม Strict Validation (ข้อ 2, ข้อ 3)
 app.post('/api/raw-scans/batch', async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
-    const scans = req.body.scans;
+    const scans = req.body?.scans;
     if (!Array.isArray(scans) || scans.length === 0) {
-      return res.json({ success: true, inserted: 0, message: 'ไม่มีข้อมูลสแกนที่ต้องบันทึก' });
+      return res.status(400).json({ success: false, message: 'ไม่มีข้อมูลสแกนที่ต้องบันทึก (scans array ว่างเปล่า)' });
     }
 
+    if (scans.length > 5000) {
+      return res.status(400).json({ success: false, message: 'ขนาด Batch เกินกำหนด (สูงสุด 5,000 รายการต่อรอบ)' });
+    }
+
+    // แคชตารางบุคลากรเพื่อตรวจสอบ Mapping อย่างถูกต้อง
+    const [personnelList] = await pool.query('SELECT person_id, fingle_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name FROM attendance_personnel');
+    const pMap = new Map();
+    personnelList.forEach(p => pMap.set(p.fingle_id, p));
+
     let inserted = 0;
-    for (const s of scans) {
-      const scanDateTime = s.scanDateTime || s.scan_date_time || new Date().toISOString().replace('T', ' ').substring(0, 19);
+    let duplicates = 0;
+    const invalidItems = [];
+    const validItems = [];
+
+    // 1. ตรวจสอบ Schema Validation ทีละรายการ
+    for (let i = 0; i < scans.length; i++) {
+      const s = scans[i];
+      const fingleId = Number(s.fingleId ?? s.fingle_id);
+      const rawDateTime = (s.scanDateTime ?? s.scan_date_time ?? '').toString().trim();
+      const machineNo = Number(s.machineNo ?? s.machine_no);
+
+      if (!fingleId || isNaN(fingleId) || fingleId <= 0) {
+        invalidItems.push({ index: i, error: 'INVALID_FINGLE_ID', item: s, reason: 'ไม่มี Fingle ID หรือค่าไม่ถูกต้อง' });
+        continue;
+      }
+
+      if (!rawDateTime || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(rawDateTime)) {
+        invalidItems.push({ index: i, error: 'INVALID_SCAN_DATETIME', item: s, reason: 'เวลาสแกนขาดหายหรือผิดรูปแบบ (ห้ามเติมเวลาปัจจุบัน)' });
+        continue;
+      }
+
+      if (!machineNo || isNaN(machineNo) || machineNo <= 0) {
+        invalidItems.push({ index: i, error: 'INVALID_MACHINE_NO', item: s, reason: 'ไม่มีหมายเลขเครื่อง หรือค่าไม่ถูกต้อง' });
+        continue;
+      }
+
+      const scanDateTime = rawDateTime.length === 16 ? `${rawDateTime}:00` : rawDateTime;
+      const person = pMap.get(fingleId);
+
+      validItems.push({
+        machineNo,
+        deviceIp: s.deviceIp ?? s.device_ip ?? null,
+        fingleId,
+        scanDateTime,
+        verifyMode: s.verifyMode ?? s.verify_mode ?? 1,
+        inOutMode: s.inOutMode ?? s.in_out_mode ?? 0,
+        personId: person ? person.person_id : null,
+        fullname: person ? person.hr_fullname : (s.hrFullname ?? s.hr_fullname ?? null),
+        positionName: person ? person.hr_position_name : (s.hrPositionName ?? s.hr_position_name ?? null),
+        depName: person ? person.hr_dep_name : (s.hrDepName ?? s.hr_dep_name ?? null),
+        personTypeName: person ? person.hr_person_type_name : (s.hrPersonTypeName ?? s.hr_person_type_name ?? null),
+        hrMapped: person ? 1 : 0
+      });
+    }
+
+    // 2. บันทึกเฉพาะข้อมูลที่ผ่าน Validation
+    for (const item of validItems) {
       try {
         const [result] = await pool.query(`
           INSERT INTO attendance_raw_scan 
-          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, hr_mapped, push_status)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'BATCH_API')
           ON DUPLICATE KEY UPDATE 
-            device_ip = VALUES(device_ip),
+            device_ip = COALESCE(VALUES(device_ip), device_ip),
             verify_mode = VALUES(verify_mode),
             in_out_mode = VALUES(in_out_mode),
             person_id = VALUES(person_id),
             hr_fullname = VALUES(hr_fullname),
             hr_position_name = VALUES(hr_position_name),
-            hr_leavel_name = VALUES(hr_leavel_name),
             hr_dep_name = VALUES(hr_dep_name),
-            hr_dep_sub_name = VALUES(hr_dep_sub_name),
             hr_person_type_name = VALUES(hr_person_type_name),
             hr_mapped = VALUES(hr_mapped)
         `, [
-          s.machineNo || s.machine_no || 1,
-          s.deviceIp || s.device_ip || '192.168.111.163',
-          s.fingleId || s.fingle_id || 101,
-          scanDateTime,
-          s.verifyMode || s.verify_mode || 1,
-          s.inOutMode || s.in_out_mode || 0,
-          s.personId || s.person_id || null,
-          s.hrFullname || s.hr_fullname || '',
-          s.hrPositionName || s.hr_position_name || '',
-          s.hrLeavelName || s.hr_leavel_name || '',
-          s.hrDepName || s.hr_dep_name || '',
-          s.hrDepSubName || s.hr_dep_sub_name || '',
-          s.hrPersonTypeName || s.hr_person_type_name || '',
-          s.hrMapped !== false ? 1 : 0,
-          s.pushStatus || s.push_status || 'PENDING'
+          item.machineNo,
+          item.deviceIp,
+          item.fingleId,
+          item.scanDateTime,
+          item.verifyMode,
+          item.inOutMode,
+          item.personId,
+          item.fullname,
+          item.positionName,
+          item.depName,
+          item.personTypeName,
+          item.hrMapped
         ]);
-        if (result.affectedRows > 0) inserted++;
+        if (result.affectedRows === 1) inserted++;
+        else duplicates++;
       } catch (err) {
-        // Skip duplicate key errors
+        duplicates++;
       }
     }
 
     res.json({
       success: true,
+      totalReceived: scans.length,
+      validCount: validItems.length,
+      invalidCount: invalidItems.length,
       inserted,
-      total: scans.length,
-      message: `บันทึกข้อมูลสแกนดิบ ${inserted}/${scans.length} รายการลง MySQL attendance_raw_scan สำเร็จแล้ว!`
+      duplicates,
+      invalidItems: invalidItems.slice(0, 20),
+      message: `ประมวลผล Batch Scan: ผ่านการตรวจสอบ ${validItems.length}/${scans.length} รายการ (บันทึกใหม่ +${inserted}, ข้อมูลซ้ำ/อัปเดต ${duplicates}, ข้อมูลไม่ถูกต้อง ${invalidItems.length} รายการ)`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -1901,12 +1884,20 @@ app.get('/api/attendance/daily', async (req, res) => {
   }
 });
 
-// ล้างผลคำนวณเวลาปฏิบัติงานใน samchuk_attendance.attendance_daily_result
+// ข้อ 7: ปิดการ TRUNCATE ผลคำนวณเวลาปฏิบัติงานโดยไม่ผ่านการยืนยันสิทธิ์ขั้นสูง
 app.delete('/api/attendance/daily/clear', async (req, res) => {
+  const adminKey = req.headers['x-admin-key'] || req.query.adminKey;
+  if (!adminKey || adminKey !== (process.env.ADMIN_KEY || 'SAMCHUK_SECURE_ADMIN')) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'ปฏิเสธคำสั่ง TRUNCATE: ต้องใช้สิทธิ์ผู้ดูแลระบบระดับสูงในการล้างผลคำนวณ'
+    });
+  }
   try {
     const pool = getDbPool();
     await pool.query('TRUNCATE TABLE attendance_daily_result');
-    res.json({ success: true, message: 'ล้างข้อมูลตาราง attendance_daily_result สำเร็จ (0 รายการ)' });
+    res.json({ success: true, message: 'ล้างข้อมูลตาราง attendance_daily_result สำเร็จ' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -1983,31 +1974,45 @@ app.post('/api/attendance/daily/batch', async (req, res) => {
   }
 });
 
-// ลบสแกนรายการเดี่ยวจาก MySQL
+// ข้อ 7: ปิด Route ล้างข้อมูลที่อันตราย - ไม่อนุญาตให้ลบข้อมูลสแกนจริงโดยไม่มีการยืนยันสิทธิ์ขั้นสูง
 app.delete('/api/raw-scans/:id', async (req, res) => {
+  const adminKey = req.headers['x-admin-key'] || req.query.adminKey;
+  if (!adminKey || adminKey !== (process.env.ADMIN_KEY || 'SAMCHUK_SECURE_ADMIN')) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'ไม่อนุญาตให้ลบข้อมูลสแกนดิบ (Raw Scan) โดยตรงตามข้อกำหนดความปลอดภัยของโรงพยาบาล'
+    });
+  }
   try {
     const pool = getDbPool();
     const id = req.params.id;
     await pool.query('DELETE FROM attendance_raw_scan WHERE id = ?', [id]);
-    res.json({ success: true, message: `ลบข้อมูลสแกน ID ${id} ออกจาก MySQL เรียบร้อยแล้ว` });
+    res.json({ success: true, message: `ลบข้อมูลสแกน ID ${id} ออกจากระบบเรียบร้อยแล้ว` });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ล้างข้อมูลสแกนทั้งหมด
+// ข้อ 7: ห้าม TRUNCATE attendance_raw_scan ในระบบ Production ป้องกันข้อมูลสูญหาย 100%
 app.post('/api/raw-scans/clear-all', async (req, res) => {
-  try {
-    const pool = getDbPool();
-    await pool.query('TRUNCATE TABLE attendance_raw_scan');
-    res.json({ success: true, message: 'ล้างข้อมูลตาราง attendance_raw_scan ใน MySQL เรียบร้อยแล้ว' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+  return res.status(403).json({
+    success: false,
+    error: 'PROHIBITED_ACTION',
+    message: 'ปฏิเสธคำสั่ง TRUNCATE: ระบบไม่อนุญาตให้ล้างตาราง attendance_raw_scan ทั้งหมดใน Production เพื่อรักษาประวัติการสแกนจริง'
+  });
 });
 
-// ลบเฉพาะรายการสแกนที่เป็นเวลาในอนาคต (เช่น สแกนออก 17:42 ที่สร้างจำลองไว้ล่วงหน้า)
+// ลบรายการสแกนที่เป็นเวลาในอนาคต (ต้องใช้สิทธิ์ผู้ดูแลระบบพร้อมบันทึก Audit)
 app.post('/api/raw-scans/clean-future', async (req, res) => {
+  const adminKey = req.headers['x-admin-key'] || req.query.adminKey;
+  if (!adminKey || adminKey !== (process.env.ADMIN_KEY || 'SAMCHUK_SECURE_ADMIN')) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'ต้องใช้สิทธิ์ผู้ดูแลระบบในการตรวจสอบและลบรายการสแกนเวลาผิดปกติ'
+    });
+  }
   try {
     const pool = getDbPool();
     const [result] = await pool.query('DELETE FROM attendance_raw_scan WHERE scan_date_time > NOW()');
@@ -2021,42 +2026,13 @@ app.post('/api/raw-scans/clean-future', async (req, res) => {
   }
 });
 
-// Seed สแกนตัวอย่างจำลองจากเครื่องสแกนทั้ง 3 เครื่องลง MySQL
+// ข้อ 5: ปิด Endpoint สร้างข้อมูลจำลอง seed-sample ใน Production
 app.post('/api/raw-scans/seed-sample', async (req, res) => {
-  try {
-    await ensureTablesExist();
-    const pool = getDbPool();
-    const today = new Date().toISOString().substring(0, 10);
-    
-    const samples = [
-      { machineNo: 1, ip: '192.168.111.163', fingleId: 101, time: `${today} 07:55:12`, name: 'พว.สุดารัตน์ พยาบาลดี', pos: 'พยาบาลวิชาชีพชำนาญการ', dep: 'กลุ่มงานการพยาบาล', type: 'ข้าราชการ' },
-      { machineNo: 1, ip: '192.168.111.163', fingleId: 102, time: `${today} 08:05:43`, name: 'นพ.สมชาย รักษาดี', pos: 'นายแพทย์ชำนาญการพิเศษ', dep: 'กลุ่มงานการแพทย์', type: 'ข้าราชการ' },
-      { machineNo: 2, ip: '192.168.111.164', fingleId: 103, time: `${today} 08:12:05`, name: 'นางสาวพิมพ์ใจ มีสุข', pos: 'เจ้าพนักงานธุรการปฏิบัติงาน', dep: 'กลุ่มงานบริหารทั่วไป', type: 'ลูกจ้างประจำ' },
-      { machineNo: 2, ip: '192.168.111.164', fingleId: 104, time: `${today} 08:14:22`, name: 'นายวีระพล ช่างซ่อม', pos: 'นายช่างเทคนิค', dep: 'กลุ่มงานบริหารทั่วไป', type: 'พนักงานราชการ' },
-      { machineNo: 3, ip: '192.168.111.165', fingleId: 105, time: `${today} 08:18:50`, name: 'ภก.ธีรพงศ์ เภสัชกร', pos: 'เภสัชกรชำนาญการ', dep: 'กลุ่มงานเภสัชกรรม', type: 'ข้าราชการ' }
-    ];
-
-    let inserted = 0;
-    for (const s of samples) {
-      try {
-        await pool.query(`
-          INSERT INTO attendance_raw_scan 
-          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
-          VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, 1, 'PENDING')
-          ON DUPLICATE KEY UPDATE hr_fullname = VALUES(hr_fullname)
-        `, [s.machineNo, s.ip, s.fingleId, s.time, s.fingleId, s.name, s.pos, s.dep, s.type]);
-        inserted++;
-      } catch {}
-    }
-
-    res.json({
-      success: true,
-      insertedCount: inserted,
-      message: `เพิ่มข้อมูลสแกนตัวอย่าง ${inserted} รายการลง MySQL samchuk_attendance เรียบร้อยแล้ว`
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+  return res.status(403).json({
+    success: false,
+    error: 'MOCK_DISABLED',
+    message: 'ไม่อนุญาตให้สร้างข้อมูลสแกนจำลองใน Production ข้อมูลสแกนทั้งหมดต้องมาจากเครื่องสแกน HIP จริงเท่านั้น'
+  });
 });
 
 // 4.6.1 ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel (ค่าเริ่มต้น ไม่แตะต้อง hosoffice)
@@ -2323,13 +2299,21 @@ app.post('/api/personnel/sync-from-hosoffice', async (req, res) => {
   }
 });
 
-// 4.6.3 ล้างรายชื่อบุคลากรในฐาน samchuk_attendance
+// ข้อ 7: ปิดการล้างข้อมูลบุคลากรโดยไม่ยืนยันสิทธิ์ขั้นสูง
 app.delete('/api/personnel/clear', async (req, res) => {
+  const adminKey = req.headers['x-admin-key'] || req.query.adminKey;
+  if (!adminKey || adminKey !== (process.env.ADMIN_KEY || 'SAMCHUK_SECURE_ADMIN')) {
+    return res.status(403).json({
+      success: false,
+      error: 'FORBIDDEN',
+      message: 'ปฏิเสธคำสั่ง TRUNCATE: ต้องใช้สิทธิ์ผู้ดูแลระบบระดับสูงในการล้างข้อมูลบุคลากร'
+    });
+  }
   try {
     const pool = getDbPool();
     await pool.query('TRUNCATE TABLE attendance_personnel');
     await pool.query('TRUNCATE TABLE attendance_daily_result');
-    res.json({ success: true, message: 'ลบรายชื่อบุคลากรและผลคำนวณเวลาในฐาน samchuk_attendance เรียบร้อยแล้ว (0 คน)' });
+    res.json({ success: true, message: 'ลบรายชื่อบุคลากรและผลคำนวณเวลาในฐาน samchuk_attendance เรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -2611,35 +2595,35 @@ function executeScannerReaderCli(params = {}) {
     if (preview) args.push('--preview');
     if (json) args.push('--json');
 
-    // ถ้ายังไม่พบไฟล์ exe บนระบบ (เช่น รันบน Linux dev environment ที่ยังไม่ได้วางไฟล์ .exe)
+    // ข้อ 1: ยกเลิก Mock Success ของ Reader ทั้งหมด หากไม่พบไฟล์ EXE ต้องแจ้ง Error (success: false)
     if (!exists) {
       const durationMs = Date.now() - startTime;
-      console.warn(`[ScannerReader] Notice: SCAN_READER_EXE not found at "${exePath}". Providing structured compliant Reader R13 schema.`);
-      const mockResult = {
-        success: true,
-        devNotice: 'SCAN_READER_EXE not placed on disk yet; returning compliant Reader R13 schema for testing.',
+      const errMsg = `ไม่พบไฟล์โปรแกรมอ่านเครื่องสแกน (${path.basename(exePath)}) ที่พาธ "${exePath}". กรุณาตั้งค่าพาธใน Environment Variable SCAN_READER_EXE หรือวางไฟล์ ScannerSyncCli.exe ในโฟลเดอร์ backend`;
+      console.error(`[ScannerReader Error] ${errMsg}`);
+      return resolve({
+        success: false,
         exePath,
         commandArgs: args,
-        totalRead: 7578,
-        totalNew: 914,
-        duplicates: 6664,
+        exitCode: 1,
+        durationMs,
+        totalRead: 0,
+        totalNew: 0,
+        duplicates: 0,
         unmapped: 0,
-        affectedDates: ['2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23'],
+        affectedDates: [],
         machines: config.Scanners.map(s => ({
           machineNo: s.MachineNo,
           name: s.Name,
           ip: s.IP,
-          readCount: Math.round(7578 / config.Scanners.length),
-          newCount: Math.round(914 / config.Scanners.length),
-          duplicates: Math.round(6664 / config.Scanners.length),
-          success: true,
-          error: null
+          readCount: 0,
+          newCount: 0,
+          duplicates: 0,
+          success: false,
+          error: 'EXE_NOT_FOUND'
         })),
-        durationMs,
-        exitCode: 0,
-        message: 'ดึงข้อมูลสแกนสำเร็จ (จำลองโครงสร้าง Reader R13: อ่าน 7,578, เข้าใหม่ 914, ซ้ำ 6,664 รายการ)'
-      };
-      return resolve(mockResult);
+        error: 'EXE_NOT_FOUND',
+        message: errMsg
+      });
     }
 
     console.log(`[ScannerReader] Executing: "${exePath}" ${args.join(' ')}`);
@@ -3006,23 +2990,24 @@ app.post('/api/scanners/sync', async (req, res) => {
       console.warn('[scanner_sync_log] Warning: Could not write sync log:', logErr.message);
     }
 
-    // N3: หลัง Reader สำเร็จ ให้ Node คำนวณผลรายวันของ affectedDates ทันที
-    const datesToRecalculate = (cliResult.affectedDates && Array.isArray(cliResult.affectedDates) && cliResult.affectedDates.length > 0)
-      ? cliResult.affectedDates
-      : [new Date().toISOString().substring(0, 10)];
-
-    const calcSummaries = [];
-    for (const d of datesToRecalculate) {
-      try {
-        const cRes = await calculateDailyAttendanceForDate(d);
-        calcSummaries.push(cRes);
-      } catch (calcErr) {
-        console.warn(`[Auto-Calculate N3] Warning: calculation error for ${d}:`, calcErr.message);
+    // ข้อ 1.7: ห้ามคำนวณ Attendance ต่อเมื่อ Reader ล้มเหลวโดยไม่มีข้อมูลใหม่ที่บันทึกสำเร็จ
+    if (cliResult.success && cliResult.affectedDates && Array.isArray(cliResult.affectedDates) && cliResult.affectedDates.length > 0) {
+      const calcSummaries = [];
+      for (const d of cliResult.affectedDates) {
+        try {
+          const cRes = await calculateDailyAttendanceForDate(d);
+          calcSummaries.push(cRes);
+        } catch (calcErr) {
+          console.warn(`[Auto-Calculate N3] Warning: calculation error for ${d}:`, calcErr.message);
+        }
       }
+      cliResult.autoCalculated = true;
+      cliResult.calculatedDates = cliResult.affectedDates;
+      cliResult.calcSummaries = calcSummaries;
+    } else {
+      cliResult.autoCalculated = false;
+      cliResult.calculatedDates = [];
     }
-    cliResult.autoCalculated = true;
-    cliResult.calculatedDates = datesToRecalculate;
-    cliResult.calcSummaries = calcSummaries;
 
     res.json(cliResult);
   } catch (err) {
@@ -3759,122 +3744,13 @@ app.post('/api/scans/import-from-hosoffice', async (req, res) => {
   }
 });
 
-// 4.12.4 สร้างและบันทึกประวัติสแกนตัวอย่างประจำเดือนให้บุคลากรทุกคน (ปกติ/สาย/ออกก่อน) ตรงตามเวลาจริง
+// ข้อ 5: ปิด Endpoint สร้างข้อมูลจำลอง seed-month ใน Production 100%
 app.post('/api/attendance/seed-month', async (req, res) => {
-  try {
-    await ensureTablesExist();
-    const poolAtt = getDbPool();
-    const poolHos = getHosofficePool();
-    const yearMonth = req.body?.month || '2026-10';
-    const daysCount = parseInt(req.body?.days, 10) || 14;
-
-    // ดึงบุคลากรทั้งหมดจาก hosoffice หรือ default
-    let personnel = [];
-    try {
-      const [rows] = await poolHos.query(`
-        SELECT 
-          hp.ID as id,
-          hp.FINGLE_ID as fingle_id,
-          CONCAT(COALESCE(hf.HR_PREFIX_NAME, ''), hp.HR_FNAME, ' ', hp.HR_LNAME) as hr_fullname,
-          COALESCE(ht.HR_POSITION_NAME, 'เจ้าหน้าที่') as hr_position_name,
-          COALESCE(hd.HR_DEPARTMENT_NAME, 'โรงพยาบาลสามชุก') as hr_dep_name,
-          COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') as hr_person_type_name
-        FROM hr_person hp
-        LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
-        LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
-        LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
-        LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
-        LIMIT 500
-      `);
-      personnel = rows;
-    } catch {}
-
-    if (personnel.length === 0) {
-      personnel = [
-        { id: 1, fingle_id: 79, hr_fullname: 'นางสาวกฤษณา กลิ่นมณฑา', hr_position_name: 'พยาบาลวิชาชีพ', hr_dep_name: 'กลุ่มงานการพยาบาล', hr_person_type_name: 'ข้าราชการ' },
-        { id: 2, fingle_id: 57, hr_fullname: 'นายทวีสิทธิ์ พุ่มพฤกษ์', hr_position_name: 'นักวิชาการคอมพิวเตอร์', hr_dep_name: 'งานสุขภาพดิจิทัล', hr_person_type_name: 'ข้าราชการ' },
-        { id: 3, fingle_id: 87, hr_fullname: 'นางสาวกมลรัตน์ สดคมขำ', hr_position_name: 'พนักงานบริการ', hr_dep_name: 'งานผู้ป่วยอุบัติเหตุ', hr_person_type_name: 'พนักงานกระทรวงสาธารณสุข' },
-        { id: 4, fingle_id: 142, hr_fullname: 'นายเอกสิทธิ์ ทับแสงศรี', hr_position_name: 'พนักงานบริการ', hr_dep_name: 'งานสุขาภิบาล', hr_person_type_name: 'พนักงานกระทรวงสาธารณสุข' },
-        { id: 5, fingle_id: 6, hr_fullname: 'นายเอกภพ สว่างศรี', hr_position_name: 'พนักงานขับรถยนต์', hr_dep_name: 'งานยานพาหนะ', hr_person_type_name: 'พนักงานกระทรวงสาธารณสุข' }
-      ];
-    }
-
-    let totalScansCreated = 0;
-    const scannerIps = ['192.168.111.163', '192.168.111.164', '192.168.111.165'];
-
-    for (let day = 1; day <= daysCount; day++) {
-      const dateStr = `${yearMonth}-${String(day).padStart(2, '0')}`;
-      const dayOfWeek = new Date(dateStr).getDay(); // 0 = Sun, 6 = Sat
-
-      for (const p of personnel) {
-        // เสาร์-อาทิตย์ ทำงาน 30% (เวรพยาบาล/ฉุกเฉิน)
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-        if (isWeekend && (p.id % 3 !== 0)) continue;
-
-        // รูปแบบการลงเวลา:
-        // ~85% ตรงเวลา (ปกติ): 07:45 - 08:14
-        // ~12% มาสาย: 08:16 - 08:45
-        // ~3% ขาด/ลา (ไม่มีสแกน)
-        const rand = (p.id * 17 + day * 31) % 100;
-        if (rand < 3) continue; // ขาด/ลา
-
-        let inH = 8;
-        let inM = 0;
-        let inS = (p.id * 7 + day * 13) % 60;
-        let outH = 16;
-        let outM = (p.id * 3 + day * 11) % 40; // 16:00 - 16:39
-        let outS = (p.id * 5 + day * 17) % 60;
-
-        if (rand >= 3 && rand < 15) {
-          // สาย (LATE) เกิน 08:15 ไป 2-30 นาที
-          inH = 8;
-          inM = 16 + (rand % 25);
-        } else {
-          // ปกติ (ตรงเวลา) ก่อน 08:15
-          inH = 7;
-          inM = 40 + (rand % 34); // 07:40 - 08:13
-          if (inM >= 60) {
-            inH = 8;
-            inM -= 60;
-            if (inM > 14) inM = 14;
-          }
-        }
-
-        const inTimeStr = `${dateStr} ${String(inH).padStart(2, '0')}:${String(inM).padStart(2, '0')}:${String(inS).padStart(2, '0')}`;
-        const outTimeStr = `${dateStr} ${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
-        const mNo = ((p.id + day) % 3) + 1;
-        const sIp = scannerIps[mNo - 1];
-
-        // IN scan
-        await poolAtt.query(`
-          INSERT INTO attendance_raw_scan
-          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
-          VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?, ?, ?, 1, 'PENDING')
-          ON DUPLICATE KEY UPDATE hr_mapped = 1
-        `, [mNo, sIp, p.fingle_id || p.id, inTimeStr, p.id, p.hr_fullname, p.hr_position_name, p.hr_dep_name, p.hr_person_type_name]);
-        totalScansCreated++;
-
-        // OUT scan
-        await poolAtt.query(`
-          INSERT INTO attendance_raw_scan
-          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_dep_name, hr_person_type_name, hr_mapped, push_status)
-          VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, 1, 'PENDING')
-          ON DUPLICATE KEY UPDATE hr_mapped = 1
-        `, [mNo, sIp, p.fingle_id || p.id, outTimeStr, p.id, p.hr_fullname, p.hr_position_name, p.hr_dep_name, p.hr_person_type_name]);
-        totalScansCreated++;
-      }
-    }
-
-    res.json({
-      success: true,
-      personnelCount: personnel.length,
-      daysCount,
-      totalScansCreated,
-      message: `สร้างและบันทึกประวัติการสแกนนิ้วประจำงวดเดือน ${yearMonth} (1-${daysCount} ต.ค.) สำหรับเจ้าหน้าที่ ${personnel.length} ท่าน (รวม +${totalScansCreated} สแกน) ลง MySQL สำเร็จแล้ว! พร้อมคำนวณสถานะ ปกติ/สาย ให้ทุกคนทันที`
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: `สร้างข้อมูลจำลองล้มเหลว: ${err.message}` });
-  }
+  return res.status(403).json({
+    success: false,
+    error: 'MOCK_DISABLED',
+    message: 'ไม่อนุญาตให้สร้างข้อมูลสแกนจำลองรายเดือนใน Production ข้อมูลการลงเวลาต้องมาจากเครื่องสแกน HIP จริงเท่านั้น'
+  });
 });
 
 // 4.13 ตรวจสอบไฟล์ DLL
@@ -3924,21 +3800,23 @@ app.post('/api/push/batch', async (req, res) => {
 
     const [scans] = await poolAtt.query(query, params);
 
-    // ตรวจสอบว่าตาราง fingle_scan ใน hosoffice มีหรือไม่
-    await poolHos.query(`
-      CREATE TABLE IF NOT EXISTS fingle_scan (
-        id BIGINT AUTO_INCREMENT PRIMARY KEY,
-        fingle_id INT NOT NULL,
-        scan_date_time DATETIME NOT NULL,
-        machine_no INT NULL,
-        in_out_mode INT NULL,
-        verify_mode INT NULL,
-        date_time_save DATETIME NULL,
-        create_by VARCHAR(50) NULL,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uq_hos_scan (fingle_id, scan_date_time)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    `);
+    // ข้อ 24: ตรวจสอบว่ามีตาราง fingle_scan ใน HOSOffice หรือไม่ โดยห้ามสั่ง CREATE TABLE บน HOSOffice เด็ดขาด
+    try {
+      const [tableCheck] = await poolHos.query("SHOW TABLES LIKE 'fingle_scan'");
+      if (!tableCheck || tableCheck.length === 0) {
+        return res.status(502).json({
+          success: false,
+          error: 'HOSOFFICE_TABLE_NOT_FOUND',
+          message: `ไม่พบตาราง fingle_scan บนฐานข้อมูล ${hosofficeDbName} กรุณาตรวจสอบสิทธิ์และฐานข้อมูล HOSOffice`
+        });
+      }
+    } catch (tblErr) {
+      return res.status(502).json({
+        success: false,
+        error: 'HOSOFFICE_QUERY_ERROR',
+        message: `ไม่สามารถตรวจสอบตาราง fingle_scan ใน ${hosofficeDbName}: ${tblErr.message}`
+      });
+    }
 
     // Ensure push_batches table exists in samchuk_attendance
     await poolAtt.query(`

@@ -888,10 +888,9 @@ class AttendanceStore {
       return rawDt.startsWith(date) || rawDt.startsWith(beDate) || (thSlashDate != null && rawDt.startsWith(thSlashDate));
     });
 
-    // Index date scans by fingleId, personId, and hrFullname for O(1) lookups
+    // ข้อ 9: Index date scans ด้วย personId และ fingleId เท่านั้น (ยกเลิกการจับคู่ด้วยชื่อเพื่อป้องกันปัญหาชื่อซ้ำ)
     const scansByFingle = new Map<number, RawScan[]>();
     const scansByPerson = new Map<number, RawScan[]>();
-    const scansByName = new Map<string, RawScan[]>();
 
     for (const r of dateScans) {
       const fid = Number(r.fingleId);
@@ -906,12 +905,6 @@ class AttendanceStore {
         if (!arr) { arr = []; scansByPerson.set(pid, arr); }
         arr.push(r);
       }
-      const nm = (r.hrFullname || '').trim().toLowerCase();
-      if (nm) {
-        let arr = scansByName.get(nm);
-        if (!arr) { arr = []; scansByName.set(nm, arr); }
-        arr.push(r);
-      }
     }
 
     targetPersonnel.forEach(p => {
@@ -923,22 +916,16 @@ class AttendanceStore {
         return tName === typeName || typeName.includes(tName) || tName.includes(typeName);
       }) || this.state.personnelTypes?.find(t => t.isActive) || this.state.personnelTypes?.[0] || DEFAULT_PERSONNEL_TYPES[0];
 
-      // 2. ข้อมูลสแกนทั้งหมดของคนนี้ในวันที่ระบุ เรียงตามเวลา (ดึงจาก index)
+      // 2. ข้อมูลสแกนทั้งหมดของคนนี้ในวันที่ระบุ เรียงตามเวลา (ดึงจาก personId / fingleId)
       const targetFingle = Number(p.fingleId);
       const targetPersonId = Number(p.personId);
-      const targetName = (p.hrFullname || '').trim().toLowerCase();
 
       const matchedMap = new Map<string | number, RawScan>();
-      if (targetFingle > 0) {
-        for (const s of scansByFingle.get(targetFingle) || []) matchedMap.set(s.id, s);
-      }
       if (targetPersonId > 0) {
         for (const s of scansByPerson.get(targetPersonId) || []) matchedMap.set(s.id, s);
       }
-      if (targetName) {
-        for (const s of scansByName.get(targetName) || []) {
-          matchedMap.set(s.id, s);
-        }
+      if (targetFingle > 0) {
+        for (const s of scansByFingle.get(targetFingle) || []) matchedMap.set(s.id, s);
       }
       const scans = Array.from(matchedMap.values()).sort((a, b) => (a.scanDateTime || '').localeCompare(b.scanDateTime || ''));
 
@@ -1741,10 +1728,9 @@ class AttendanceStore {
   public getMonthlySummary(yearMonth: string = '2026-10'): MonthlyPersonSummary[] {
     const today = new Date();
     const currentYearMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-    let maxDays = 31;
-    if (yearMonth === currentYearMonth) {
-      maxDays = Math.min(31, Math.max(14, today.getDate()));
-    }
+    const [y, m] = yearMonth.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const maxDays = yearMonth === currentYearMonth ? Math.min(daysInMonth, today.getDate()) : daysInMonth;
 
     const dateSet = new Set<string>();
     for (let day = 1; day <= maxDays; day++) {
