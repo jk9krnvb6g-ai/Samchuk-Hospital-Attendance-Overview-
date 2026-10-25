@@ -52,25 +52,60 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.API_PORT || 3002;
 
-// ข้อ 3 & P0.4: จำกัด CORS เฉพาะ Origin ที่ได้รับอนุญาตอย่างเข้มงวด (ปิด origin: '*', ลบ wildcard suffix)
-const allowedOrigins = process.env.ALLOWED_ORIGINS 
-  ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
-  : [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:3002',
-      'http://127.0.0.1:3000',
-      'http://127.0.0.1:3001',
-      'http://127.0.0.1:3002'
-    ];
+// ข้อ 3 & P0.4: จัดการ CORS Allowlist ให้ยืดหยุ่น ปลอดภัย และครอบคลุมทั้ง Localhost, LAN และ API Gateway
+const configuredOrigins = (process.env.ALLOWED_ORIGINS || process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+function isAllowedOrigin(origin) {
+  // 1. ไม่มี Origin Header (เช่น Same-Origin, Postman, curl, Service-to-Service, API Gateway Proxy ภายใน)
+  if (!origin) return true;
+
+  // 2. ถ้ากำหนด ALLOWED_ORIGINS=* หรือ CORS_ALLOW_ALL=true
+  if (process.env.ALLOWED_ORIGINS === '*' || process.env.CORS_ALLOW_ALL === 'true') {
+    return true;
+  }
+
+  // 3. ตรงกับที่ระบุใน Environment Variable
+  if (configuredOrigins.includes(origin)) return true;
+
+  try {
+    const parsedUrl = new URL(origin);
+    const hostname = parsedUrl.hostname;
+
+    // 4. อนุญาต Localhost & Loopback ทุก Port
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+      return true;
+    }
+
+    // 5. อนุญาต Private Intranet IPs ของโรงพยาบาล (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+    if (
+      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname)
+    ) {
+      return true;
+    }
+
+    // 6. โดเมนภายในโรงพยาบาล/กระทรวงสาธารณสุข
+    if (hostname.endsWith('.moph.go.th') || hostname.endsWith('.local') || hostname === 'samchuk-hospital') {
+      return true;
+    }
+  } catch {}
+
+  return false;
+}
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Requests ภายในเครื่องที่ไม่มี Origin header (curl, server-side, CLI) หรือ Origin ที่ระบุใน Whitelist เท่านั้น
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isAllowedOrigin(origin)) {
       return callback(null, true);
     }
-    return callback(new Error('CORS Denied: Origin not permitted by Samchuk Attendance Security Policy'));
+    // ห้าม throw new Error(...) เพราะจะทำให้ Express ทะลัก Error stack trace 500 ลง Console
+    // ให้ส่ง false เพื่อปฏิเสธ CORS ตามมาตรฐาน
+    console.warn(`[CORS Blocked] Origin "${origin}" ไม่ได้รับอนุญาต (หากเป็นโดเมนของโรงพยาบาล ให้เพิ่มใน ALLOWED_ORIGINS ในไฟล์ .env)`);
+    return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

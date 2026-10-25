@@ -519,12 +519,20 @@ class ApiClientService {
     preview?: boolean;
   }) {
     try {
-      const res = await fetch(`${this.customBaseUrl}/api/scanners/sync-custom`, {
+      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/scanners/sync-custom`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      return await res.json();
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return {
+          success: false,
+          message: `เซิร์ฟเวอร์ส่งผลลัพธ์ไม่ถูกต้อง (HTTP ${res.status}): ${text.slice(0, 150)}`
+        };
+      }
     } catch (err: unknown) {
       return {
         success: false,
@@ -538,7 +546,7 @@ class ApiClientService {
    */
   public async getDatabaseOverview() {
     try {
-      const res = await fetch(`${this.customBaseUrl}/api/db/overview`);
+      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/db/overview`);
       return await res.json();
     } catch {
       return {
@@ -565,6 +573,9 @@ class ApiClientService {
   private getFriendlyFetchError(err: unknown, serviceName: string = 'Backend API'): string {
     const rawMsg = err instanceof Error ? err.message : 'Failed';
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    if (rawMsg.includes("Unexpected token '<'") || rawMsg.includes("<!DOCTYPE")) {
+      return `ไม่สามารถติดต่อ ${serviceName} ได้ เนื่องจากเซิร์ฟเวอร์ส่งกลับเป็นหน้าเว็บ Error HTML แทนข้อมูล JSON (เกิดจาก CORS Denied หรือ Backend มีข้อผิดพลาด) -> กรุณาอัปเดตไฟล์ backend/server.cjs เป็นเวอร์ชันล่าสุดบน Server`;
+    }
     if (rawMsg.toLowerCase().includes('failed to fetch') || rawMsg.toLowerCase().includes('networkerror')) {
       if (isHttps) {
         return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (เกิดจากบราวเซอร์บล็อก Mixed Content เพราะเข้าเว็บด้วย HTTPS) -> กรุณาเปลี่ยน URL หน้าเว็บเป็น http://10.2.0.13:3001/Sam_Att/ (ใช้ http:// แทน https://)`;
