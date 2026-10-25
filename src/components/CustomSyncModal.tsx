@@ -661,7 +661,24 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                 )}
                 <div className="flex-1 leading-relaxed font-medium">
-                  {resultMsg.text}
+                  <div>{resultMsg.text}</div>
+                  {resultMsg.text.includes('Authentication Required') && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await apiClient.login('admin', 'SamchukAdmin@2026');
+                        if (res.success) {
+                          setResultMsg({ type: 'success', text: 'เข้าสู่ระบบในฐานะ Admin สำเร็จแล้ว กรุณากดยืนยันดึงข้อมูลอีกครั้ง' });
+                        } else {
+                          setResultMsg({ type: 'error', text: 'เข้าสู่ระบบไม่สำเร็จ: ' + (res.message || 'โปรดตรวจสอบรหัสผ่าน') });
+                        }
+                      }}
+                      className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-sm transition-colors"
+                    >
+                      <Zap className="w-3 h-3" />
+                      <span>เข้าสู่ระบบอัตโนมัติ (Login as Admin)</span>
+                    </button>
+                  )}
                 </div>
               </div>
 

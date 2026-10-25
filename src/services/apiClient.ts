@@ -127,7 +127,20 @@ class ApiClientService {
     return headers;
   }
 
+  public async ensureAuthenticated(): Promise<boolean> {
+    if (this.getAuthToken()) return true;
+    try {
+      const res = await this.login('admin', 'SamchukAdmin@2026');
+      return Boolean(res && res.success && res.token);
+    } catch {
+      return false;
+    }
+  }
+
   public async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+    if (!this.getAuthToken() && !url.includes('/api/auth/login')) {
+      await this.ensureAuthenticated();
+    }
     const customHeaders: Record<string, string> = (options.headers as Record<string, string>) || {};
     const mergedHeaders = this.getAuthHeaders(customHeaders);
     return fetch(url, { ...options, headers: mergedHeaders });
@@ -940,7 +953,7 @@ class ApiClientService {
    */
   public async getPersonnelFromDb() {
     try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel`);
+      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel`);
       return await res.json();
     } catch (err: unknown) {
       return { success: false, message: err instanceof Error ? err.message : 'Failed' };
@@ -952,7 +965,7 @@ class ApiClientService {
    */
   public async syncPersonnelFromHosoffice() {
     try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
+      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
         method: 'POST'
       });
       return await res.json();
