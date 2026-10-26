@@ -13,6 +13,7 @@ import { SystemAndLogsPage } from './pages/SystemAndLogsPage';
 import { MonthlyReportPage } from './pages/MonthlyReportPage';
 import { MyAttendancePage } from './pages/MyAttendancePage';
 import { CustomSyncModal } from './components/CustomSyncModal';
+import { SyncLoadingOverlay } from './components/SyncLoadingOverlay';
 import { MixedContentBanner } from './components/MixedContentBanner';
 import { User } from './types/attendance';
 
@@ -32,11 +33,30 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  // ปิดการ Sync อัตโนมัติตลอดเวลา (Manual Sync Only)
-  // ไม่มีการรัน Interval ในเบื้องหลัง เพื่อป้องกันการสุ่มดึงหรือเขียนทับข้อมูลโดยไม่ได้รับอนุญาต
+  // เมื่อผู้ใช้กดปุ่ม Sync ด่วนจาก Header หรือปุ่มดึงด่วนในหน้าต่างๆ ให้เริ่มดึงข้อมูลดิบจากเครื่อง 1, 2, 3 พร้อมหน้า Loading ล็อกจอ
+  const handleQuickSync = async () => {
+    setIsSyncing(true);
+    try {
+      const todayBangkok = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+      const res = await attendanceStore.syncScannersCustom({
+        machineNos: [1, 2, 3],
+        mode: 'TODAY',
+        date: todayBangkok,
+        allPersonnel: true,
+        recalculate: true,
+        strategy: 'SKIP_DUPLICATES',
+        preview: false
+      });
+      showToast(res.message);
+    } catch (err: any) {
+      showToast(err.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลจากเครื่องสแกน');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
-  // เมื่อผู้ใช้กดปุ่ม Sync บน Header หรือส่วนต่างๆ ให้เปิดหน้าต่าง CustomSyncModal เพื่อตรวจสอบข้อมูลและเลือกวิธีก่อนดึง
-  const handleTriggerSync = () => {
+  // เมื่อผู้ใช้ต้องการกำหนดเงื่อนไขเครื่อง/วันที่เอง
+  const handleTriggerCustomSync = () => {
     setIsCustomSyncOpen(true);
   };
 
@@ -125,7 +145,7 @@ export default function App() {
           currentUser={storeState.currentUser}
           scanners={storeState.scanners}
           pendingCount={pendingPushCount}
-          onSyncClick={handleTriggerSync}
+          onSyncClick={handleQuickSync}
           isSyncing={isSyncing}
           isCollapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -137,7 +157,7 @@ export default function App() {
             <DashboardPage
               state={storeState}
               onNavigate={setCurrentTab}
-              onSync={handleTriggerSync}
+              onSync={handleQuickSync}
               isSyncing={isSyncing}
             />
           )}
@@ -153,7 +173,7 @@ export default function App() {
           {currentTab === 'raw_scans' && (
             <RawScansPage
               state={storeState}
-              onSync={handleTriggerSync}
+              onSync={handleQuickSync}
               isSyncing={isSyncing}
             />
           )}
@@ -173,7 +193,7 @@ export default function App() {
           {currentTab === 'scanners' && (
             <ScannersPage
               state={storeState}
-              onSync={handleTriggerSync}
+              onSync={handleQuickSync}
               isSyncing={isSyncing}
             />
           )}
@@ -187,6 +207,15 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {/* Fullscreen Loading Screen blocking all clicks until sync is complete */}
+      <SyncLoadingOverlay
+        isLoading={isSyncing}
+        title="กำลังดึงข้อมูลดิบจากเครื่องสแกนนิ้วมือ (ดึงด่วน)..."
+        subtitle="ระบบกำลังติดต่อเครื่องสแกน HIP CMiF68S เครื่อง 1, 2, 3 ผ่าน TCP Port 5005 และบันทึกลง MySQL attendance_raw_scan"
+        machines={[1, 2, 3]}
+        modeText="ดึงข้อมูลด่วนวันนี้ (เครื่อง 1-3)"
+      />
 
       {/* Custom Sync Modal with Preview and Duplicate Control */}
       <CustomSyncModal

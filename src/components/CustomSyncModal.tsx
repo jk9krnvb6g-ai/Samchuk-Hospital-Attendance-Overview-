@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { attendanceStore } from '../services/attendanceStore';
 import { apiClient } from '../services/apiClient';
+import { SyncLoadingOverlay } from './SyncLoadingOverlay';
 
 interface CustomSyncModalProps {
   isOpen: boolean;
@@ -214,9 +215,38 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
   const isMixedBlocked = typeof window !== 'undefined' && window.location.protocol === 'https:' && apiClient.getBaseUrl().startsWith('http:');
   const httpUrl = typeof window !== 'undefined' ? window.location.href.replace(/^https:/i, 'http:') : '';
 
+  const modeDescription = 
+    syncSource === 'HOSOFFICE'
+      ? `นำเข้าประวัติจาก hosoffice (${strategy === 'SKIP_DUPLICATES' ? 'ไม่ทับของเดิม' : 'ทับของเดิม'})`
+      : `เครื่อง [${selectedMachines.join(', ')}] · ${
+          timeMode === 'TODAY' 
+            ? 'วันนี้' 
+            : timeMode === 'DATE' 
+            ? `วันที่ ${singleDate}` 
+            : timeMode === 'RANGE' 
+            ? `ช่วง ${dateFrom} ถึง ${dateTo}` 
+            : timeMode === 'MONTH' 
+            ? `เดือน ${month}` 
+            : `ปี ${year}`
+        }`;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
+    <>
+      {/* Fullscreen Loading Screen blocking all clicks until sync is complete */}
+      <SyncLoadingOverlay
+        isLoading={isProcessing}
+        title={syncSource === 'HOSOFFICE' ? 'กำลังดึงประวัติสแกนจาก HOSOffice...' : 'กำลังดึงข้อมูลดิบจากเครื่องสแกนนิ้วมือ...'}
+        subtitle={
+          syncSource === 'HOSOFFICE'
+            ? 'ระบบกำลังอ่านข้อมูลจากตาราง hosoffice.fingle_scan และบันทึกลง attendance_raw_scan'
+            : 'ระบบกำลังติดต่อเครื่องสแกน HIP CMiF68S ผ่าน TCP Port 5005 และบันทึกลง MySQL attendance_raw_scan'
+        }
+        machines={selectedMachines}
+        modeText={modeDescription}
+      />
+
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+        <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
         <div className="px-6 py-4 bg-gradient-to-r from-teal-700 to-teal-800 text-white flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -799,5 +829,6 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
         </div>
       </div>
     </div>
+  </>
   );
 };
