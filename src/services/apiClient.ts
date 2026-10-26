@@ -1014,9 +1014,19 @@ class ApiClientService {
    */
   public async syncPersonnelFromHosoffice() {
     try {
-      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
-        method: 'POST'
+      let res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' }
       });
+
+      // Fallback: หาก IIS มีโมดูล WebDAV บล็อกคำสั่ง POST ด้วย 405 (Method Not Allowed) ให้สลับเป็น GET อัตโนมัติ
+      if (res.status === 405) {
+        res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' }
+        });
+      }
+
       return await res.json();
     } catch (err: unknown) {
       return { success: false, message: err instanceof Error ? err.message : 'Failed' };

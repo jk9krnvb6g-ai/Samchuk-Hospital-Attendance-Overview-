@@ -2721,7 +2721,8 @@ app.get('/api/personnel', async (req, res) => {
 
 // 4.6.2 ซิงค์รายชื่อบุคลากรจาก hosoffice.hr_person เข้ามาบันทึกใน samchuk_attendance.attendance_personnel (ทำงานเมื่อกดสั่งเท่านั้น)
 // โดยยึดฐาน HOSOffice เป็นหลัก (Single Source of Truth) ถ้าใน HOSOffice ไม่มี ให้ตั้งค่าในฐานเราเป็น 'INACTIVE' (ไม่ได้ใช้งาน)
-app.post('/api/personnel/sync-from-hosoffice', async (req, res) => {
+// รองรับทั้ง POST และ GET เพื่อป้องกันปัญหา HTTP 405 (Method Not Allowed) บน IIS WebDAV
+app.all('/api/personnel/sync-from-hosoffice', async (req, res) => {
   try {
     await ensureTablesExist();
     const poolAtt = getDbPool();
