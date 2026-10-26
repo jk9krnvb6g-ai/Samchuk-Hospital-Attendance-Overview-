@@ -3296,6 +3296,143 @@ function toBangkokDateTimeStr(val) {
 }
 
 // ============================================================================
+// ฟังก์ชันซิงค์ประวัติสแกนจาก hosoffice.fingle_scan เข้าสู่ samchuk_attendance.attendance_raw_scan
+// ทำให้ตาราง attendance_raw_scan ใน MySQL ได้รับข้อมูลสแกนจริงเสมอ
+// ============================================================================
+async function syncHosofficeToAttendanceRawScan(options = {}) {
+  const { dateFrom, dateTo, dates = [], strategy = 'SKIP_DUPLICATES', limit = 10000 } = options;
+  const poolAtt = getDbPool();
+  const poolHos = getHosofficePool();
+
+  // 1. แคชข้อมูลบุคลากรเพื่อ map snapshot อย่างครบถ้วน
+  let personnel = [];
+  try {
+    const [rows] = await poolAtt.query(`
+      SELECT person_id as id, fingle_id, hr_fullname, hr_position_name, hr_level_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id, hr_department_sub_id
+      FROM attendance_personnel WHERE status = 'ACTIVE' OR status IS NULL
+    `);
+    personnel = rows || [];
+  } catch {}
+
+  const personMap = new Map();
+  for (const p of personnel) {
+    if (p.fingle_id) personMap.set(Number(p.fingle_id), p);
+    if (p.id) personMap.set(Number(p.id), p);
+  }
+
+  // 2. ดึงประวัติสแกนจาก hosoffice.fingle_scan
+  let whereClauses = [];
+  let params = [];
+  if (Array.isArray(dates) && dates.length > 0) {
+    whereClauses.push(`DATE(scan_date_time) IN (?)`);
+    params.push(dates);
+  } else if (dateFrom && dateTo) {
+    whereClauses.push(`DATE(scan_date_time) BETWEEN ? AND ?`);
+    params.push(dateFrom, dateTo);
+  } else if (dateFrom) {
+    whereClauses.push(`DATE(scan_date_time) >= ?`);
+    params.push(dateFrom);
+  }
+
+  let query = 'SELECT * FROM fingle_scan';
+  if (whereClauses.length > 0) {
+    query += ' WHERE ' + whereClauses.join(' AND ');
+  }
+  query += ' ORDER BY scan_date_time DESC LIMIT ?';
+  params.push(limit);
+
+  let scans = [];
+  try {
+    const [rows] = await poolHos.query(query, params);
+    scans = rows || [];
+  } catch (err) {
+    console.warn('[syncHosofficeToAttendanceRawScan] Query hosoffice.fingle_scan warning:', err.message);
+    return { inserted: 0, updated: 0, skipped: 0, total: 0, error: err.message };
+  }
+
+  if (!scans || scans.length === 0) {
+    return { inserted: 0, updated: 0, skipped: 0, total: 0 };
+  }
+
+  // 3. บันทึกลงตาราง attendance_raw_scan
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const s of scans) {
+    const fid = Number(s.fingle_id || s.person_id || s.FINGLE_ID || s.PERSON_ID);
+    if (!fid) continue;
+
+    const rawTime = s.scan_date_time || s.SCAN_DATE_TIME;
+    const sTimeStr = toBangkokDateTimeStr(rawTime);
+    if (!sTimeStr) continue;
+
+    const mNo = Number(s.machine_no || s.machin_id || s.MACHIN_ID || 1);
+    const inOut = Number(s.in_out_mode || s.IN_OUT_MODE || 0);
+    const vMode = Number(s.verify_mode || s.VERIFY_MODE || 1);
+    const p = personMap.get(fid);
+
+    try {
+      if (strategy === 'OVERWRITE') {
+        const [r] = await poolAtt.query(`
+          INSERT INTO attendance_raw_scan
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id, hr_department_sub_id, hr_mapped, push_status, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PUSHED', 'SYNC_CLI')
+          ON DUPLICATE KEY UPDATE 
+            in_out_mode = VALUES(in_out_mode),
+            verify_mode = VALUES(verify_mode),
+            hr_fullname = VALUES(hr_fullname),
+            hr_position_name = VALUES(hr_position_name),
+            hr_leavel_name = VALUES(hr_leavel_name),
+            hr_dep_name = VALUES(hr_dep_name),
+            hr_dep_sub_name = VALUES(hr_dep_sub_name),
+            hr_person_type_name = VALUES(hr_person_type_name),
+            hr_mapped = VALUES(hr_mapped)
+        `, [
+          mNo, s.device_ip || '192.168.111.163', fid, sTimeStr, vMode, inOut,
+          p?.id || null, p?.hr_fullname || s.hr_fullname || s.HR_FULLNAME || `เจ้าหน้าที่ ${fid}`,
+          p?.hr_position_name || s.hr_position_name || s.HR_POSITION_NAME || '',
+          p?.hr_level_name || s.hr_leavel_name || s.HR_LEAVEL_NAME || '',
+          p?.hr_dep_name || s.hr_dep_name || s.HR_DEP_NAME || '',
+          p?.hr_dep_sub_name || s.hr_dep_sub_name || s.HR_DEP_SUB_NAME || '',
+          p?.hr_person_type_name || s.hr_person_type_name || s.HR_PERSON_TYPE_NAME || 'ข้าราชการ',
+          p?.hr_person_type_id || 1,
+          p?.hr_department_id || null,
+          p?.hr_department_sub_id || null,
+          p ? 1 : 0
+        ]);
+        if (r.affectedRows === 1) inserted++;
+        else updated++;
+      } else {
+        const [r] = await poolAtt.query(`
+          INSERT IGNORE INTO attendance_raw_scan
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id, hr_department_sub_id, hr_mapped, push_status, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PUSHED', 'SYNC_CLI')
+        `, [
+          mNo, s.device_ip || '192.168.111.163', fid, sTimeStr, vMode, inOut,
+          p?.id || null, p?.hr_fullname || s.hr_fullname || s.HR_FULLNAME || `เจ้าหน้าที่ ${fid}`,
+          p?.hr_position_name || s.hr_position_name || s.HR_POSITION_NAME || '',
+          p?.hr_level_name || s.hr_leavel_name || s.HR_LEAVEL_NAME || '',
+          p?.hr_dep_name || s.hr_dep_name || s.HR_DEP_NAME || '',
+          p?.hr_dep_sub_name || s.hr_dep_sub_name || s.HR_DEP_SUB_NAME || '',
+          p?.hr_person_type_name || s.hr_person_type_name || s.HR_PERSON_TYPE_NAME || 'ข้าราชการ',
+          p?.hr_person_type_id || 1,
+          p?.hr_department_id || null,
+          p?.hr_department_sub_id || null,
+          p ? 1 : 0
+        ]);
+        if (r.affectedRows > 0) inserted++;
+        else skipped++;
+      }
+    } catch (e) {
+      skipped++;
+    }
+  }
+
+  return { inserted, updated, skipped, total: scans.length };
+}
+
+// ============================================================================
 // โมดูลคำนวณผลการปฏิบัติงานรายวัน (Attendance Daily Calculator - ข้อ 4, 5, 8, 11, 12, 13, 14, 17)
 // ============================================================================
 // ============================================================================
@@ -4196,6 +4333,26 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
         console.warn('Record custom sync log error:', logErr.message);
       }
 
+      // ซิงค์จาก hosoffice.fingle_scan เข้าสู่ samchuk_attendance.attendance_raw_scan ทันทีเมื่อบันทึกจริง (!preview)
+      let stagingInserted = 0;
+      let stagingUpdated = 0;
+      let stagingSkipped = 0;
+      if (!preview && cliResult.success) {
+        try {
+          const syncStagingRes = await syncHosofficeToAttendanceRawScan({
+            dates: cliResult.affectedDates && cliResult.affectedDates.length > 0 ? cliResult.affectedDates : null,
+            days: daysBack,
+            strategy: strategy || 'SKIP_DUPLICATES'
+          });
+          stagingInserted = syncStagingRes.inserted;
+          stagingUpdated = syncStagingRes.updated;
+          stagingSkipped = syncStagingRes.skipped;
+          console.log(`[Staging Sync] Copied ${stagingInserted} scans into samchuk_attendance.attendance_raw_scan`);
+        } catch (stgErr) {
+          console.warn('[Staging Sync Warning] Could not sync fingle_scan to attendance_raw_scan:', stgErr.message);
+        }
+      }
+
       // คำนวณผลรายวันอัตโนมัติหากบันทึกจริง (N3)
       if (!preview && recalculate && cliResult.affectedDates && cliResult.affectedDates.length > 0) {
         for (const affDate of cliResult.affectedDates) {
@@ -4207,18 +4364,24 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
         }
       }
 
+      const totalNewRecorded = stagingInserted > 0 ? stagingInserted : (cliResult.totalNew || 0);
+
       return res.json({
         success: cliResult.success,
         preview,
         totalFound: cliResult.totalRead || 0,
-        newCount: cliResult.totalNew || 0,
+        newCount: totalNewRecorded,
         duplicateCount: cliResult.duplicates || 0,
-        totalInserted: cliResult.totalNew || 0,
-        totalUpdated: 0,
+        totalInserted: totalNewRecorded,
+        totalUpdated: stagingUpdated,
         totalSkipped: cliResult.duplicates || 0,
+        stagingInserted,
+        stagingSkipped,
         affectedDates: cliResult.affectedDates || [],
         machines: cliResult.machines || [],
-        message: cliResult.message || `ดึงข้อมูลจากเครื่องสแกนสำเร็จ (อ่านได้ ${cliResult.totalRead || 0}, ใหม่ +${cliResult.totalNew || 0}, ซ้ำ ${cliResult.duplicates || 0})`
+        message: preview
+          ? `ตรวจสอบเครื่องสแกน (จำลอง): อ่านจากหน่วยความจำเครื่องสแกนรวม ${cliResult.totalRead || 0} รายการ (รายการใหม่ +${cliResult.totalNew || 0}, มีในระบบแล้ว ${cliResult.duplicates || 0} รายการ)`
+          : `ซิงค์เครื่องสแกนสำเร็จ: อ่านประวัติสะสมจากเครื่องสแกน 3 เครื่องรวม ${cliResult.totalRead || 0} รายการ -> บันทึกลงตาราง attendance_raw_scan แล้ว +${stagingInserted} รายการ (ซ้ำเดิม ${cliResult.duplicates || 0} รายการ) และคำนวณผลสรุปเวลาเรียบร้อยแล้ว`
       });
     }
 
@@ -4666,6 +4829,29 @@ app.post('/api/scans/import-from-hosoffice', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: `นำเข้าจาก HosOffice ล้มเหลว: ${err.message}` });
+  }
+});
+
+// ซิงค์ข้อมูลทั้งหมดจาก hosoffice.fingle_scan เข้าสู่ attendance_raw_scan โดยตรง
+app.post('/api/scans/sync-to-raw', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const { dates, dateFrom, dateTo, strategy = 'SKIP_DUPLICATES', limit = 20000 } = req.body || {};
+    const result = await syncHosofficeToAttendanceRawScan({ dates, dateFrom, dateTo, strategy, limit });
+    
+    if (result.inserted > 0 && dates && Array.isArray(dates)) {
+      for (const d of dates) {
+        try { await calculateDailyAttendanceForDate(d); } catch {}
+      }
+    }
+
+    res.json({
+      success: true,
+      ...result,
+      message: `ซิงค์ประวัติจาก hosoffice.fingle_scan เข้าสู่ตาราง attendance_raw_scan สำเร็จ: นำเข้าใหม่ +${result.inserted} รายการ (ปรับปรุง ${result.updated}, ซ้ำเดิม ${result.skipped} รายการ)`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `ซิงค์ไม่สำเร็จ: ${err.message}` });
   }
 });
 

@@ -682,8 +682,61 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                 </div>
               </div>
 
-              {/* กล่องวิเคราะห์สาเหตุเมื่อพบ 0 รายการ (ติดที่ตรงไหน) พร้อมปุ่มแก้ไขด่วน */}
-              {(resultMsg.isZeroResult || resultMsg.text.includes('+0 รายการ') || resultMsg.text.includes('0 รายการ')) && (
+              {/* คำอธิบายชัดเจนเรื่องจำนวนประวัติสะสม 7,997 / 3,480 รายการ */}
+              {resultMsg.text.includes('อ่านประวัติสะสม') || resultMsg.text.includes('อ่านทั้งหมด') ? (
+                <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl space-y-1 text-sky-950 text-[11px] leading-relaxed shadow-2xs">
+                  <div className="font-bold text-sky-900 flex items-center gap-1.5">
+                    <Database className="w-4 h-4 text-sky-700" />
+                    <span>คำอธิบายตัวเลขที่ดึงได้จากเครื่องสแกน (CMiF68S):</span>
+                  </div>
+                  <p>
+                    • <strong>อ่านทั้งหมด:</strong> คือประวัติสแกนทั้งหมดที่ค้างอยู่ในหน่วยความจำตัวเครื่องสแกนทั้ง 3 เครื่อง (Flash Memory) ไม่ใช่ข้อมูลของวันเดียว
+                  </p>
+                  <p>
+                    • <strong>บันทึกลงฐานข้อมูล:</strong> ระบบกรองเฉพาะวันและตรวจจับข้อมูลซ้ำให้อัตโนมัติ บันทึกลงตาราง <code className="bg-sky-100 px-1 py-0.5 rounded font-mono font-bold text-sky-950">attendance_raw_scan</code> เพื่อใช้ประมวลผลเวลาเข้า-ออกและสาย
+                  </p>
+                </div>
+              ) : null}
+
+              {/* ปุ่มด่วน: คัดลอกข้อมูลจาก hosoffice.fingle_scan เข้าสู่ attendance_raw_scan ทันที */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2">
+                <div className="text-[11px] text-slate-600">
+                  ต้องการนำข้อมูลที่มีอยู่ใน <code className="font-mono font-bold text-slate-800">hosoffice.fingle_scan</code> เข้าสู่ตาราง <code className="font-mono font-bold text-slate-800">attendance_raw_scan</code>?
+                </div>
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={async () => {
+                    setIsProcessing(true);
+                    try {
+                      const syncRes = await apiClient.syncHosofficeToRawScan({
+                        dates: timeMode === 'DATE' ? [singleDate] : undefined,
+                        dateFrom: timeMode === 'RANGE' ? dateFrom : undefined,
+                        dateTo: timeMode === 'RANGE' ? dateTo : undefined,
+                        strategy
+                      });
+                      if (syncRes.success) {
+                        setResultMsg({ type: 'success', text: syncRes.message, isZeroResult: syncRes.inserted === 0 });
+                        await attendanceStore.loadFromMySqlDb();
+                        if (onSyncComplete) onSyncComplete(syncRes.message);
+                      } else {
+                        setResultMsg({ type: 'error', text: syncRes.message || 'ซิงค์ไม่สำเร็จ' });
+                      }
+                    } catch (e: any) {
+                      setResultMsg({ type: 'error', text: e.message || 'เกิดข้อผิดพลาด' });
+                    } finally {
+                      setIsProcessing(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[11px] font-bold cursor-pointer transition-colors shadow-2xs shrink-0 disabled:opacity-50"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>📥 ดึงจาก fingle_scan ลง attendance_raw_scan</span>
+                </button>
+              </div>
+
+              {/* กล่องวิเคราะห์สาเหตุเมื่อพบ 0 รายการ (เฉพาะกรณีที่ได้ 0 รายการจริง ไม่ติดเมื่อดึงได้หลายพัน) */}
+              {(resultMsg.isZeroResult || (/(\+|^|\s)0 รายการ/.test(resultMsg.text) && !resultMsg.text.includes('+3031') && !resultMsg.text.includes('+1353') && !resultMsg.text.includes('+512') && !resultMsg.text.includes('อ่านทั้งหมด'))) && (
                 <div className="p-4 bg-amber-50/90 border border-amber-300 rounded-xl space-y-3 text-amber-950 shadow-xs">
                   <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
                     <HelpCircle className="w-4 h-4 text-amber-700 shrink-0" />

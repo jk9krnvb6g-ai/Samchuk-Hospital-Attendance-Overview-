@@ -555,6 +555,25 @@ class ApiClientService {
   }
 
   /**
+   * ซิงค์ข้อมูลจาก hosoffice.fingle_scan เข้าสู่ attendance_raw_scan ใน samchuk_attendance โดยตรง
+   */
+  public async syncHosofficeToRawScan(payload?: { dates?: string[]; dateFrom?: string; dateTo?: string; strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE' }) {
+    try {
+      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/scans/sync-to-raw`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {})
+      });
+      return await res.json();
+    } catch (err: unknown) {
+      return {
+        success: false,
+        message: this.getFriendlyFetchError(err, 'Backend API (Sync to Raw)')
+      };
+    }
+  }
+
+  /**
    * ข้อมูลสรุปภาพรวมฐานข้อมูลทั้งหมดในระบบ (Dual Database Overview)
    */
   public async getDatabaseOverview() {
