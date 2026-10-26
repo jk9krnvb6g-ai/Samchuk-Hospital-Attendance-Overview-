@@ -32,20 +32,26 @@ interface CustomSyncModalProps {
   defaultMonth?: string;
 }
 
+const getTodayBangkok = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+const getThisMonthBangkok = () => getTodayBangkok().substring(0, 7);
+
 export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
   isOpen,
   onClose,
   onSyncComplete,
-  defaultDate = '2026-10-14',
-  defaultMonth = '2026-10'
+  defaultDate,
+  defaultMonth
 }) => {
+  const currentToday = getTodayBangkok();
+  const currentMonth = getThisMonthBangkok();
+
   const [selectedMachines, setSelectedMachines] = useState<number[]>([1, 2, 3]);
-  const [timeMode, setTimeMode] = useState<'TODAY' | 'DATE' | 'RANGE' | 'MONTH' | 'YEAR'>('MONTH');
-  const [singleDate, setSingleDate] = useState<string>(defaultDate);
-  const [dateFrom, setDateFrom] = useState<string>('2026-10-01');
-  const [dateTo, setDateTo] = useState<string>('2026-10-15');
-  const [month, setMonth] = useState<string>(defaultMonth);
-  const [year, setYear] = useState<string>('2026');
+  const [timeMode, setTimeMode] = useState<'TODAY' | 'DATE' | 'RANGE' | 'MONTH' | 'YEAR'>('TODAY');
+  const [singleDate, setSingleDate] = useState<string>(defaultDate || currentToday);
+  const [dateFrom, setDateFrom] = useState<string>(defaultDate || currentToday);
+  const [dateTo, setDateTo] = useState<string>(defaultDate || currentToday);
+  const [month, setMonth] = useState<string>(defaultMonth || currentMonth);
+  const [year, setYear] = useState<string>(currentToday.substring(0, 4));
   const [syncSource, setSyncSource] = useState<'SCANNERS' | 'HOSOFFICE'>('SCANNERS');
   
   // การจัดการข้อมูลซ้ำ: 'SKIP_DUPLICATES' (ดึงเฉพาะข้อมูลใหม่) vs 'OVERWRITE' (ทับข้อมูลเดิม)
@@ -120,11 +126,11 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
         const res = await attendanceStore.syncScannersCustom({
           machineNos: selectedMachines,
           mode: timeMode,
-          date: singleDate,
-          dateFrom,
-          dateTo,
-          month,
-          year,
+          date: timeMode === 'DATE' ? singleDate : (timeMode === 'TODAY' ? currentToday : undefined),
+          dateFrom: timeMode === 'RANGE' ? dateFrom : undefined,
+          dateTo: timeMode === 'RANGE' ? dateTo : undefined,
+          month: timeMode === 'MONTH' ? month : undefined,
+          year: timeMode === 'YEAR' ? year : undefined,
           allPersonnel: true,
           recalculate: false,
           strategy,
@@ -178,11 +184,11 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
         const res = await attendanceStore.syncScannersCustom({
           machineNos: selectedMachines,
           mode: timeMode,
-          date: singleDate,
-          dateFrom,
-          dateTo,
-          month,
-          year,
+          date: timeMode === 'DATE' ? singleDate : (timeMode === 'TODAY' ? currentToday : undefined),
+          dateFrom: timeMode === 'RANGE' ? dateFrom : undefined,
+          dateTo: timeMode === 'RANGE' ? dateTo : undefined,
+          month: timeMode === 'MONTH' ? month : undefined,
+          year: timeMode === 'YEAR' ? year : undefined,
           allPersonnel: true,
           recalculate: true,
           strategy,
@@ -405,9 +411,9 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
             <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
               {timeMode === 'TODAY' && (
                 <div className="flex items-center justify-between text-xs text-slate-700">
-                  <span>ดึงข้อมูลเวลาสแกนสำหรับวันนี้:</span>
+                  <span>ดึงข้อมูลเวลาสแกนสำหรับวันนี้ (ย้อนหลัง 1 วัน):</span>
                   <span className="font-mono font-bold text-teal-800 bg-teal-100/60 px-2.5 py-1 rounded">
-                    {new Date().toISOString().substring(0, 10)} (วันนี้)
+                    {currentToday} (วันนี้)
                   </span>
                 </div>
               )}

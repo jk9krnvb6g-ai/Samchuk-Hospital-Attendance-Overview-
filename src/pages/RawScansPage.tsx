@@ -12,6 +12,8 @@ import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { PushStatus, RawScan } from '../types/attendance';
 import { QuickMapModal } from '../components/QuickMapModal';
 import { CustomSyncModal } from '../components/CustomSyncModal';
+import { DataTablePagination, PageSizeOption } from '../components/DataTablePagination';
+import { TableHeaderFilterCell, ColumnSortConfig } from '../components/TableHeaderFilterCell';
 
 interface RawScansPageProps {
   state: StoreState;
@@ -37,9 +39,60 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
   const [quickMapScan, setQuickMapScan] = useState<RawScan | null>(null);
   const [mapSuccessNotice, setMapSuccessNotice] = useState<string | null>(null);
 
+  // Pagination & Column Header Filters (Default 10 rows)
+  const [pageSize, setPageSize] = useState<PageSizeOption>(10);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [showColumnFilters, setShowColumnFilters] = useState<boolean>(true);
+  const [sortConfig, setSortConfig] = useState<ColumnSortConfig | null>({ key: 'scanDateTime', direction: 'desc' });
+  const [colFilters, setColFilters] = useState<Record<string, string>>({
+    scanDateTime: '',
+    machineNo: '',
+    fingleId: '',
+    hrFullname: '',
+    hrDepName: '',
+    hrMapped: '',
+    pushStatus: '',
+  });
+
+  const handleSort = (key: string) => {
+    setSortConfig(prev => {
+      if (!prev || prev.key !== key) {
+        return { key, direction: 'asc' };
+      }
+      if (prev.direction === 'asc') {
+        return { key, direction: 'desc' };
+      }
+      return null;
+    });
+  };
+
+  const handleColFilterChange = (key: string, value: string) => {
+    setColFilters(prev => ({ ...prev, [key]: value }));
+    setCurrentPage(1);
+  };
+
+  const handleResetFilters = () => {
+    setColFilters({
+      scanDateTime: '',
+      machineNo: '',
+      fingleId: '',
+      hrFullname: '',
+      hrDepName: '',
+      hrMapped: '',
+      pushStatus: '',
+    });
+    setSearchTerm('');
+    setStatusFilter('ALL');
+    setMachineFilter('ALL');
+    setSelectedDate('');
+    setCurrentPage(1);
+  };
+
+  const activeColFilterCount = Object.values(colFilters).filter(v => v.trim() !== '').length;
+
   // Filtered scans
   const filteredScans = state.rawScans.filter((scan) => {
-    // Search
+    // Toolbar Search
     if (searchTerm) {
       const matchName = scan.hrFullname?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchFingle = scan.fingleId.toString().includes(searchTerm);
@@ -47,23 +100,76 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
       if (!matchName && !matchFingle && !matchDep) return false;
     }
 
-    // Status
+    // Toolbar Status
     if (statusFilter !== 'ALL' && scan.pushStatus !== statusFilter) {
       return false;
     }
 
-    // Machine
+    // Toolbar Machine
     if (machineFilter !== 'ALL' && scan.machineNo.toString() !== machineFilter) {
       return false;
     }
 
-    // Date
+    // Toolbar Date
     if (selectedDate && !scan.scanDateTime.startsWith(selectedDate)) {
+      return false;
+    }
+
+    // Column Header Filters
+    if (colFilters.scanDateTime && !scan.scanDateTime.toLowerCase().includes(colFilters.scanDateTime.toLowerCase())) {
+      return false;
+    }
+    if (colFilters.machineNo && scan.machineNo.toString() !== colFilters.machineNo) {
+      return false;
+    }
+    if (colFilters.fingleId && !scan.fingleId.toString().includes(colFilters.fingleId)) {
+      return false;
+    }
+    if (colFilters.hrFullname && !(scan.hrFullname || '').toLowerCase().includes(colFilters.hrFullname.toLowerCase())) {
+      return false;
+    }
+    if (colFilters.hrDepName) {
+      const q = colFilters.hrDepName.toLowerCase();
+      const depMatch = (scan.hrDepName || '').toLowerCase().includes(q);
+      const subMatch = (scan.hrDepSubName || '').toLowerCase().includes(q);
+      const posMatch = (scan.hrPositionName || '').toLowerCase().includes(q);
+      if (!depMatch && !subMatch && !posMatch) return false;
+    }
+    if (colFilters.hrMapped) {
+      if (colFilters.hrMapped === 'MAPPED' && !scan.hrMapped) return false;
+      if (colFilters.hrMapped === 'UNMAPPED' && scan.hrMapped) return false;
+    }
+    if (colFilters.pushStatus && scan.pushStatus !== colFilters.pushStatus) {
       return false;
     }
 
     return true;
   });
+
+  // Sorted scans
+  const sortedScans = [...filteredScans].sort((a, b) => {
+    if (!sortConfig) return 0;
+    const { key, direction } = sortConfig;
+    let aVal: any = (a as any)[key];
+    let bVal: any = (b as any)[key];
+
+    if (aVal === undefined || aVal === null) aVal = '';
+    if (bVal === undefined || bVal === null) bVal = '';
+
+    let comp = 0;
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      comp = aVal - bVal;
+    } else {
+      comp = String(aVal).localeCompare(String(bVal));
+    }
+    return direction === 'asc' ? comp : -comp;
+  });
+
+  // Paginated scans
+  const effectiveSize = pageSize === -1 ? Math.max(sortedScans.length, 1) : pageSize;
+  const paginatedScans = pageSize === -1
+    ? sortedScans
+    : sortedScans.slice((currentPage - 1) * effectiveSize, currentPage * effectiveSize);
 
   // Export CSV
   const handleExportCsv = () => {
@@ -247,34 +353,157 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
+            <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
               <tr>
-                <th className="py-2.5 px-3 bg-teal-50/90 text-teal-950 border-r border-teal-100 whitespace-nowrap">
+                <TableHeaderFilterCell
+                  title="เวลาสแกนนิ้วจริง (SCAN TIME)"
+                  columnKey="scanDateTime"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.scanDateTime}
+                  onFilterChange={(v) => handleColFilterChange('scanDateTime', v)}
+                  filterType="text"
+                  placeholder="ค้นเวลาเช่น 14 08:..."
+                  showFilterRow={showColumnFilters}
+                  className="bg-teal-50/90 text-teal-950 border-r border-teal-100 whitespace-nowrap min-w-[190px]"
+                >
                   <div className="flex items-center gap-1.5 font-bold">
                     <Fingerprint className="w-3.5 h-3.5 text-teal-700 shrink-0" />
                     <span>เวลาสแกนนิ้วจริง (SCAN TIME)</span>
                   </div>
+                </TableHeaderFilterCell>
+
+                <TableHeaderFilterCell
+                  title="เครื่อง"
+                  columnKey="machineNo"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.machineNo}
+                  onFilterChange={(v) => handleColFilterChange('machineNo', v)}
+                  filterType="select"
+                  selectOptions={[
+                    { label: 'เครื่อง 1 (ตึกอำนวยการ)', value: '1' },
+                    { label: 'เครื่อง 2 (ตึกฉุกเฉิน ER)', value: '2' },
+                    { label: 'เครื่อง 3 (ตึก IPD)', value: '3' },
+                  ]}
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[120px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="FINGLE_ID"
+                  columnKey="fingleId"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.fingleId}
+                  onFilterChange={(v) => handleColFilterChange('fingleId', v)}
+                  filterType="text"
+                  placeholder="รหัส..."
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[90px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="ชื่อ - นามสกุล (HR)"
+                  columnKey="hrFullname"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrFullname}
+                  onFilterChange={(v) => handleColFilterChange('hrFullname', v)}
+                  filterType="text"
+                  placeholder="ค้นชื่อ..."
+                  showFilterRow={showColumnFilters}
+                  className="min-w-[180px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="ตำแหน่ง / หน่วยงาน"
+                  columnKey="hrDepName"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrDepName}
+                  onFilterChange={(v) => handleColFilterChange('hrDepName', v)}
+                  filterType="text"
+                  placeholder="ค้นหน่วยงาน..."
+                  showFilterRow={showColumnFilters}
+                  className="min-w-[160px]"
+                />
+
+                <th className="py-2.5 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  <div>โหมด</div>
+                  {showColumnFilters && <div className="mt-1.5 text-[10px] text-slate-400 font-normal">V/IO</div>}
                 </th>
-                <th className="py-2.5 px-3">เครื่อง</th>
-                <th className="py-2.5 px-3">FINGLE_ID</th>
-                <th className="py-2.5 px-3">ชื่อ - นามสกุล (HR Snapshot)</th>
-                <th className="py-2.5 px-3">ตำแหน่ง / หน่วยงาน</th>
-                <th className="py-2.5 px-3">โหมด</th>
-                <th className="py-2.5 px-3">Map HR</th>
-                <th className="py-2.5 px-3 text-slate-500 font-normal whitespace-nowrap">เวลาที่ดึงเข้าระบบ (Sync)</th>
-                <th className="py-2.5 px-3 text-right">สถานะ hosoffice</th>
+
+                <TableHeaderFilterCell
+                  title="Map HR"
+                  columnKey="hrMapped"
+                  sortable={false}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrMapped}
+                  onFilterChange={(v) => handleColFilterChange('hrMapped', v)}
+                  filterType="select"
+                  selectOptions={[
+                    { label: '✓ Mapped แล้ว', value: 'MAPPED' },
+                    { label: '⚠ Unmapped (ยังไม่ผูก)', value: 'UNMAPPED' },
+                  ]}
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[110px]"
+                />
+
+                <th className="py-2.5 px-3 text-slate-500 font-normal whitespace-nowrap">
+                  <div>เวลาที่ดึงเข้าระบบ (Sync)</div>
+                  {showColumnFilters && <div className="mt-1.5 text-[10px] text-slate-400 font-normal">Auto Sync</div>}
+                </th>
+
+                <TableHeaderFilterCell
+                  title="สถานะ hosoffice"
+                  columnKey="pushStatus"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.pushStatus}
+                  onFilterChange={(v) => handleColFilterChange('pushStatus', v)}
+                  filterType="select"
+                  selectOptions={[
+                    { label: 'PUSHED', value: 'PUSHED' },
+                    { label: 'PENDING', value: 'PENDING' },
+                    { label: 'SKIPPED_EXISTS', value: 'SKIPPED_EXISTS' },
+                    { label: 'EXCLUDED', value: 'EXCLUDED' },
+                    { label: 'FAILED', value: 'FAILED' },
+                  ]}
+                  showFilterRow={showColumnFilters}
+                  align="right"
+                  className="whitespace-nowrap min-w-[130px]"
+                />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredScans.length === 0 ? (
+              {paginatedScans.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-400">
-                    ไม่พบข้อมูลการสแกนตามเงื่อนไขที่เลือก
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
+                    <div className="flex flex-col items-center justify-center gap-1.5">
+                      <Fingerprint className="w-8 h-8 text-slate-300" />
+                      <span className="font-medium text-slate-600">ไม่พบข้อมูลการสแกนตามเงื่อนไขที่เลือก</span>
+                      {activeColFilterCount > 0 && (
+                        <button
+                          onClick={handleResetFilters}
+                          className="mt-1 text-teal-700 hover:underline text-xs font-semibold cursor-pointer"
+                        >
+                          ล้างฟิลเตอร์ทั้งหมดเพื่อแสดงข้อมูล
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (
-                filteredScans.map((scan, scanIdx) => (
-                  <tr key={`${scan.id}-${scanIdx}`} className="hover:bg-slate-50">
+                paginatedScans.map((scan, scanIdx) => (
+                  <tr key={`${scan.id}-${scanIdx}`} className="hover:bg-slate-50 transition-colors">
                     <td className="py-2.5 px-3 font-mono bg-teal-50/30 border-r border-teal-100/50 whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
                         <Fingerprint className="w-3.5 h-3.5 text-teal-600 shrink-0" />
@@ -339,6 +568,20 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
             </tbody>
           </table>
         </div>
+
+        {/* Standard 10-row DataTablePagination */}
+        <DataTablePagination
+          currentPage={currentPage}
+          pageSize={pageSize}
+          totalItems={state.rawScans.length}
+          totalFilteredItems={filteredScans.length}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          showColumnFilters={showColumnFilters}
+          onToggleColumnFilters={() => setShowColumnFilters(!showColumnFilters)}
+          activeFilterCount={activeColFilterCount}
+          onResetFilters={handleResetFilters}
+        />
       </div>
 
       {/* Quick Map Modal */}

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Printer, 
   Download, 
@@ -27,6 +27,8 @@ import {
 } from '../services/attendanceStore';
 import { CustomSyncModal } from '../components/CustomSyncModal';
 import { PersonAttendanceDrillDownModal } from '../components/PersonAttendanceDrillDownModal';
+import { DataTablePagination, PageSizeOption } from '../components/DataTablePagination';
+import { TableHeaderFilterCell, ColumnSortConfig } from '../components/TableHeaderFilterCell';
 
 interface MonthlyReportPageProps {
   state: StoreState;
@@ -61,6 +63,68 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
   const [isProcessing, setIsProcessing] = useState(false);
   const [actionMsg, setActionMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+
+  // Pagination & Column Filter States (Requirement 2: Default 10 rows, [10, 50, 100, All], Header Filters)
+  const [pageSize, setPageSize] = useState<PageSizeOption>(10);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [showColumnFilters, setShowColumnFilters] = useState<boolean>(true);
+
+  // Column header filters for Daily table (ติวเตอร์ที่หัวตาราง)
+  const [dailyColFilters, setDailyColFilters] = useState({
+    fingleId: '',
+    hrCid: '',
+    fullname: '',
+    position: '',
+    inTime: '',
+    outTime: '',
+    hoursWorked: '',
+    status: '',
+    machineNames: ''
+  });
+
+  // Column header filters for Summary table
+  const [summaryColFilters, setSummaryColFilters] = useState({
+    fingleId: '',
+    hrCid: '',
+    fullname: '',
+    position: '',
+    daysWorked: '',
+    onTimeCount: '',
+    lateCount: '',
+    lateMinutes: '',
+    earlyLeaveCount: '',
+    otHours: '',
+    onTimeRate: ''
+  });
+
+  // Column sorting
+  const [dailySort, setDailySort] = useState<ColumnSortConfig | null>(null);
+  const [summarySort, setSummarySort] = useState<ColumnSortConfig | null>(null);
+
+  // Reset page when mode or period changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [reportMode, selectedDay, selectedMonth, selectedYear, dateFrom, dateTo, statusFilter, shiftFilter, selectedDept, selectedType]);
+
+  const handleSortDaily = (key: string) => {
+    setDailySort(prev => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        return null;
+      }
+      return { key, direction: 'asc' };
+    });
+  };
+
+  const handleSortSummary = (key: string) => {
+    setSummarySort(prev => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        return null;
+      }
+      return { key, direction: 'asc' };
+    });
+  };
 
   // Departments & Personnel types
   const departments = useMemo(() => Array.from(new Set(state.personnel.map(p => p.hrDepName))).filter(Boolean), [state.personnel]);
@@ -161,6 +225,164 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
     return `ช่วงวันที่ ${dateFrom} ถึง ${dateTo}`;
   };
 
+
+  // Recalculate Attendance (Requirement 1: ประมวลผลใหม่)
+  const handleRecalculateAttendance = async () => {
+    const periodName = getPeriodLabel();
+    const confirmed = window.confirm(
+      `คุณต้องการประมวลผลเวลาทำงานและตรวจสอบกะใหม่ (${periodName}) หรือไม่?\n\n` +
+      `ระบบจะนำข้อมูลการสแกนนิ้วจริงมาตรวจสอบกับกะการทำงานล่าสุด (เช้า/บ่าย/ดึก หรือกะที่แก้ไข) ` +
+      `และคำนวณสถานะ ปกติ, มาสาย, ออกก่อน, OT และบันทึกผลลงฐานข้อมูล attendance_daily_result ใหม่อีกครั้ง`
+    );
+    if (!confirmed) return;
+
+    setIsProcessing(true);
+    setActionMsg(null);
+    try {
+      const res = await attendanceStore.recalculateReport({
+        mode: reportMode,
+        date: selectedDay,
+        month: selectedMonth,
+        year: selectedYear,
+        dateFrom,
+        dateTo
+      });
+      if (res.success) {
+        setActionMsg({
+          type: 'success',
+          text: `${res.message} (${periodName}) - ระบบอัปเดตการตรวจสอบกะและเวลาล่าสุดเรียบร้อยแล้ว`
+        });
+      } else {
+        setActionMsg({ type: 'error', text: res.message || 'ประมวลผลไม่สำเร็จ' });
+      }
+    } catch (err: any) {
+      setActionMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err.message}` });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Filtered & Sorted Daily data with Column Filters (Requirement 2: ติวเตอร์ที่หัวตาราง)
+  const headerFilteredDaily = useMemo(() => {
+    let list = filteredDaily.filter(item => {
+      if (dailyColFilters.fingleId && !item.fingleId.toString().includes(dailyColFilters.fingleId.trim())) return false;
+      if (dailyColFilters.hrCid && !(item.hrCid || '').toLowerCase().includes(dailyColFilters.hrCid.toLowerCase().trim())) return false;
+      if (dailyColFilters.fullname && !(item.hrFullname || '').toLowerCase().includes(dailyColFilters.fullname.toLowerCase().trim())) return false;
+      if (dailyColFilters.position && !(item.hrPositionName + ' ' + item.hrDepSubName + ' ' + item.hrDepName).toLowerCase().includes(dailyColFilters.position.toLowerCase().trim())) return false;
+      if (dailyColFilters.inTime && !(item.inTime || '').includes(dailyColFilters.inTime.trim())) return false;
+      if (dailyColFilters.outTime && !(item.outTime || '').includes(dailyColFilters.outTime.trim())) return false;
+      if (dailyColFilters.hoursWorked && item.hoursWorked < Number(dailyColFilters.hoursWorked)) return false;
+      if (dailyColFilters.status && item.status !== dailyColFilters.status && !item.statusLabel.includes(dailyColFilters.status)) return false;
+      if (dailyColFilters.machineNames && !(item.machineNames || '').toLowerCase().includes(dailyColFilters.machineNames.toLowerCase().trim())) return false;
+      return true;
+    });
+
+    if (dailySort) {
+      list = [...list].sort((a, b) => {
+        let valA: any = (a as any)[dailySort.key];
+        let valB: any = (b as any)[dailySort.key];
+        if (typeof valA === 'string') valA = valA.toLowerCase();
+        if (typeof valB === 'string') valB = valB.toLowerCase();
+        if (valA == null) return 1;
+        if (valB == null) return -1;
+        if (valA < valB) return dailySort.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return dailySort.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return list;
+  }, [filteredDaily, dailyColFilters, dailySort]);
+
+  // Paginated Daily data (Requirement 2: ดีฟอไปที่ 10 แถว)
+  const paginatedDaily = useMemo(() => {
+    if (pageSize === -1) return headerFilteredDaily;
+    const start = (currentPage - 1) * pageSize;
+    return headerFilteredDaily.slice(start, start + pageSize);
+  }, [headerFilteredDaily, currentPage, pageSize]);
+
+  // Filtered & Sorted Summary data with Column Filters (Requirement 2: ติวเตอร์ที่หัวตาราง)
+  const headerFilteredSummary = useMemo(() => {
+    let list = filteredSummary.filter(item => {
+      if (summaryColFilters.fingleId && !item.fingleId.toString().includes(summaryColFilters.fingleId.trim())) return false;
+      if (summaryColFilters.hrCid && !(item.hrCid || '').toLowerCase().includes(summaryColFilters.hrCid.toLowerCase().trim())) return false;
+      if (summaryColFilters.fullname && !(item.hrFullname || '').toLowerCase().includes(summaryColFilters.fullname.toLowerCase().trim())) return false;
+      if (summaryColFilters.position && !(item.hrPositionName + ' ' + item.hrDepSubName + ' ' + item.hrDepName).toLowerCase().includes(summaryColFilters.position.toLowerCase().trim())) return false;
+      if (summaryColFilters.daysWorked && item.daysWorked < Number(summaryColFilters.daysWorked)) return false;
+      if (summaryColFilters.onTimeCount && item.onTimeCount < Number(summaryColFilters.onTimeCount)) return false;
+      if (summaryColFilters.lateCount && item.lateCount < Number(summaryColFilters.lateCount)) return false;
+      if (summaryColFilters.lateMinutes && item.totalLateMinutes < Number(summaryColFilters.lateMinutes)) return false;
+      if (summaryColFilters.earlyLeaveCount && item.earlyLeaveCount < Number(summaryColFilters.earlyLeaveCount)) return false;
+      if (summaryColFilters.otHours && item.totalOtHours < Number(summaryColFilters.otHours)) return false;
+      if (summaryColFilters.onTimeRate && item.onTimeRate < Number(summaryColFilters.onTimeRate)) return false;
+      return true;
+    });
+
+    if (summarySort) {
+      list = [...list].sort((a, b) => {
+        let valA: any = (a as any)[summarySort.key];
+        let valB: any = (b as any)[summarySort.key];
+        if (typeof valA === 'string') valA = valA.toLowerCase();
+        if (typeof valB === 'string') valB = valB.toLowerCase();
+        if (valA == null) return 1;
+        if (valB == null) return -1;
+        if (valA < valB) return summarySort.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return summarySort.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return list;
+  }, [filteredSummary, summaryColFilters, summarySort]);
+
+  // Paginated Summary data (Requirement 2: ดีฟอไปที่ 10 แถว)
+  const paginatedSummary = useMemo(() => {
+    if (pageSize === -1) return headerFilteredSummary;
+    const start = (currentPage - 1) * pageSize;
+    return headerFilteredSummary.slice(start, start + pageSize);
+  }, [headerFilteredSummary, currentPage, pageSize]);
+
+  const activeDailyFilterCount = useMemo(() => {
+    return Object.values(dailyColFilters).filter(Boolean).length;
+  }, [dailyColFilters]);
+
+  const activeSummaryFilterCount = useMemo(() => {
+    return Object.values(summaryColFilters).filter(Boolean).length;
+  }, [summaryColFilters]);
+
+  const handleResetDailyFilters = () => {
+    setDailyColFilters({
+      fingleId: '',
+      hrCid: '',
+      fullname: '',
+      position: '',
+      inTime: '',
+      outTime: '',
+      hoursWorked: '',
+      status: '',
+      machineNames: ''
+    });
+    setDailySort(null);
+    setCurrentPage(1);
+  };
+
+  const handleResetSummaryFilters = () => {
+    setSummaryColFilters({
+      fingleId: '',
+      hrCid: '',
+      fullname: '',
+      position: '',
+      daysWorked: '',
+      onTimeCount: '',
+      lateCount: '',
+      lateMinutes: '',
+      earlyLeaveCount: '',
+      otHours: '',
+      onTimeRate: ''
+    });
+    setSummarySort(null);
+    setCurrentPage(1);
+  };
 
   // Import from HosOffice
   const handleImportHosoffice = async () => {
@@ -326,6 +548,17 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
             title="ดึงประวัติสแกนจากตาราง fingle_scan ใน HosOffice เข้าสู่ระบบ"
           >
             <span>⚡ ดึงจาก HosOffice</span>
+          </button>
+
+          {/* ปุ่มประมวลผลใหม่ (Requirement 1) */}
+          <button
+            onClick={handleRecalculateAttendance}
+            disabled={isProcessing}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition-colors disabled:opacity-50"
+            title="ประมวลผลและคำนวณเวลาปฏิบัติงานใหม่ตามการแก้ไขกะล่าสุด เผื่อมีการแก้ไขกะต่างๆ"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isProcessing ? 'animate-spin' : ''}`} />
+            <span>{isProcessing ? 'กำลังประมวลผล...' : '⚡ ประมวลผลใหม่'}</span>
           </button>
 
           <button
@@ -835,180 +1068,461 @@ export const MonthlyReportPage: React.FC<MonthlyReportPageProps> = ({ state }) =
         </div>
       </div>
 
-      {/* Report Table */}
+      {/* Report Table with Column Header Filters & Pagination (Requirement 2) */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs print:border-none print:shadow-none">
-        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs">
-          <span className="font-semibold text-slate-700">
-            แสดง {reportMode === 'DAILY' ? filteredDaily.length : filteredSummary.length} รายการ ({getPeriodLabel()})
-          </span>
-          <span className="text-slate-500">
-            * ระบบจับเวลาอ้างอิงมาตรฐานเครื่องสแกน HIP CMiF68S และตารางเวรโรงพยาบาลสามชุก
-          </span>
+        <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-slate-800">
+              {reportMode === 'DAILY' ? 'ผลการลงเวลารายบุคคล' : 'สรุปผลการปฏิบัติงานรายบุคคล'}
+            </span>
+            <span className="text-slate-500 font-normal">
+              ({getPeriodLabel()})
+            </span>
+            {(activeDailyFilterCount > 0 || activeSummaryFilterCount > 0) && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800 border border-teal-300">
+                กรองหัวตารางอยู่ {reportMode === 'DAILY' ? activeDailyFilterCount : activeSummaryFilterCount} คอลัมน์
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowColumnFilters(!showColumnFilters)}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
+                showColumnFilters
+                  ? 'bg-teal-700 text-white border-teal-700 shadow-2xs'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+              }`}
+              title="เปิด/ปิดแถวตัวกรองที่หัวตาราง (Filter Column)"
+            >
+              <Filter className="w-3.5 h-3.5" />
+              <span>{showColumnFilters ? '✓ ซ่อนฟิลเตอร์หัวตาราง' : '🔍 ฟิลเตอร์หัวตาราง'}</span>
+            </button>
+            <span className="text-slate-400 hidden sm:inline">
+              * มาตรฐานเครื่องสแกน HIP CMiF68S
+            </span>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
           {reportMode === 'DAILY' ? (
             /* Daily Table View */
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                 <tr>
-                  <th className="py-2.5 px-3">FINGLE_ID</th>
-                  <th className="py-2.5 px-3">เลขประชาชน (HR_CID)</th>
-                  <th className="py-2.5 px-3">ชื่อ - สกุล</th>
-                  <th className="py-2.5 px-3">ตำแหน่ง / หน่วยงาน</th>
-                  <th className="py-2.5 px-3 text-center">สแกนเข้า (IN)</th>
-                  <th className="py-2.5 px-3 text-center">สแกนออก (OUT)</th>
-                  <th className="py-2.5 px-3 text-center">ชั่วโมงทำงาน</th>
-                  <th className="py-2.5 px-3 text-center">สถานะ</th>
-                  <th className="py-2.5 px-3 text-right">เครื่องสแกน</th>
+                  <TableHeaderFilterCell
+                    title="FINGLE_ID"
+                    columnKey="fingleId"
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.fingleId}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, fingleId: val })); setCurrentPage(1); }}
+                    placeholder="รหัส..."
+                    showFilterRow={showColumnFilters}
+                    className="w-24"
+                  />
+                  <TableHeaderFilterCell
+                    title="เลขประชาชน (HR_CID)"
+                    columnKey="hrCid"
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.hrCid}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, hrCid: val })); setCurrentPage(1); }}
+                    placeholder="เลขบัตร..."
+                    showFilterRow={showColumnFilters}
+                    className="w-32"
+                  />
+                  <TableHeaderFilterCell
+                    title="ชื่อ - สกุล"
+                    columnKey="hrFullname"
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.fullname}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, fullname: val })); setCurrentPage(1); }}
+                    placeholder="ค้นหาชื่อ..."
+                    showFilterRow={showColumnFilters}
+                    className="min-w-[160px]"
+                  />
+                  <TableHeaderFilterCell
+                    title="ตำแหน่ง / หน่วยงาน"
+                    columnKey="hrPositionName"
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.position}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, position: val })); setCurrentPage(1); }}
+                    placeholder="ตำแหน่ง/กลุ่ม..."
+                    showFilterRow={showColumnFilters}
+                    className="min-w-[150px]"
+                  />
+                  <TableHeaderFilterCell
+                    title="สแกนเข้า (IN)"
+                    columnKey="inTime"
+                    align="center"
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.inTime}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, inTime: val })); setCurrentPage(1); }}
+                    placeholder="HH:mm"
+                    showFilterRow={showColumnFilters}
+                    className="w-24"
+                  />
+                  <TableHeaderFilterCell
+                    title="สแกนออก (OUT)"
+                    columnKey="outTime"
+                    align="center"
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.outTime}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, outTime: val })); setCurrentPage(1); }}
+                    placeholder="HH:mm"
+                    showFilterRow={showColumnFilters}
+                    className="w-24"
+                  />
+                  <TableHeaderFilterCell
+                    title="ชั่วโมงทำงาน"
+                    columnKey="hoursWorked"
+                    align="center"
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.hoursWorked}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, hoursWorked: val })); setCurrentPage(1); }}
+                    placeholder="> ชม."
+                    showFilterRow={showColumnFilters}
+                    className="w-24"
+                  />
+                  <TableHeaderFilterCell
+                    title="สถานะ"
+                    columnKey="status"
+                    align="center"
+                    filterType="select"
+                    selectOptions={[
+                      { label: 'ปกติ / ตรงเวลา', value: 'ON_TIME' },
+                      { label: 'มาสาย (LATE)', value: 'LATE' },
+                      { label: 'ออกก่อนเวลา', value: 'EARLY_LEAVE' },
+                      { label: 'ไม่พบสแกน', value: 'NO_SCAN' }
+                    ]}
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.status}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, status: val })); setCurrentPage(1); }}
+                    showFilterRow={showColumnFilters}
+                    className="w-28"
+                  />
+                  <TableHeaderFilterCell
+                    title="เครื่องสแกน"
+                    columnKey="machineNames"
+                    align="right"
+                    currentSort={dailySort}
+                    onSort={handleSortDaily}
+                    filterValue={dailyColFilters.machineNames}
+                    onFilterChange={(val) => { setDailyColFilters(p => ({ ...p, machineNames: val })); setCurrentPage(1); }}
+                    placeholder="เครื่อง..."
+                    showFilterRow={showColumnFilters}
+                    className="w-28"
+                  />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-sans">
-                {filteredDaily.map((row) => (
-                  <tr 
-                    key={`daily-${row.personId}`} 
-                    onClick={() => setPersonDrillDown({ isOpen: true, personId: row.personId, fingleId: row.fingleId })}
-                    className="hover:bg-teal-50/70 transition-colors cursor-pointer group"
-                    title="คลิกเพื่อดูประวัติการสแกนและปฏิทินเวลาของเจ้าหน้าที่ท่านนี้แบบเจาะลึก"
-                  >
-                    <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
-                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 group-hover:bg-teal-100 group-hover:text-teal-900 border border-slate-200 transition-colors">
-                        {row.fingleId}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap text-[11px]">
-                      {row.hrCid}
-                    </td>
-                    <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        <span className="group-hover:text-teal-800 transition-colors">{row.hrFullname}</span>
-                        <span className="opacity-0 group-hover:opacity-100 text-[10px] text-teal-600 font-normal transition-opacity">🔍</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 font-normal">{row.hrPersonTypeName}</div>
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-600">
-                      <div>{row.hrPositionName}</div>
-                      <div className="text-[10px] text-teal-700 font-medium">{row.hrDepSubName || row.hrDepName}</div>
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-800">
-                      {row.inTime !== '-' ? (
-                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200">
-                          {row.inTime} น.
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-800">
-                      {row.outTime !== '-' ? (
-                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200">
-                          {row.outTime} น.
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono text-slate-700">
-                      {row.hoursWorked > 0 ? `${row.hoursWorked} ชม.` : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                        row.status === 'ON_TIME'
-                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          : row.status === 'LATE' || row.status === 'LATE_AND_EARLY'
-                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                          : row.status === 'EARLY_LEAVE'
-                          ? 'bg-orange-100 text-orange-800 border border-orange-300'
-                          : row.status === 'IN_ONLY' || row.status === 'OUT_ONLY'
-                          ? 'bg-blue-100 text-blue-800 border border-blue-300'
-                          : 'bg-slate-100 text-slate-500 border border-slate-200'
-                      }`}>
-                        {row.statusLabel}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-slate-500 text-[11px]">
-                      {row.machineNames}
+                {paginatedDaily.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="py-12 text-center text-slate-400">
+                      ไม่พบข้อมูลการลงเวลาตามเงื่อนไขที่เลือกหรือตัวกรองหัวตาราง
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  paginatedDaily.map((row) => (
+                    <tr 
+                      key={`daily-${row.personId}`} 
+                      onClick={() => setPersonDrillDown({ isOpen: true, personId: row.personId, fingleId: row.fingleId })}
+                      className="hover:bg-teal-50/70 transition-colors cursor-pointer group"
+                      title="คลิกเพื่อดูประวัติการสแกนและปฏิทินเวลาของเจ้าหน้าที่ท่านนี้แบบเจาะลึก"
+                    >
+                      <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 group-hover:bg-teal-100 group-hover:text-teal-900 border border-slate-200 transition-colors">
+                          {row.fingleId}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap text-[11px]">
+                        {row.hrCid}
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <span className="group-hover:text-teal-800 transition-colors">{row.hrFullname}</span>
+                          <span className="opacity-0 group-hover:opacity-100 text-[10px] text-teal-600 font-normal transition-opacity">🔍</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-normal">{row.hrPersonTypeName}</div>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600">
+                        <div>{row.hrPositionName}</div>
+                        <div className="text-[10px] text-teal-700 font-medium">{row.hrDepSubName || row.hrDepName}</div>
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-800">
+                        {row.inTime !== '-' ? (
+                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200">
+                            {row.inTime} น.
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-800">
+                        {row.outTime !== '-' ? (
+                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200">
+                            {row.outTime} น.
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono text-slate-700">
+                        {row.hoursWorked > 0 ? `${row.hoursWorked} ชม.` : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                          row.status === 'ON_TIME'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : row.status === 'LATE' || row.status === 'LATE_AND_EARLY'
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : row.status === 'EARLY_LEAVE'
+                            ? 'bg-orange-100 text-orange-800 border border-orange-300'
+                            : row.status === 'IN_ONLY' || row.status === 'OUT_ONLY'
+                            ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                            : 'bg-slate-100 text-slate-500 border border-slate-200'
+                        }`}>
+                          {row.statusLabel}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-slate-500 text-[11px]">
+                        {row.machineNames}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           ) : (
             /* Monthly / Yearly / Range Table View */
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                 <tr>
-                  <th className="py-2.5 px-3">FINGLE_ID</th>
-                  <th className="py-2.5 px-3">เลขประชาชน (HR_CID)</th>
-                  <th className="py-2.5 px-3">ชื่อ - สกุล</th>
-                  <th className="py-2.5 px-3">ตำแหน่ง / หน่วยงานย่อย</th>
-                  <th className="py-2.5 px-3 text-center">วันทำงาน (วัน)</th>
-                  <th className="py-2.5 px-3 text-center text-emerald-800 font-bold">ปกติ / ตรงเวลา</th>
-                  <th className="py-2.5 px-3 text-center text-amber-800 font-bold">มาสาย (ครั้ง)</th>
-                  <th className="py-2.5 px-3 text-center">รวมเวลาสาย</th>
-                  <th className="py-2.5 px-3 text-center">ออกก่อน</th>
-                  <th className="py-2.5 px-3 text-center font-bold text-teal-800">รวม OT (ชม.)</th>
-                  <th className="py-2.5 px-3 text-center">อัตราตรงเวลา</th>
-                  <th className="py-2.5 px-3 text-right">ไม่พบสแกน</th>
+                  <TableHeaderFilterCell
+                    title="FINGLE_ID"
+                    columnKey="fingleId"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.fingleId}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, fingleId: val })); setCurrentPage(1); }}
+                    placeholder="รหัส..."
+                    showFilterRow={showColumnFilters}
+                    className="w-24"
+                  />
+                  <TableHeaderFilterCell
+                    title="เลขประชาชน (HR_CID)"
+                    columnKey="hrCid"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.hrCid}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, hrCid: val })); setCurrentPage(1); }}
+                    placeholder="เลขบัตร..."
+                    showFilterRow={showColumnFilters}
+                    className="w-32"
+                  />
+                  <TableHeaderFilterCell
+                    title="ชื่อ - สกุล"
+                    columnKey="hrFullname"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.fullname}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, fullname: val })); setCurrentPage(1); }}
+                    placeholder="ค้นชื่อ..."
+                    showFilterRow={showColumnFilters}
+                    className="min-w-[150px]"
+                  />
+                  <TableHeaderFilterCell
+                    title="ตำแหน่ง / หน่วยงานย่อย"
+                    columnKey="hrPositionName"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.position}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, position: val })); setCurrentPage(1); }}
+                    placeholder="ตำแหน่ง..."
+                    showFilterRow={showColumnFilters}
+                    className="min-w-[150px]"
+                  />
+                  <TableHeaderFilterCell
+                    title="วันทำงาน (วัน)"
+                    columnKey="daysWorked"
+                    align="center"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.daysWorked}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, daysWorked: val })); setCurrentPage(1); }}
+                    placeholder=">= วัน"
+                    showFilterRow={showColumnFilters}
+                    className="w-24"
+                  />
+                  <TableHeaderFilterCell
+                    title="ปกติ / ตรงเวลา"
+                    columnKey="onTimeCount"
+                    align="center"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.onTimeCount}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, onTimeCount: val })); setCurrentPage(1); }}
+                    placeholder=">= ครั้ง"
+                    showFilterRow={showColumnFilters}
+                    className="w-24 text-emerald-800"
+                  />
+                  <TableHeaderFilterCell
+                    title="มาสาย (ครั้ง)"
+                    columnKey="lateCount"
+                    align="center"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.lateCount}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, lateCount: val })); setCurrentPage(1); }}
+                    placeholder=">= ครั้ง"
+                    showFilterRow={showColumnFilters}
+                    className="w-24 text-amber-800"
+                  />
+                  <TableHeaderFilterCell
+                    title="รวมเวลาสาย"
+                    columnKey="totalLateMinutes"
+                    align="center"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.lateMinutes}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, lateMinutes: val })); setCurrentPage(1); }}
+                    placeholder=">= นาที"
+                    showFilterRow={showColumnFilters}
+                    className="w-24"
+                  />
+                  <TableHeaderFilterCell
+                    title="ออกก่อน"
+                    columnKey="earlyLeaveCount"
+                    align="center"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.earlyLeaveCount}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, earlyLeaveCount: val })); setCurrentPage(1); }}
+                    placeholder=">= ครั้ง"
+                    showFilterRow={showColumnFilters}
+                    className="w-20"
+                  />
+                  <TableHeaderFilterCell
+                    title="รวม OT (ชม.)"
+                    columnKey="totalOtHours"
+                    align="center"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.otHours}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, otHours: val })); setCurrentPage(1); }}
+                    placeholder=">= ชม."
+                    showFilterRow={showColumnFilters}
+                    className="w-24 font-bold text-teal-800"
+                  />
+                  <TableHeaderFilterCell
+                    title="อัตราตรงเวลา"
+                    columnKey="onTimeRate"
+                    align="center"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    filterValue={summaryColFilters.onTimeRate}
+                    onFilterChange={(val) => { setSummaryColFilters(p => ({ ...p, onTimeRate: val })); setCurrentPage(1); }}
+                    placeholder=">= %"
+                    showFilterRow={showColumnFilters}
+                    className="w-24"
+                  />
+                  <TableHeaderFilterCell
+                    title="ไม่พบสแกน"
+                    columnKey="noScanCount"
+                    align="right"
+                    currentSort={summarySort}
+                    onSort={handleSortSummary}
+                    showFilterRow={showColumnFilters}
+                    className="w-20"
+                  />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-sans">
-                {filteredSummary.map((row, rowIdx) => (
-                  <tr 
-                    key={`${row.personId}-${rowIdx}`} 
-                    onClick={() => setPersonDrillDown({ isOpen: true, personId: row.personId, fingleId: row.fingleId })}
-                    className="hover:bg-teal-50/70 transition-colors cursor-pointer group"
-                    title="คลิกเพื่อดูประวัติการสแกนและปฏิทินเวลาของเจ้าหน้าที่ท่านนี้แบบเจาะลึก"
-                  >
-                    <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
-                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 group-hover:bg-teal-100 group-hover:text-teal-900 border border-slate-200 transition-colors">
-                        {row.fingleId}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap text-[11px]">
-                      {row.hrCid}
-                    </td>
-                    <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        <span className="group-hover:text-teal-800 transition-colors">{row.hrFullname}</span>
-                        <span className="opacity-0 group-hover:opacity-100 text-[10px] text-teal-600 font-normal transition-opacity">🔍</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 font-normal">{row.hrPersonTypeName}</div>
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-600">
-                      <div>{row.hrPositionName}</div>
-                      <div className="text-[10px] text-teal-700 font-medium">{row.hrDepSubName || row.hrDepName}</div>
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-800">
-                      {row.daysWorked}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono text-emerald-700 font-medium">
-                      {row.onTimeCount}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600">
-                      {row.lateCount > 0 ? row.lateCount : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono text-amber-700">
-                      {row.totalLateMinutes > 0 ? `${row.totalLateMinutes} น.` : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono text-slate-500">
-                      {row.earlyLeaveCount > 0 ? row.earlyLeaveCount : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono font-bold text-teal-700 bg-teal-50/50">
-                      {row.totalOtHours > 0 ? `${row.totalOtHours} ชม.` : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono font-semibold text-slate-700">
-                      {row.daysWorked > 0 ? `${row.onTimeRate}%` : '-'}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-slate-400">
-                      {row.noScanCount}
+                {paginatedSummary.length === 0 ? (
+                  <tr>
+                    <td colSpan={12} className="py-12 text-center text-slate-400">
+                      ไม่พบข้อมูลสรุปตามเงื่อนไขที่เลือกหรือตัวกรองหัวตาราง
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  paginatedSummary.map((row, rowIdx) => (
+                    <tr 
+                      key={`${row.personId}-${rowIdx}`} 
+                      onClick={() => setPersonDrillDown({ isOpen: true, personId: row.personId, fingleId: row.fingleId })}
+                      className="hover:bg-teal-50/70 transition-colors cursor-pointer group"
+                      title="คลิกเพื่อดูประวัติการสแกนและปฏิทินเวลาของเจ้าหน้าที่ท่านนี้แบบเจาะลึก"
+                    >
+                      <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 group-hover:bg-teal-100 group-hover:text-teal-900 border border-slate-200 transition-colors">
+                          {row.fingleId}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap text-[11px]">
+                        {row.hrCid}
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <span className="group-hover:text-teal-800 transition-colors">{row.hrFullname}</span>
+                          <span className="opacity-0 group-hover:opacity-100 text-[10px] text-teal-600 font-normal transition-opacity">🔍</span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-normal">{row.hrPersonTypeName}</div>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600">
+                        <div>{row.hrPositionName}</div>
+                        <div className="text-[10px] text-teal-700 font-medium">{row.hrDepSubName || row.hrDepName}</div>
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-800">
+                        {row.daysWorked}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono text-emerald-700 font-medium">
+                        {row.onTimeCount}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600">
+                        {row.lateCount > 0 ? row.lateCount : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono text-amber-700">
+                        {row.totalLateMinutes > 0 ? `${row.totalLateMinutes} น.` : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono text-slate-500">
+                        {row.earlyLeaveCount > 0 ? row.earlyLeaveCount : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono font-bold text-teal-700 bg-teal-50/50">
+                        {row.totalOtHours > 0 ? `${row.totalOtHours} ชม.` : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono font-semibold text-slate-700">
+                        {row.daysWorked > 0 ? `${row.onTimeRate}%` : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono text-slate-400">
+                        {row.noScanCount}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           )}
         </div>
+
+        {/* Reusable Data Table Pagination Bar (Requirement 2) */}
+        <DataTablePagination
+          currentPage={currentPage}
+          pageSize={pageSize}
+          totalItems={reportMode === 'DAILY' ? dailyData.length : summaryData.length}
+          totalFilteredItems={reportMode === 'DAILY' ? headerFilteredDaily.length : headerFilteredSummary.length}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          showColumnFilters={showColumnFilters}
+          onToggleColumnFilters={() => setShowColumnFilters(!showColumnFilters)}
+          activeFilterCount={reportMode === 'DAILY' ? activeDailyFilterCount : activeSummaryFilterCount}
+          onResetFilters={reportMode === 'DAILY' ? handleResetDailyFilters : handleResetSummaryFilters}
+        />
       </div>
 
       {/* Signature Strip for Executive approval (Print Mode Only) */}

@@ -452,12 +452,20 @@ class ApiClientService {
   /**
    * สั่งให้ Backend คำนวณผลเวลาทำงานและบันทึกลง MySQL attendance_daily_result ทันที
    */
-  public async recalculateAttendanceInDb(date?: string) {
+  public async recalculateAttendanceInDb(params?: string | {
+    date?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    month?: string;
+    year?: string;
+    mode?: string;
+  }) {
     try {
+      const payload = typeof params === 'string' ? { date: params } : (params || {});
       const res = await fetch(`${this.customBaseUrl}/api/attendance/recalculate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date })
+        body: JSON.stringify(payload)
       });
       return await res.json();
     } catch (err: unknown) {

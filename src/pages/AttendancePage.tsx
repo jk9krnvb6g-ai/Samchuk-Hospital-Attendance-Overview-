@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { DailyResult } from '../types/attendance';
+import { DataTablePagination, PageSizeOption } from '../components/DataTablePagination';
+import { TableHeaderFilterCell, ColumnSortConfig } from '../components/TableHeaderFilterCell';
 
 interface AttendancePageProps {
   state: StoreState;
@@ -37,6 +39,39 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [saveDbMsg, setSaveDbMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isSavingDb, setIsSavingDb] = useState(false);
+
+  // Pagination & Column Filter States (Requirement 2: Default 10 rows, [10, 50, 100, All], Header Filters)
+  const [pageSize, setPageSize] = useState<PageSizeOption>(10);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [showColumnFilters, setShowColumnFilters] = useState<boolean>(true);
+
+  // Column header filters (ติวเตอร์ที่หัวตาราง)
+  const [colFilters, setColFilters] = useState({
+    workDate: '',
+    fullname: '',
+    personnelType: '',
+    shiftName: '',
+    inTime: '',
+    outTime: '',
+    status: '',
+    scansCount: ''
+  });
+  const [currentSort, setCurrentSort] = useState<ColumnSortConfig | null>(null);
+
+  // Reset page when date or filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedDate, selectedType, selectedDept, statusFilter, shiftFilter]);
+
+  const handleSort = (key: string) => {
+    setCurrentSort(prev => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        return null;
+      }
+      return { key, direction: 'asc' };
+    });
+  };
 
   // Load results from MySQL when date changes
   useEffect(() => {
@@ -101,6 +136,63 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
       return true;
     });
   }, [results, shiftFilter, selectedType, selectedDept, statusFilter, searchTerm]);
+
+  // Filtered & Sorted with Column Header Filters (Requirement 2: ติวเตอร์ที่หัวตาราง)
+  const headerFilteredResults = useMemo(() => {
+    let list = filteredResults.filter(r => {
+      if (colFilters.workDate && !r.workDate.includes(colFilters.workDate.trim())) return false;
+      if (colFilters.fullname && !(r.fullname + ' ' + r.fingleId + ' ' + r.position + ' ' + r.department).toLowerCase().includes(colFilters.fullname.toLowerCase().trim())) return false;
+      if (colFilters.personnelType && !(r.personnelTypeName || 'ข้าราชการ').toLowerCase().includes(colFilters.personnelType.toLowerCase().trim())) return false;
+      if (colFilters.shiftName && !(r.shiftName || '').toLowerCase().includes(colFilters.shiftName.toLowerCase().trim())) return false;
+      if (colFilters.inTime && !(r.inTime || '').includes(colFilters.inTime.trim())) return false;
+      if (colFilters.outTime && !(r.outTime || '').includes(colFilters.outTime.trim())) return false;
+      if (colFilters.status && r.status !== colFilters.status) return false;
+      if (colFilters.scansCount && r.scansCount < Number(colFilters.scansCount)) return false;
+      return true;
+    });
+
+    if (currentSort) {
+      list = [...list].sort((a, b) => {
+        let valA: any = (a as any)[currentSort.key];
+        let valB: any = (b as any)[currentSort.key];
+        if (typeof valA === 'string') valA = valA.toLowerCase();
+        if (typeof valB === 'string') valB = valB.toLowerCase();
+        if (valA == null) return 1;
+        if (valB == null) return -1;
+        if (valA < valB) return currentSort.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return currentSort.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return list;
+  }, [filteredResults, colFilters, currentSort]);
+
+  // Paginated Results (Requirement 2: ดีฟอไปที่ 10 แถว)
+  const paginatedResults = useMemo(() => {
+    if (pageSize === -1) return headerFilteredResults;
+    const start = (currentPage - 1) * pageSize;
+    return headerFilteredResults.slice(start, start + pageSize);
+  }, [headerFilteredResults, currentPage, pageSize]);
+
+  const activeFilterCount = useMemo(() => {
+    return Object.values(colFilters).filter(Boolean).length;
+  }, [colFilters]);
+
+  const handleResetFilters = () => {
+    setColFilters({
+      workDate: '',
+      fullname: '',
+      personnelType: '',
+      shiftName: '',
+      inTime: '',
+      outTime: '',
+      status: '',
+      scansCount: ''
+    });
+    setCurrentSort(null);
+    setCurrentPage(1);
+  };
 
   // Summary counts
   const totalCount = results.length;
@@ -612,32 +704,145 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
         </div>
       </div>
 
-      {/* Executive Attendance Table with Sticky Header & Left Accent Borders */}
+      {/* Executive Attendance Table with Sticky Header, Column Filters & Pagination (Requirement 2) */}
       <div className="bg-white border border-slate-200/90 rounded-xl overflow-hidden shadow-xs">
+        <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-slate-800">ตารางผลการลงเวลาประจำวัน</span>
+            {activeFilterCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 text-teal-800 border border-teal-300">
+                กรองหัวตารางอยู่ {activeFilterCount} คอลัมน์
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowColumnFilters(!showColumnFilters)}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
+              showColumnFilters
+                ? 'bg-teal-700 text-white border-teal-700 shadow-2xs'
+                : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+            }`}
+            title="เปิด/ปิดแถวตัวกรองที่หัวตาราง (Filter Column)"
+          >
+            <Filter className="w-3.5 h-3.5" />
+            <span>{showColumnFilters ? '✓ ซ่อนฟิลเตอร์หัวตาราง' : '🔍 ฟิลเตอร์หัวตาราง'}</span>
+          </button>
+        </div>
+
         <div className="overflow-x-auto max-h-[640px]">
           <table className="w-full text-left text-xs border-collapse">
             {/* Sticky Table Header */}
             <thead className="sticky top-0 bg-slate-100 text-slate-700 font-semibold border-b border-slate-200/90 z-10 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
               <tr>
-                <th className="py-3 px-3.5 whitespace-nowrap">วันที่</th>
-                <th className="py-3 px-3.5">ชื่อ - สกุล</th>
-                <th className="py-3 px-3.5">ประเภทบุคลากร</th>
-                <th className="py-3 px-3.5">กะการทำงาน</th>
-                <th className="py-3 px-3.5 text-center">เวลาเข้างาน</th>
-                <th className="py-3 px-3.5 text-center">เวลาออกงาน</th>
-                <th className="py-3 px-3.5">สถานะการลงเวลา</th>
-                <th className="py-3 px-3.5 text-right">จำนวนสแกน</th>
+                <TableHeaderFilterCell
+                  title="วันที่"
+                  columnKey="workDate"
+                  currentSort={currentSort}
+                  onSort={handleSort}
+                  filterValue={colFilters.workDate}
+                  onFilterChange={(val) => { setColFilters(p => ({ ...p, workDate: val })); setCurrentPage(1); }}
+                  placeholder="YYYY-MM-DD"
+                  showFilterRow={showColumnFilters}
+                  className="w-28 whitespace-nowrap"
+                />
+                <TableHeaderFilterCell
+                  title="ชื่อ - สกุล"
+                  columnKey="fullname"
+                  currentSort={currentSort}
+                  onSort={handleSort}
+                  filterValue={colFilters.fullname}
+                  onFilterChange={(val) => { setColFilters(p => ({ ...p, fullname: val })); setCurrentPage(1); }}
+                  placeholder="ค้นหาชื่อ, รหัส..."
+                  showFilterRow={showColumnFilters}
+                  className="min-w-[170px]"
+                />
+                <TableHeaderFilterCell
+                  title="ประเภทบุคลากร"
+                  columnKey="personnelTypeName"
+                  currentSort={currentSort}
+                  onSort={handleSort}
+                  filterValue={colFilters.personnelType}
+                  onFilterChange={(val) => { setColFilters(p => ({ ...p, personnelType: val })); setCurrentPage(1); }}
+                  placeholder="ประเภท..."
+                  showFilterRow={showColumnFilters}
+                  className="w-32 whitespace-nowrap"
+                />
+                <TableHeaderFilterCell
+                  title="กะการทำงาน"
+                  columnKey="shiftName"
+                  currentSort={currentSort}
+                  onSort={handleSort}
+                  filterValue={colFilters.shiftName}
+                  onFilterChange={(val) => { setColFilters(p => ({ ...p, shiftName: val })); setCurrentPage(1); }}
+                  placeholder="เช้า/บ่าย/ดึก..."
+                  showFilterRow={showColumnFilters}
+                  className="w-32 whitespace-nowrap"
+                />
+                <TableHeaderFilterCell
+                  title="เวลาเข้างาน"
+                  columnKey="inTime"
+                  align="center"
+                  currentSort={currentSort}
+                  onSort={handleSort}
+                  filterValue={colFilters.inTime}
+                  onFilterChange={(val) => { setColFilters(p => ({ ...p, inTime: val })); setCurrentPage(1); }}
+                  placeholder="HH:mm"
+                  showFilterRow={showColumnFilters}
+                  className="w-24 text-center"
+                />
+                <TableHeaderFilterCell
+                  title="เวลาออกงาน"
+                  columnKey="outTime"
+                  align="center"
+                  currentSort={currentSort}
+                  onSort={handleSort}
+                  filterValue={colFilters.outTime}
+                  onFilterChange={(val) => { setColFilters(p => ({ ...p, outTime: val })); setCurrentPage(1); }}
+                  placeholder="HH:mm"
+                  showFilterRow={showColumnFilters}
+                  className="w-24 text-center"
+                />
+                <TableHeaderFilterCell
+                  title="สถานะการลงเวลา"
+                  columnKey="status"
+                  filterType="select"
+                  selectOptions={[
+                    { label: 'ปกติ (ตรงเวลา)', value: 'ON_TIME' },
+                    { label: 'มาสาย (LATE)', value: 'LATE' },
+                    { label: 'สแกนเข้าอย่างเดียว', value: 'IN_ONLY' },
+                    { label: 'ไม่พบสแกน', value: 'NO_SCAN' }
+                  ]}
+                  currentSort={currentSort}
+                  onSort={handleSort}
+                  filterValue={colFilters.status}
+                  onFilterChange={(val) => { setColFilters(p => ({ ...p, status: val })); setCurrentPage(1); }}
+                  showFilterRow={showColumnFilters}
+                  className="w-36"
+                />
+                <TableHeaderFilterCell
+                  title="จำนวนสแกน"
+                  columnKey="scansCount"
+                  align="right"
+                  currentSort={currentSort}
+                  onSort={handleSort}
+                  filterValue={colFilters.scansCount}
+                  onFilterChange={(val) => { setColFilters(p => ({ ...p, scansCount: val })); setCurrentPage(1); }}
+                  placeholder=">= ครั้ง"
+                  showFilterRow={showColumnFilters}
+                  className="w-24 text-right"
+                />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-sans">
-              {filteredResults.length === 0 ? (
+              {paginatedResults.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-14 text-center text-slate-400">
-                    ไม่พบข้อมูลการลงเวลาตามเงื่อนไขที่เลือก
+                    ไม่พบข้อมูลการลงเวลาตามเงื่อนไขที่เลือกหรือตัวกรองหัวตาราง
                   </td>
                 </tr>
               ) : (
-                filteredResults.map((row, rowIdx) => {
+                paginatedResults.map((row, rowIdx) => {
                   const isLate = row.status === 'LATE' || row.status === 'LATE_AND_EARLY';
                   const isOnTime = row.status === 'ON_TIME';
 
@@ -755,6 +960,20 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ state }) => {
             </tbody>
           </table>
         </div>
+
+        {/* Data Table Pagination (Requirement 2) */}
+        <DataTablePagination
+          currentPage={currentPage}
+          pageSize={pageSize}
+          totalItems={results.length}
+          totalFilteredItems={headerFilteredResults.length}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          showColumnFilters={showColumnFilters}
+          onToggleColumnFilters={() => setShowColumnFilters(!showColumnFilters)}
+          activeFilterCount={activeFilterCount}
+          onResetFilters={handleResetFilters}
+        />
       </div>
     </div>
   );

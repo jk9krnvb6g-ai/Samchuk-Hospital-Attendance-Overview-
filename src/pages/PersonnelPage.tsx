@@ -21,6 +21,8 @@ import {
 import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { PersonnelSyncResult, HrPerson } from '../types/attendance';
 import { apiClient } from '../services/apiClient';
+import { DataTablePagination, PageSizeOption } from '../components/DataTablePagination';
+import { TableHeaderFilterCell, ColumnSortConfig } from '../components/TableHeaderFilterCell';
 
 interface PersonnelPageProps {
   state: StoreState;
@@ -47,10 +49,62 @@ export const PersonnelPage: React.FC<PersonnelPageProps> = ({ state }) => {
   const today = '2026-10-14';
   const isAdmin = state.currentUser?.role === 'ADMIN';
 
-  const departments = Array.from(new Set(state.personnel.map(p => p.hrDepName)));
-  const personTypes = Array.from(new Set(state.personnel.map(p => p.hrPersonTypeName)));
+  // Pagination & Column Header Filter State (Default 10 rows)
+  const [pageSize, setPageSize] = useState<PageSizeOption>(10);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [showColumnFilters, setShowColumnFilters] = useState<boolean>(true);
+  const [sortConfig, setSortConfig] = useState<ColumnSortConfig | null>({ key: 'personId', direction: 'asc' });
+  const [colFilters, setColFilters] = useState<Record<string, string>>({
+    fingleId: '',
+    personId: '',
+    hrCid: '',
+    hrFullname: '',
+    hrPositionName: '',
+    hrLevelName: '',
+    hrDepName: '',
+    hrPersonTypeName: '',
+    hrStatus: '',
+  });
+
+  const handleSort = (key: string) => {
+    setSortConfig(prev => {
+      if (!prev || prev.key !== key) return { key, direction: 'asc' };
+      if (prev.direction === 'asc') return { key, direction: 'desc' };
+      return null;
+    });
+  };
+
+  const handleColFilterChange = (key: string, value: string) => {
+    setColFilters(prev => ({ ...prev, [key]: value }));
+    setCurrentPage(1);
+  };
+
+  const handleResetFilters = () => {
+    setColFilters({
+      fingleId: '',
+      personId: '',
+      hrCid: '',
+      hrFullname: '',
+      hrPositionName: '',
+      hrLevelName: '',
+      hrDepName: '',
+      hrPersonTypeName: '',
+      hrStatus: '',
+    });
+    setSearchTerm('');
+    setSelectedDept('ALL');
+    setSelectedType('ALL');
+    setSelectedStatus('ALL');
+    setCurrentPage(1);
+  };
+
+  const activeColFilterCount = Object.values(colFilters).filter(v => v.trim() !== '').length;
+
+  const departments = Array.from(new Set(state.personnel.map(p => p.hrDepName).filter(Boolean)));
+  const personTypes = Array.from(new Set(state.personnel.map(p => p.hrPersonTypeName).filter(Boolean)));
 
   const filteredPersonnel = state.personnel.filter((p) => {
+    // Toolbar Filters
     if (selectedDept !== 'ALL' && p.hrDepName !== selectedDept) return false;
     if (selectedType !== 'ALL' && p.hrPersonTypeName !== selectedType) return false;
     if (selectedStatus !== 'ALL') {
@@ -65,8 +119,68 @@ export const PersonnelPage: React.FC<PersonnelPageProps> = ({ state }) => {
       const matchCid = p.hrCid?.includes(searchTerm);
       if (!matchName && !matchFingle && !matchPos && !matchCid) return false;
     }
+
+    // Column Header Filters
+    if (colFilters.fingleId && !p.fingleId.toString().includes(colFilters.fingleId)) {
+      return false;
+    }
+    if (colFilters.personId && !p.personId.toString().includes(colFilters.personId)) {
+      return false;
+    }
+    if (colFilters.hrCid && !(p.hrCid || '').includes(colFilters.hrCid)) {
+      return false;
+    }
+    if (colFilters.hrFullname && !p.hrFullname.toLowerCase().includes(colFilters.hrFullname.toLowerCase())) {
+      return false;
+    }
+    if (colFilters.hrPositionName && !p.hrPositionName.toLowerCase().includes(colFilters.hrPositionName.toLowerCase())) {
+      return false;
+    }
+    if (colFilters.hrLevelName && !(p.hrLevelName || '').toLowerCase().includes(colFilters.hrLevelName.toLowerCase())) {
+      return false;
+    }
+    if (colFilters.hrDepName) {
+      const q = colFilters.hrDepName.toLowerCase();
+      const depMatch = (p.hrDepName || '').toLowerCase().includes(q);
+      const subMatch = (p.hrDepSubName || '').toLowerCase().includes(q);
+      if (!depMatch && !subMatch) return false;
+    }
+    if (colFilters.hrPersonTypeName && p.hrPersonTypeName !== colFilters.hrPersonTypeName) {
+      return false;
+    }
+    if (colFilters.hrStatus) {
+      const pStatus = p.hrStatusName || (p.status === 'ACTIVE' ? 'ปฏิบัติราชการ' : 'ไม่ได้ปฏิบัติราชการ');
+      if (colFilters.hrStatus === 'ACTIVE' && !pStatus.includes('ปฏิบัติราชการ') && p.status !== 'ACTIVE') return false;
+      if (colFilters.hrStatus === 'INACTIVE' && (pStatus.includes('ปฏิบัติราชการ') || p.status === 'ACTIVE')) return false;
+    }
+
     return true;
   });
+
+  // Sorted personnel
+  const sortedPersonnel = [...filteredPersonnel].sort((a, b) => {
+    if (!sortConfig) return 0;
+    const { key, direction } = sortConfig;
+    let aVal: any = (a as any)[key];
+    let bVal: any = (b as any)[key];
+
+    if (aVal === undefined || aVal === null) aVal = '';
+    if (bVal === undefined || bVal === null) bVal = '';
+
+    let comp = 0;
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      comp = aVal - bVal;
+    } else {
+      comp = String(aVal).localeCompare(String(bVal));
+    }
+    return direction === 'asc' ? comp : -comp;
+  });
+
+  // Paginated personnel
+  const effectiveSize = pageSize === -1 ? Math.max(sortedPersonnel.length, 1) : pageSize;
+  const paginatedPersonnel = pageSize === -1
+    ? sortedPersonnel
+    : sortedPersonnel.slice((currentPage - 1) * effectiveSize, currentPage * effectiveSize);
 
   const hosofficeSqlQuery = `WITH active_person AS (
   SELECT * 
@@ -398,22 +512,145 @@ ORDER BY hp.ID ASC;`;
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
+            <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
               <tr>
-                <th className="py-2.5 px-3">FINGLE_ID</th>
-                <th className="py-2.5 px-3">HP.ID</th>
-                <th className="py-2.5 px-3">เลขประจำตัวประชาชน (HR_CID)</th>
-                <th className="py-2.5 px-3">ชื่อ - สกุล (FULLNAME)</th>
-                <th className="py-2.5 px-3">ตำแหน่ง (HR_POSITION_NAME)</th>
-                <th className="py-2.5 px-3">ระดับ (HR_LEVEL_NAME)</th>
-                <th className="py-2.5 px-3">กลุ่มงานหลัก / หน่วยงานย่อย (HR_DEPARTMENT_SUB)</th>
-                <th className="py-2.5 px-3">ประเภทบุคลากร (HR_PERSON_TYPE_NAME)</th>
-                <th className="py-2.5 px-3">สถานะ (HR_STATUS)</th>
-                <th className="py-2.5 px-3 text-right">กะปฏิบัติงานวันนี้ (คนมีได้หลายกะ)</th>
+                <TableHeaderFilterCell
+                  title="FINGLE_ID"
+                  columnKey="fingleId"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.fingleId}
+                  onFilterChange={(v) => handleColFilterChange('fingleId', v)}
+                  filterType="text"
+                  placeholder="รหัส..."
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[95px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="HP.ID"
+                  columnKey="personId"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.personId}
+                  onFilterChange={(v) => handleColFilterChange('personId', v)}
+                  filterType="text"
+                  placeholder="ID..."
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[80px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="เลขประจำตัวประชาชน (HR_CID)"
+                  columnKey="hrCid"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrCid}
+                  onFilterChange={(v) => handleColFilterChange('hrCid', v)}
+                  filterType="text"
+                  placeholder="เลขบัตร..."
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[140px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="ชื่อ - สกุล (FULLNAME)"
+                  columnKey="hrFullname"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrFullname}
+                  onFilterChange={(v) => handleColFilterChange('hrFullname', v)}
+                  filterType="text"
+                  placeholder="ค้นชื่อ..."
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[170px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="ตำแหน่ง (HR_POSITION)"
+                  columnKey="hrPositionName"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrPositionName}
+                  onFilterChange={(v) => handleColFilterChange('hrPositionName', v)}
+                  filterType="text"
+                  placeholder="ตำแหน่ง..."
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[140px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="ระดับ"
+                  columnKey="hrLevelName"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrLevelName}
+                  onFilterChange={(v) => handleColFilterChange('hrLevelName', v)}
+                  filterType="text"
+                  placeholder="ระดับ..."
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[90px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="กลุ่มงาน / หน่วยงานย่อย"
+                  columnKey="hrDepName"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrDepName}
+                  onFilterChange={(v) => handleColFilterChange('hrDepName', v)}
+                  filterType="text"
+                  placeholder="ค้นกลุ่มงาน..."
+                  showFilterRow={showColumnFilters}
+                  className="min-w-[160px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="ประเภทบุคลากร"
+                  columnKey="hrPersonTypeName"
+                  sortable={true}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrPersonTypeName}
+                  onFilterChange={(v) => handleColFilterChange('hrPersonTypeName', v)}
+                  filterType="select"
+                  selectOptions={personTypes.map(t => ({ label: t, value: t }))}
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[140px]"
+                />
+
+                <TableHeaderFilterCell
+                  title="สถานะ (HR_STATUS)"
+                  columnKey="hrStatus"
+                  sortable={false}
+                  currentSort={sortConfig}
+                  onSort={handleSort}
+                  filterValue={colFilters.hrStatus}
+                  onFilterChange={(v) => handleColFilterChange('hrStatus', v)}
+                  filterType="select"
+                  selectOptions={[
+                    { label: 'ปฏิบัติราชการ (Active)', value: 'ACTIVE' },
+                    { label: 'ไม่ได้ปฏิบัติราชการ (Inactive)', value: 'INACTIVE' },
+                  ]}
+                  showFilterRow={showColumnFilters}
+                  className="whitespace-nowrap min-w-[130px]"
+                />
+
+                <th className="py-2.5 px-3 text-right whitespace-nowrap min-w-[180px]">
+                  <div className="font-semibold text-slate-800">กะปฏิบัติงานวันนี้ (คนมีได้หลายกะ)</div>
+                  {showColumnFilters && <div className="mt-1.5 text-[10px] text-slate-400 font-normal">ตารางเวร/กะ</div>}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-sans">
-              {filteredPersonnel.map((person, personIdx) => {
+              {paginatedPersonnel.map((person, personIdx) => {
                 // Resolve all shifts for this person today (คนมีได้หลายกะ)
                 const personShifts = attendanceStore.resolveShiftsForPerson(person.personId, today);
                 const hasMultipleShifts = personShifts.length > 1;
@@ -522,7 +759,7 @@ ORDER BY hp.ID ASC;`;
                 );
               })}
 
-              {filteredPersonnel.length === 0 && (
+              {paginatedPersonnel.length === 0 && (
                 <tr>
                   <td colSpan={10} className="py-12 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
@@ -530,20 +767,33 @@ ORDER BY hp.ID ASC;`;
                         <Users className="w-8 h-8" />
                       </div>
                       <div className="font-bold text-slate-800 text-sm">
-                        ไม่มีข้อมูลบุคลากรในฐานข้อมูล samchuk_attendance (0 ท่าน)
+                        {filteredPersonnel.length === 0 && state.personnel.length > 0 
+                          ? 'ไม่พบบุคลากรตามเงื่อนไขที่เลือก'
+                          : 'ไม่มีข้อมูลบุคลากรในฐานข้อมูล samchuk_attendance (0 ท่าน)'}
                       </div>
-                      <p className="text-xs text-slate-500 max-w-md">
-                        ระบบไม่ดึงข้อมูลจากฐาน hosoffice อัตโนมัติ เพื่อให้ท่านควบคุมข้อมูลได้อย่างอิสระ หากต้องการนำเข้ารายชื่อบุคลากรจาก HOSOffice มาใส่ฐาน samchuk_attendance สามารถกดปุ่มด้านล่างได้ทันที
-                      </p>
-                      {isAdmin && (
+                      {filteredPersonnel.length === 0 && state.personnel.length > 0 ? (
                         <button
-                          onClick={() => handleExecuteSync(false)}
-                          disabled={isSyncing}
-                          className="mt-2 flex items-center gap-2 px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-colors"
+                          onClick={handleResetFilters}
+                          className="text-teal-700 hover:underline text-xs font-semibold cursor-pointer"
                         >
-                          <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                          <span>📥 ดึงข้อมูลบุคลากรจาก HOSOffice มาใส่ฐาน samchuk_attendance</span>
+                          ล้างฟิลเตอร์ทั้งหมดเพื่อแสดงบุคลากร
                         </button>
+                      ) : (
+                        <>
+                          <p className="text-xs text-slate-500 max-w-md">
+                            ระบบไม่ดึงข้อมูลจากฐาน hosoffice อัตโนมัติ เพื่อให้ท่านควบคุมข้อมูลได้อย่างอิสระ หากต้องการนำเข้ารายชื่อบุคลากรจาก HOSOffice มาใส่ฐาน samchuk_attendance สามารถกดปุ่มด้านล่างได้ทันที
+                          </p>
+                          {isAdmin && (
+                            <button
+                              onClick={() => handleExecuteSync(false)}
+                              disabled={isSyncing}
+                              className="mt-2 flex items-center gap-2 px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-colors"
+                            >
+                              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                              <span>📥 ดึงข้อมูลบุคลากรจาก HOSOffice มาใส่ฐาน samchuk_attendance</span>
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </td>
@@ -552,6 +802,20 @@ ORDER BY hp.ID ASC;`;
             </tbody>
           </table>
         </div>
+
+        {/* Standard 10-row DataTablePagination */}
+        <DataTablePagination
+          currentPage={currentPage}
+          pageSize={pageSize}
+          totalItems={state.personnel.length}
+          totalFilteredItems={filteredPersonnel.length}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          showColumnFilters={showColumnFilters}
+          onToggleColumnFilters={() => setShowColumnFilters(!showColumnFilters)}
+          activeFilterCount={activeColFilterCount}
+          onResetFilters={handleResetFilters}
+        />
       </div>
 
       {/* MODAL 1: HOSOffice Sync Report & Execution */}

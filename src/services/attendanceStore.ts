@@ -527,6 +527,80 @@ class AttendanceStore {
   }
 
   /**
+   * ประมวลผลเวลาใหม่สำหรับช่วงเวลาในรายงาน (Daily, Monthly, Yearly, Custom Range)
+   * ใช้เมื่อมีการแก้ไขกะ, ปรับเวลางาน, หรือแก้ไขข้อมูลเพื่อตรวจสอบและบันทึกผลใหม่
+   */
+  public async recalculateReport(options: {
+    mode: AttendanceReportMode;
+    date?: string;
+    month?: string;
+    year?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }): Promise<{ success: boolean; message: string; datesCount: number }> {
+    const { mode, date = '2026-10-14', month = '2026-10', year = '2026', dateFrom = '2026-10-01', dateTo = '2026-10-15' } = options;
+
+    let targetDates: string[] = [];
+    if (mode === 'DAILY') {
+      targetDates = [date];
+    } else if (mode === 'MONTHLY') {
+      const [y, m] = month.split('-').map(Number);
+      const daysInMonth = new Date(y, m, 0).getDate();
+      for (let d = 1; d <= daysInMonth; d++) {
+        targetDates.push(`${month}-${String(d).padStart(2, '0')}`);
+      }
+    } else if (mode === 'YEARLY') {
+      const numYear = Number(year) > 2400 ? Number(year) - 543 : Number(year);
+      const dateSet = new Set<string>();
+      this.state.rawScans.forEach(s => {
+        const dt = (s.scanDateTime || '').replace('T', ' ').substring(0, 10);
+        if (dt.startsWith(`${numYear}-`)) dateSet.add(dt);
+      });
+      targetDates = Array.from(dateSet).sort();
+      if (targetDates.length === 0) targetDates = [`${numYear}-10-14`];
+    } else {
+      // CUSTOM
+      const start = new Date(dateFrom);
+      const end = new Date(dateTo);
+      for (let dt = new Date(start); dt <= end; dt.setDate(dt.getDate() + 1)) {
+        targetDates.push(dt.toISOString().substring(0, 10));
+      }
+    }
+
+    // 1. ส่งคำสั่งให้ Backend คำนวณและบันทึกลง MySQL
+    try {
+      await apiClient.recalculateAttendanceInDb({
+        mode,
+        date: mode === 'DAILY' ? date : undefined,
+        month: mode === 'MONTHLY' ? month : undefined,
+        year: mode === 'YEARLY' ? year : undefined,
+        dateFrom: mode === 'CUSTOM' ? dateFrom : undefined,
+        dateTo: mode === 'CUSTOM' ? dateTo : undefined
+      });
+    } catch (e) {
+      console.warn('Backend recalculate notice:', e);
+    }
+
+    // 2. เคลียร์แคชและคำนวณใหม่ในหน่วยความจำ
+    if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+    for (const d of targetDates) {
+      const dayRes = this.calculateAttendance(d);
+      this.state.cachedDailyResults[d] = dayRes;
+    }
+
+    this.state.lastAutoCalculatedAt = formatDateTime();
+    this.saveState();
+    this.notify();
+
+    return {
+      success: true,
+      datesCount: targetDates.length,
+      message: `ประมวลผลเวลาใหม่สำเร็จ: ตรวจสอบกะและคำนวณผลใหม่สำหรับ ${targetDates.length} วัน เรียบร้อยแล้ว`
+    };
+  }
+
+
+  /**
    * โหลดผลการประมวลผลเวลาตรงจากฐานข้อมูล MySQL attendance_daily_result
    */
   public async loadDailyAttendanceFromDb(date: string = '2026-10-14'): Promise<DailyResult[]> {

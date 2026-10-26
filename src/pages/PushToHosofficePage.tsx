@@ -32,6 +32,8 @@ import { StoreState, attendanceStore } from '../services/attendanceStore';
 import { PushBatch, RawScan } from '../types/attendance';
 import { QuickMapModal } from '../components/QuickMapModal';
 import { apiClient } from '../services/apiClient';
+import { DataTablePagination, PageSizeOption } from '../components/DataTablePagination';
+import { TableHeaderFilterCell, ColumnSortConfig } from '../components/TableHeaderFilterCell';
 
 interface PushToHosofficePageProps {
   state: StoreState;
@@ -51,6 +53,50 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
 
   // Search in preview table
   const [previewSearch, setPreviewSearch] = useState('');
+
+  // Pagination & Column Filters for Candidate Preview Table (Default 10 rows)
+  const [candidatePageSize, setCandidatePageSize] = useState<PageSizeOption>(10);
+  const [candidatePage, setCandidatePage] = useState<number>(1);
+  const [showCandidateFilters, setShowCandidateFilters] = useState<boolean>(true);
+  const [candidateSort, setCandidateSort] = useState<ColumnSortConfig | null>({ key: 'scanDateTime', direction: 'desc' });
+  const [candidateColFilters, setCandidateColFilters] = useState<Record<string, string>>({
+    scanDateTime: '',
+    machineNo: '',
+    fingleId: '',
+    hrFullname: '',
+    hrDepName: '',
+    pushStatus: '',
+    evalStatus: '',
+  });
+
+  const handleCandidateSort = (key: string) => {
+    setCandidateSort(prev => {
+      if (!prev || prev.key !== key) return { key, direction: 'asc' };
+      if (prev.direction === 'asc') return { key, direction: 'desc' };
+      return null;
+    });
+  };
+
+  const handleCandidateColFilterChange = (key: string, value: string) => {
+    setCandidateColFilters(prev => ({ ...prev, [key]: value }));
+    setCandidatePage(1);
+  };
+
+  const handleResetCandidateFilters = () => {
+    setCandidateColFilters({
+      scanDateTime: '',
+      machineNo: '',
+      fingleId: '',
+      hrFullname: '',
+      hrDepName: '',
+      pushStatus: '',
+      evalStatus: '',
+    });
+    setPreviewSearch('');
+    setCandidatePage(1);
+  };
+
+  const activeCandidateColFilterCount = Object.values(candidateColFilters).filter(v => v.trim() !== '').length;
 
   // Quick Map State
   const [quickMapScan, setQuickMapScan] = useState<RawScan | null>(null);
@@ -199,17 +245,74 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
   // Count unmapped records in pending
   const unmappedPendingScans = state.rawScans.filter(s => !s.hrMapped && s.pushStatus === 'PENDING');
 
-  // Filter preview candidates by search query
-  const filteredCandidates = previewResult?.candidates.filter(scan => {
-    if (!previewSearch) return true;
-    const term = previewSearch.toLowerCase();
-    return (
-      String(scan.fingleId).includes(term) ||
-      (scan.hrFullname && scan.hrFullname.toLowerCase().includes(term)) ||
-      (scan.hrDepName && scan.hrDepName.toLowerCase().includes(term)) ||
-      scan.scanDateTime.includes(term)
-    );
-  }) || [];
+  // Filter preview candidates by search query & column filters
+  const filteredCandidates = (previewResult?.candidates || []).filter(scan => {
+    // Toolbar search
+    if (previewSearch) {
+      const term = previewSearch.toLowerCase();
+      const matchFingle = String(scan.fingleId).includes(term);
+      const matchName = scan.hrFullname && scan.hrFullname.toLowerCase().includes(term);
+      const matchDep = scan.hrDepName && scan.hrDepName.toLowerCase().includes(term);
+      const matchDate = scan.scanDateTime.includes(term);
+      if (!matchFingle && !matchName && !matchDep && !matchDate) return false;
+    }
+
+    // Column Header Filters
+    if (candidateColFilters.scanDateTime && !scan.scanDateTime.toLowerCase().includes(candidateColFilters.scanDateTime.toLowerCase())) {
+      return false;
+    }
+    if (candidateColFilters.machineNo && scan.machineNo.toString() !== candidateColFilters.machineNo) {
+      return false;
+    }
+    if (candidateColFilters.fingleId && !String(scan.fingleId).includes(candidateColFilters.fingleId)) {
+      return false;
+    }
+    if (candidateColFilters.hrFullname && !(scan.hrFullname || '').toLowerCase().includes(candidateColFilters.hrFullname.toLowerCase())) {
+      return false;
+    }
+    if (candidateColFilters.hrDepName && !(scan.hrDepName || '').toLowerCase().includes(candidateColFilters.hrDepName.toLowerCase())) {
+      return false;
+    }
+    if (candidateColFilters.pushStatus && scan.pushStatus !== candidateColFilters.pushStatus) {
+      return false;
+    }
+    if (candidateColFilters.evalStatus) {
+      const exists = state.hosofficeScans.some(
+        h => h.fingleId === scan.fingleId && h.scanDateTime === scan.scanDateTime
+      );
+      const isUnmapped = !scan.hrMapped;
+      if (candidateColFilters.evalStatus === 'INSERT' && (isUnmapped || exists)) return false;
+      if (candidateColFilters.evalStatus === 'EXISTS' && !exists) return false;
+      if (candidateColFilters.evalStatus === 'UNMAPPED' && !isUnmapped) return false;
+    }
+
+    return true;
+  });
+
+  // Sorted candidates
+  const sortedCandidates = [...filteredCandidates].sort((a, b) => {
+    if (!candidateSort) return 0;
+    const { key, direction } = candidateSort;
+    let aVal: any = (a as any)[key];
+    let bVal: any = (b as any)[key];
+
+    if (aVal === undefined || aVal === null) aVal = '';
+    if (bVal === undefined || bVal === null) bVal = '';
+
+    let comp = 0;
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      comp = aVal - bVal;
+    } else {
+      comp = String(aVal).localeCompare(String(bVal));
+    }
+    return direction === 'asc' ? comp : -comp;
+  });
+
+  // Paginated candidates (Default 10 rows)
+  const effectiveCandidateSize = candidatePageSize === -1 ? Math.max(sortedCandidates.length, 1) : candidatePageSize;
+  const paginatedCandidates = candidatePageSize === -1
+    ? sortedCandidates
+    : sortedCandidates.slice((candidatePage - 1) * effectiveCandidateSize, candidatePage * effectiveCandidateSize);
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto select-none">
@@ -638,28 +741,144 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
               </div>
             </div>
 
-            <div className="overflow-x-auto max-h-96 border border-slate-200 rounded-lg">
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0 border-b border-slate-200 z-10">
+                <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="py-2.5 px-3">วัน-เวลาสแกน</th>
-                    <th className="py-2.5 px-3">เครื่องสแกน</th>
-                    <th className="py-2.5 px-3">FINGLE_ID</th>
-                    <th className="py-2.5 px-3">ชื่อ - สกุล (HR)</th>
-                    <th className="py-2.5 px-3">แผนก / ฝ่าย</th>
-                    <th className="py-2.5 px-3">สถานะ Staging</th>
-                    <th className="py-2.5 px-3 text-right">ผลการประเมินการส่ง</th>
+                    <TableHeaderFilterCell
+                      title="วัน-เวลาสแกน"
+                      columnKey="scanDateTime"
+                      sortable={true}
+                      currentSort={candidateSort}
+                      onSort={handleCandidateSort}
+                      filterValue={candidateColFilters.scanDateTime}
+                      onFilterChange={(v) => handleCandidateColFilterChange('scanDateTime', v)}
+                      filterType="text"
+                      placeholder="ค้นเวลา..."
+                      showFilterRow={showCandidateFilters}
+                      className="whitespace-nowrap min-w-[150px]"
+                    />
+
+                    <TableHeaderFilterCell
+                      title="เครื่องสแกน"
+                      columnKey="machineNo"
+                      sortable={true}
+                      currentSort={candidateSort}
+                      onSort={handleCandidateSort}
+                      filterValue={candidateColFilters.machineNo}
+                      onFilterChange={(v) => handleCandidateColFilterChange('machineNo', v)}
+                      filterType="select"
+                      selectOptions={[
+                        { label: 'เครื่อง 1', value: '1' },
+                        { label: 'เครื่อง 2', value: '2' },
+                        { label: 'เครื่อง 3', value: '3' },
+                      ]}
+                      showFilterRow={showCandidateFilters}
+                      className="whitespace-nowrap min-w-[110px]"
+                    />
+
+                    <TableHeaderFilterCell
+                      title="FINGLE_ID"
+                      columnKey="fingleId"
+                      sortable={true}
+                      currentSort={candidateSort}
+                      onSort={handleCandidateSort}
+                      filterValue={candidateColFilters.fingleId}
+                      onFilterChange={(v) => handleCandidateColFilterChange('fingleId', v)}
+                      filterType="text"
+                      placeholder="รหัส..."
+                      showFilterRow={showCandidateFilters}
+                      className="whitespace-nowrap min-w-[90px]"
+                    />
+
+                    <TableHeaderFilterCell
+                      title="ชื่อ - สกุล (HR)"
+                      columnKey="hrFullname"
+                      sortable={true}
+                      currentSort={candidateSort}
+                      onSort={handleCandidateSort}
+                      filterValue={candidateColFilters.hrFullname}
+                      onFilterChange={(v) => handleCandidateColFilterChange('hrFullname', v)}
+                      filterType="text"
+                      placeholder="ค้นชื่อ..."
+                      showFilterRow={showCandidateFilters}
+                      className="min-w-[170px]"
+                    />
+
+                    <TableHeaderFilterCell
+                      title="แผนก / ฝ่าย"
+                      columnKey="hrDepName"
+                      sortable={true}
+                      currentSort={candidateSort}
+                      onSort={handleCandidateSort}
+                      filterValue={candidateColFilters.hrDepName}
+                      onFilterChange={(v) => handleCandidateColFilterChange('hrDepName', v)}
+                      filterType="text"
+                      placeholder="ค้นแผนก..."
+                      showFilterRow={showCandidateFilters}
+                      className="min-w-[150px]"
+                    />
+
+                    <TableHeaderFilterCell
+                      title="สถานะ Staging"
+                      columnKey="pushStatus"
+                      sortable={true}
+                      currentSort={candidateSort}
+                      onSort={handleCandidateSort}
+                      filterValue={candidateColFilters.pushStatus}
+                      onFilterChange={(v) => handleCandidateColFilterChange('pushStatus', v)}
+                      filterType="select"
+                      selectOptions={[
+                        { label: 'PENDING', value: 'PENDING' },
+                        { label: 'PUSHED', value: 'PUSHED' },
+                        { label: 'SKIPPED_EXISTS', value: 'SKIPPED_EXISTS' },
+                        { label: 'EXCLUDED', value: 'EXCLUDED' },
+                      ]}
+                      showFilterRow={showCandidateFilters}
+                      className="whitespace-nowrap min-w-[120px]"
+                    />
+
+                    <TableHeaderFilterCell
+                      title="ผลการประเมินการส่ง"
+                      columnKey="evalStatus"
+                      sortable={false}
+                      currentSort={candidateSort}
+                      onSort={handleCandidateSort}
+                      filterValue={candidateColFilters.evalStatus}
+                      onFilterChange={(v) => handleCandidateColFilterChange('evalStatus', v)}
+                      filterType="select"
+                      selectOptions={[
+                        { label: '✓ จะ Insert ทันที', value: 'INSERT' },
+                        { label: 'ข้าม (มีอยู่แล้ว)', value: 'EXISTS' },
+                        { label: '⚠ ข้าม (ไม่พบ HR)', value: 'UNMAPPED' },
+                      ]}
+                      showFilterRow={showCandidateFilters}
+                      align="right"
+                      className="whitespace-nowrap min-w-[150px]"
+                    />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredCandidates.length === 0 ? (
+                  {paginatedCandidates.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="py-8 text-center text-slate-400 text-xs">
-                        ไม่พบรายการสแกนที่ตรงกับเงื่อนไขการค้นหา
+                        {filteredCandidates.length === 0 && (previewResult?.candidates?.length || 0) > 0 ? (
+                          <div className="space-y-1">
+                            <div>ไม่พบรายการสแกนที่ตรงกับเงื่อนไขการค้นหา/ฟิลเตอร์</div>
+                            <button
+                              onClick={handleResetCandidateFilters}
+                              className="text-teal-700 hover:underline font-bold text-xs cursor-pointer"
+                            >
+                              ล้างฟิลเตอร์ทั้งหมด
+                            </button>
+                          </div>
+                        ) : (
+                          'ไม่พบรายการสแกนที่ตรงกับเงื่อนไขการค้นหา'
+                        )}
                       </td>
                     </tr>
                   ) : (
-                    filteredCandidates.map((scan, scanIdx) => {
+                    paginatedCandidates.map((scan, scanIdx) => {
                       const exists = state.hosofficeScans.some(
                         h => h.fingleId === scan.fingleId && h.scanDateTime === scan.scanDateTime
                       );
@@ -715,6 +934,20 @@ export const PushToHosofficePage: React.FC<PushToHosofficePageProps> = ({ state 
                 </tbody>
               </table>
             </div>
+
+            {/* Standard 10-row DataTablePagination */}
+            <DataTablePagination
+              currentPage={candidatePage}
+              pageSize={candidatePageSize}
+              totalItems={previewResult.candidates.length}
+              totalFilteredItems={filteredCandidates.length}
+              onPageChange={setCandidatePage}
+              onPageSizeChange={setCandidatePageSize}
+              showColumnFilters={showCandidateFilters}
+              onToggleColumnFilters={() => setShowCandidateFilters(!showCandidateFilters)}
+              activeFilterCount={activeCandidateColFilterCount}
+              onResetFilters={handleResetCandidateFilters}
+            />
 
             {/* Bottom Push Confirmation Bar */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100">

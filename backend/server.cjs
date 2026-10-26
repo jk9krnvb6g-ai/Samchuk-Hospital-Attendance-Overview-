@@ -2576,6 +2576,61 @@ app.post('/api/attendance/daily/batch', async (req, res) => {
   }
 });
 
+// คำนวณผลการลงเวลาใหม่ (Recalculate Attendance & Shifts) เมื่อมีการแก้ไขกะหรือตารางเวลา
+app.post('/api/attendance/recalculate', async (req, res) => {
+  try {
+    await ensureTablesExist();
+    const { date, dateFrom, dateTo, month, year, mode } = req.body || {};
+    let targetDates = [];
+
+    if (date) {
+      targetDates = [date];
+    } else if (dateFrom && dateTo) {
+      const start = new Date(dateFrom);
+      const end = new Date(dateTo);
+      for (let dt = new Date(start); dt <= end; dt.setDate(dt.getDate() + 1)) {
+        targetDates.push(dt.toISOString().substring(0, 10));
+      }
+    } else if (month) {
+      const [y, m] = month.split('-').map(Number);
+      const daysInMonth = new Date(y, m, 0).getDate();
+      for (let d = 1; d <= daysInMonth; d++) {
+        targetDates.push(`${month}-${String(d).padStart(2, '0')}`);
+      }
+    } else if (year) {
+      const numYear = Number(year) > 2400 ? Number(year) - 543 : Number(year);
+      targetDates = [new Date().toISOString().substring(0, 10)];
+    } else {
+      targetDates = [new Date().toISOString().substring(0, 10)];
+    }
+
+    let totalSaved = 0;
+    const summaries = [];
+    for (const d of targetDates) {
+      try {
+        const cRes = await calculateDailyAttendanceForDate(d);
+        if (cRes && cRes.success) {
+          totalSaved += (cRes.savedShiftsCount || 0);
+          summaries.push(cRes);
+        }
+      } catch (calcErr) {
+        console.error(`Recalculate for ${d} error:`, calcErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      targetDates,
+      datesCount: targetDates.length,
+      totalSaved,
+      message: `ประมวลผลเวลาและตรวจสอบกะใหม่สำเร็จ: คำนวณ ${targetDates.length} วัน บันทึกผล ${totalSaved} รายการลง attendance_daily_result เรียบร้อยแล้ว`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: `เกิดข้อผิดพลาดในการประมวลผลใหม่: ${err.message}` });
+  }
+});
+
+
 // ข้อ 3 & ข้อ 4: ปิดการลบข้อมูลสแกนจริงโดยตรงใน Production (รักษาประวัติดิบ 100%)
 app.delete('/api/raw-scans/:id', (req, res) => {
   return res.status(403).json({
@@ -4309,7 +4364,8 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
     const todayStr = toBangkokDateTimeStr(today).substring(0, 10);
 
     if (mode === 'TODAY') {
-      targetDatesSet.add(date ? date.substring(0, 10) : todayStr);
+      // โหมด "วันนี้": บังคับใช้วันที่ปัจจุบันตามเวลาประเทศไทย Asia/Bangkok เสมอ 100% (ไม่ใช้ date เก่าที่ค้างมา)
+      targetDatesSet.add(todayStr);
     } else if (mode === 'DATE' && date) {
       // วันที่ระบุ เช่น 2026-10-14 -> บันทึกเฉพาะ 2026-10-14 วันเดียวเท่านั้น!
       targetDatesSet.add(date.substring(0, 10));
@@ -4374,13 +4430,18 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
 
     // กรณีที่ 1: ดึงจากเครื่องสแกนนิ้ว HIP CMiF68S (syncSource === 'SCANNERS')
     if (syncSource === 'SCANNERS') {
-      // คำนวณวันย้อนหลัง (daysBack) จากวันนี้ไปถึงวันที่เก่าที่สุดใน targetDates
-      // เพื่อให้คำสั่งอ่านบัฟเฟอร์ฮาร์ดแวร์ CMiF68S ครอบคลุมวันที่ผู้ใช้ต้องการ
-      const earliestTargetDate = targetDates[0] || todayStr;
-      const earliestObj = new Date(earliestTargetDate);
-      const diffDays = Math.ceil((today.getTime() - earliestObj.getTime()) / (1000 * 60 * 60 * 24));
-      // +2 วัน เผื่อความคลาดเคลื่อนของเวลา/กะข้ามคืน
-      const daysBack = Math.max(1, Math.min(180, diffDays + 2));
+      // คำนวณวันย้อนหลัง (daysBack) สำหรับ ScannerSyncCli
+      // ถ้าเลือก "วันนี้" สั่งอ่านย้อนหลัง 1 วัน (ดึงตั้งแต่ 00:00:00 ของวันนี้ถึงปัจจุบัน)
+      let daysBack = 1;
+      if (mode === 'TODAY') {
+        daysBack = 1;
+      } else {
+        const earliestTargetDate = targetDates[0] || todayStr;
+        const earliestObj = new Date(earliestTargetDate);
+        const diffDays = Math.ceil((today.getTime() - earliestObj.getTime()) / (1000 * 60 * 60 * 24));
+        // +2 วัน เผื่อความคลาดเคลื่อนของเวลา/กะข้ามคืน
+        daysBack = Math.max(1, Math.min(180, diffDays + 2));
+      }
 
       console.log(`[ScannerReader] 🎯 เงื่อนไขที่เลือก: ${mode} (${targetLabel}) -> วันที่เป้าหมาย: [${targetDates.join(', ')}]`);
       console.log(`[ScannerReader] 📡 สั่งอ่านบัฟเฟอร์ฮาร์ดแวร์ย้อนหลัง ${daysBack} วัน เพื่อดึงข้อมูลให้ครอบคลุม ${targetLabel}...`);
