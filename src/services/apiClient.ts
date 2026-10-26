@@ -43,17 +43,25 @@ const STORAGE_API_KEY = 'samchuk_api_endpoint_url';
 
 export const resolveDefaultApiUrl = (): string => {
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
+    return import.meta.env.VITE_API_URL.replace(/\/+$/, '');
   }
   if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol;
     const host = window.location.hostname || 'localhost';
-    return `http://${host}:3002/api/Sam_Att`;
+
+    // นโยบายความปลอดภัยของโรงพยาบาล: ทำงานผ่าน HTTPS เท่านั้น
+    // เมื่อเข้าเว็บผ่าน HTTPS ให้ใช้ Same-Origin URL (พอร์ต 3001) ผ่าน IIS Reverse Proxy
+    // ซึ่งจะส่งต่อไปยัง 127.0.0.1:3002 ภายในเครื่องเซิร์ฟเวอร์โดยตรง เป็น HTTPS 100%
+    if (protocol === 'https:') {
+      return window.location.origin;
+    }
+    return `http://${host}:3002`;
   }
-  return 'http://localhost:3002/api/Sam_Att';
+  return 'http://localhost:3002';
 };
 
 export const DEFAULT_API_URL = resolveDefaultApiUrl();
-export const HOSPITAL_WEB_URL = 'http://10.2.0.13:3001/Sam_Att/';
+export const HOSPITAL_WEB_URL = 'https://10.2.0.13:3001/Sam_Att/';
 
 class ApiClientService {
   private customBaseUrl: string = resolveDefaultApiUrl();
@@ -65,8 +73,15 @@ class ApiClientService {
   constructor() {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(STORAGE_API_KEY);
-      if (saved && saved.trim()) {
-        this.customBaseUrl = saved.trim();
+      const isHttps = window.location.protocol === 'https:';
+
+      // หากเปิดผ่าน HTTPS แต่มีค่าเดิมเป็น http:// ค้างใน localStorage
+      // ให้ Auto-migrate ไปใช้ HTTPS (Same-Origin Reverse Proxy) ทันที
+      if (isHttps && saved && saved.startsWith('http://')) {
+        this.customBaseUrl = resolveDefaultApiUrl();
+        localStorage.setItem(STORAGE_API_KEY, this.customBaseUrl);
+      } else if (saved && saved.trim()) {
+        this.customBaseUrl = saved.trim().replace(/\/+$/, '');
       } else {
         this.customBaseUrl = resolveDefaultApiUrl();
       }
@@ -78,9 +93,10 @@ class ApiClientService {
     return window.location.protocol === 'https:' && this.customBaseUrl.startsWith('http://');
   }
 
-  public getHttpFallbackUrl(): string {
-    if (typeof window === 'undefined') return 'http://10.2.0.13:3001/Sam_Att/';
-    return window.location.href.replace(/^https:/i, 'http:');
+  public switchToHttpsProxy(): void {
+    if (typeof window !== 'undefined') {
+      this.setBaseUrl(window.location.origin);
+    }
   }
 
   public getBaseUrl(): string {

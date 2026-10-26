@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, ExternalLink, ArrowRight, X, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, ShieldCheck, ArrowRight, X, ShieldAlert, CheckCircle2, Lock, Server } from 'lucide-react';
 import { apiClient } from '../services/apiClient';
 
 export const MixedContentBanner: React.FC = () => {
   const [showBanner, setShowBanner] = useState<boolean>(false);
   const [showDetailModal, setShowDetailModal] = useState<boolean>(false);
-  const [httpUrl, setHttpUrl] = useState<string>('');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -13,53 +12,52 @@ export const MixedContentBanner: React.FC = () => {
       const isBlocked = apiClient.isMixedContentBlocked();
       if (isHttps && isBlocked) {
         setShowBanner(true);
-        setHttpUrl(window.location.href.replace(/^https:/i, 'http:'));
+      } else {
+        setShowBanner(false);
       }
     }
   }, []);
 
   if (!showBanner) return null;
 
-  const handleSwitchToHttp = () => {
-    if (typeof window !== 'undefined' && httpUrl) {
-      window.location.href = httpUrl;
-    }
+  const handleSwitchToHttpsProxy = () => {
+    apiClient.switchToHttpsProxy();
+    setShowBanner(false);
+    window.location.reload();
   };
 
   return (
     <>
-      {/* Top Warning Alert Banner */}
-      <div className="bg-amber-500 text-slate-900 border-b border-amber-600 px-4 py-2.5 shadow-md shrink-0 sticky top-0 z-50 animate-slide-down">
+      {/* Top Notification Banner */}
+      <div className="bg-sky-600 text-white border-b border-sky-700 px-4 py-2.5 shadow-md shrink-0 sticky top-0 z-50 animate-slide-down">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs sm:text-sm">
           <div className="flex items-center gap-2.5 font-medium">
-            <span className="p-1 bg-amber-600 text-white rounded-md shrink-0">
-              <ShieldAlert className="w-4 h-4" />
+            <span className="p-1 bg-white/20 text-white rounded-md shrink-0">
+              <Lock className="w-4 h-4" />
             </span>
             <span>
-              <strong>คำเตือนบราวเซอร์บล็อกข้อมูล (Mixed Content):</strong> คุณกำลังเข้าเว็บด้วย{' '}
-              <code className="bg-amber-600/30 px-1.5 py-0.5 rounded font-mono font-bold text-amber-950">https://</code>{' '}
-              แต่ Backend API Gateway (พอร์ต 3002) ทำงานด้วย HTTP ทำให้บราวเซอร์บล็อกการโหลดข้อมูล
+              <strong>โหมดความปลอดภัย HTTPS 100%:</strong> ตรวจพบการตั้งค่า API เป็น HTTP เดิม (พอร์ต 3002) แนะนำให้สลับมาใช้ HTTPS ผ่าน IIS Reverse Proxy (พอร์ต 3001) เพื่อให้โหลดข้อมูลสแกนนิ้วได้ราบรื่น
             </span>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={handleSwitchToHttp}
-              className="px-3 py-1 bg-slate-900 text-white font-semibold rounded shadow hover:bg-slate-800 transition-colors flex items-center gap-1.5 cursor-pointer text-xs"
+              onClick={handleSwitchToHttpsProxy}
+              className="px-3 py-1.5 bg-white text-sky-800 hover:bg-sky-50 font-bold rounded-lg shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer text-xs"
             >
-              <span>เปลี่ยนไปใช้ HTTP ทันที</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+              <span>เปิดใช้งาน HTTPS พอร์ต 3001 ทันที</span>
             </button>
             <button
               onClick={() => setShowDetailModal(true)}
-              className="px-2.5 py-1 bg-amber-600/30 text-slate-950 hover:bg-amber-600/50 rounded font-medium transition-colors cursor-pointer text-xs"
+              className="px-2.5 py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-lg font-semibold transition-colors cursor-pointer text-xs"
             >
-              วิธีแก้ไข / ทำความเข้าใจ
+              ดูวิธีตั้งค่า IIS
             </button>
             <button
               onClick={() => setShowBanner(false)}
-              className="p-1 text-slate-800 hover:text-slate-950 rounded hover:bg-amber-600/30 cursor-pointer"
-              title="ซ่อนการแจ้งเตือนนี้"
+              className="p-1 text-sky-200 hover:text-white rounded hover:bg-sky-700/50 cursor-pointer"
+              title="ปิดการแจ้งเตือน"
             >
               <X className="w-4 h-4" />
             </button>
@@ -69,74 +67,112 @@ export const MixedContentBanner: React.FC = () => {
 
       {/* Explanation Modal */}
       {showDetailModal && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full border border-slate-200 overflow-hidden text-slate-800">
-            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full border border-slate-200 overflow-hidden text-slate-800 max-h-[90vh] flex flex-col">
+            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
-                <AlertTriangle className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-base">สาเหตุของข้อผิดพลาด "Mixed Content" และวิธีแก้ไข</h3>
+                <div className="p-2 bg-sky-500/20 text-sky-400 rounded-lg border border-sky-400/30">
+                  <Lock className="w-5 h-5 text-sky-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base leading-tight">แนวทางใช้งานระบบผ่าน HTTPS 100% (ไม่มี HTTP)</h3>
+                  <p className="text-xs text-slate-400">วิธีเชื่อมต่อ API ผ่าน HTTPS เดียวกันกับหน้าเว็บ เพื่อความปลอดภัยสูงสุด</p>
+                </div>
               </div>
               <button
                 onClick={() => setShowDetailModal(false)}
-                className="text-slate-400 hover:text-white cursor-pointer"
+                className="text-slate-400 hover:text-white cursor-pointer p-1 rounded-lg hover:bg-slate-800"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 space-y-4 text-xs sm:text-sm">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3.5 text-amber-900 space-y-1">
-                <p className="font-bold">ทำไมบราวเซอร์ถึงขึ้นข้อความนี้?</p>
-                <p className="text-xs text-amber-800 leading-relaxed">
-                  เนื่องจากมาตรฐานความปลอดภัยสากลของ Google Chrome และ Microsoft Edge กำหนดไว้ว่า:
-                  หากหน้าเว็บหลักถูกเปิดด้วย <strong>HTTPS</strong> (เช่น <code>https://10.2.0.13:3001/Sam_Att/</code>)
-                  บราวเซอร์จะ<strong>บล็อกคำสั่งดึงข้อมูล (API AJAX/fetch)</strong> ที่ยิงไปยัง <strong>HTTP</strong> (เช่น <code>http://10.2.0.13:3002/...</code>) โดยอัตโนมัติ เพื่อป้องกันการส่งข้อมูลที่ไม่เข้ารหัส
+            <div className="p-6 space-y-4 text-xs sm:text-sm overflow-y-auto">
+              <div className="bg-sky-50 border border-sky-300 rounded-xl p-4 text-sky-950 space-y-2">
+                <p className="font-bold text-sky-900 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  <span>ทำไมต้องใช้งาน API ผ่าน HTTPS เดียวกันกับหน้าเว็บ?</span>
                 </p>
+                <div className="text-xs text-sky-900/90 leading-relaxed space-y-1">
+                  <p>
+                    ตามนโยบายความปลอดภัย เมื่อผู้ใช้เปิดหน้าเว็บผ่าน <strong><code>https://10.2.0.13:3001/Sam_Att/</code></strong> บราวเซอร์จะบังคับให้การดึงข้อมูลทั้งหมด (API) ต้องส่งผ่านโปรโตคอล <strong>HTTPS เท่านั้น</strong>
+                  </p>
+                  <p>
+                    • ข้อมูลในฐานข้อมูล MySQL ถูกจัดเก็บครบถ้วนตามปกติ
+                  </p>
+                  <p>
+                    • เพียงปรับให้ API เรียกผ่านพอร์ต 3001 (Same-Origin HTTPS) บราวเซอร์จะเปิดรับข้อมูลทันที 100% โดยไม่ต้องปรับลดความปลอดภัย
+                  </p>
+                </div>
               </div>
 
-              <div className="border border-slate-200 rounded-lg p-4 space-y-3">
-                <h4 className="font-bold text-slate-900 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  วิธีแก้ไขที่ 1: เข้าใช้งานผ่าน HTTP (แนะนำสำหรับระบบเครือข่ายภายใน รพ.)
-                </h4>
+              {/* Solution 1: Switch to Same-Origin Reverse Proxy */}
+              <div className="border border-emerald-300 bg-emerald-50/50 rounded-xl p-4 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-emerald-950 flex items-center gap-2 text-sm">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>วิธีที่ 1: สลับ Endpoint เป็น HTTPS พอร์ต 3001 (แนะนำที่สุด)</span>
+                  </h4>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-200 text-emerald-800">
+                    HTTPS 100%
+                  </span>
+                </div>
                 <p className="text-slate-600 text-xs leading-relaxed">
-                  เปลี่ยน URL ในช่องกรอกที่อยู่เว็บ (Address Bar) ของบราวเซอร์ โดยตัดตัว <code className="font-bold text-rose-600">s</code> ออก ให้เป็น:
+                  ระบบได้เตรียมไฟล์ <code className="font-bold text-slate-800 bg-slate-200 px-1 py-0.5 rounded">web.config</code> เพื่อทำ Reverse Proxy บน IIS พอร์ต 3001 ให้ส่งต่อไปยัง Node API ภายในเครื่องอัตโนมัติ คลิกปุ่มด้านล่างเพื่อสลับได้ทันที:
                 </p>
-                <div className="bg-slate-100 p-2.5 rounded font-mono text-xs text-teal-800 font-bold flex items-center justify-between">
-                  <span>{httpUrl || 'http://10.2.0.13:3001/Sam_Att/'}</span>
+                <div className="bg-white border border-emerald-300 p-3 rounded-lg flex items-center justify-between gap-2">
+                  <div className="font-mono text-xs text-emerald-900 font-bold">
+                    https://10.2.0.13:3001/api/Sam_Att
+                  </div>
                   <button
-                    onClick={handleSwitchToHttp}
-                    className="px-2.5 py-1 bg-teal-600 text-white rounded text-xs hover:bg-teal-700 cursor-pointer"
+                    onClick={handleSwitchToHttpsProxy}
+                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-2xs whitespace-nowrap flex items-center gap-1.5"
                   >
-                    เปิดหน้านี้ทันที
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>ใช้ HTTPS ทันที</span>
                   </button>
                 </div>
               </div>
 
-              <div className="border border-slate-200 rounded-lg p-4 space-y-2">
-                <h4 className="font-bold text-slate-900 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-teal-600" />
-                  วิธีแก้ไขที่ 2: ตั้งค่า Reverse Proxy บน IIS พอร์ต 3001 (หากต้องการใช้ HTTPS ต่อไป)
+              {/* Solution 2: IIS ARR Server Configuration */}
+              <div className="border border-slate-300 bg-slate-50 rounded-xl p-4 space-y-2.5">
+                <h4 className="font-bold text-slate-900 flex items-center gap-2 text-sm">
+                  <Server className="w-4 h-4 text-slate-600" />
+                  <span>การเปิดใช้งาน IIS Application Request Routing (ARR) บน Server (สำหรับ Admin)</span>
                 </h4>
-                <p className="text-slate-600 text-xs leading-relaxed">
-                  หากต้องการให้ทุกระบบรันผ่าน HTTPS ต่อเนื่องโดยไม่มีคำเตือน ให้เปิดฟังก์ชัน <strong>URL Rewrite + ARR (Application Request Routing)</strong> ใน IIS บนเครื่องเซิร์ฟเวอร์ โดยส่งต่อ URL <code>/api/*</code> ไปยัง <code>http://127.0.0.1:3002/api/*</code> (ไฟล์ <code>web.config</code> ในโฟลเดอร์โครงการได้เตรียมการตั้งค่านี้ไว้เรียบร้อยแล้ว)
-                </p>
+                <div className="text-slate-600 text-xs leading-relaxed space-y-1.5">
+                  <p>
+                    1. เปิดโปรแกรม <strong>IIS Manager</strong> บนเครื่องเซิร์ฟเวอร์ 10.2.0.13
+                  </p>
+                  <p>
+                    2. ดับเบิลคลิกที่ไอคอน <strong>Application Request Routing Cache</strong> ที่หน้าหลักของ Server
+                  </p>
+                  <p>
+                    3. เมนูด้านขวามือคลิก <strong>Server Proxy Settings...</strong>
+                  </p>
+                  <p>
+                    4. ติ๊กเครื่องหมายถูกที่ช่อง <strong>"Enable proxy"</strong> แล้วกด <strong>Apply</strong> ที่มุมขวาบน
+                  </p>
+                  <p className="text-emerald-700 font-medium">
+                    เพียงเท่านี้ IIS จะทำหน้าที่รับ HTTPS พอร์ต 3001 และ Forward API ไปยัง Node.js ภายในเครื่องอย่างปลอดภัย 100%
+                  </p>
+                </div>
               </div>
             </div>
 
-            <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-end gap-2">
+            <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-end gap-2 shrink-0">
               <button
                 onClick={() => setShowDetailModal(false)}
-                className="px-4 py-2 border border-slate-300 rounded text-slate-700 hover:bg-slate-100 font-medium text-xs cursor-pointer"
+                className="px-4 py-2 border border-slate-300 rounded-xl text-slate-700 hover:bg-slate-100 font-semibold text-xs cursor-pointer"
               >
-                ปิดหน้าต่างนี้
+                เข้าใจแล้ว / ปิดหน้าต่างนี้
               </button>
               <button
-                onClick={handleSwitchToHttp}
-                className="px-4 py-2 bg-teal-600 text-white rounded hover:bg-teal-700 font-bold text-xs cursor-pointer flex items-center gap-1.5"
+                onClick={handleSwitchToHttpsProxy}
+                className="px-4 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-xl font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-2xs"
               >
-                <span>สลับไปใช้ HTTP ทันที</span>
-                <ExternalLink className="w-3.5 h-3.5" />
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>เปิดใช้งาน HTTPS พอร์ต 3001</span>
               </button>
             </div>
           </div>

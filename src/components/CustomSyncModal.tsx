@@ -275,21 +275,24 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
           
           {/* แจ้งเตือนบราวเซอร์บล็อก Mixed Content (HTTPS -> HTTP) */}
           {isMixedBlocked && (
-            <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-rose-950 space-y-2.5 shadow-xs">
-              <div className="flex items-center gap-2 font-bold text-sm text-rose-800">
-                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
-                <span>บราวเซอร์บล็อกการดึงข้อมูล (Mixed Content Blocked)</span>
+            <div className="p-4 bg-sky-50 border border-sky-300 rounded-xl text-sky-950 space-y-2.5 shadow-xs">
+              <div className="flex items-center gap-2 font-bold text-sm text-sky-900">
+                <AlertTriangle className="w-5 h-5 text-sky-700 shrink-0" />
+                <span>การเชื่อมต่อปลอดภัย: แนะนำให้เปิดใช้งาน HTTPS พอร์ต 3001</span>
               </div>
-              <p className="text-xs text-rose-900 leading-relaxed">
-                เนื่องจากขณะนี้คุณกำลังเปิดหน้าเว็บด้วย <strong>HTTPS</strong> (<code className="bg-rose-100 px-1.5 py-0.5 rounded font-mono font-bold text-rose-900">https://10.2.0.13:3001</code>) แต่ Backend API Gateway (พอร์ต 3002) ทำงานด้วย <strong>HTTP</strong> ทำให้ Chrome/Edge บล็อกการเชื่อมต่อทุกอย่าง
+              <p className="text-xs text-sky-900 leading-relaxed">
+                เนื่องจากเปิดหน้าเว็บด้วย <strong>HTTPS</strong> (<code className="bg-sky-100 px-1.5 py-0.5 rounded font-mono font-bold text-sky-900">https://10.2.0.13:3001</code>) คุณสามารถสลับให้ API ทำงานผ่าน HTTPS พอร์ต 3001 เดียวกัน เพื่อให้ดึงข้อมูลสแกนนิ้วได้ราบรื่น 100%
               </p>
               <div className="pt-1 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => { if (httpUrl) window.location.href = httpUrl; }}
-                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs cursor-pointer shadow-xs flex items-center gap-1.5 transition-colors"
+                  onClick={() => {
+                    apiClient.switchToHttpsProxy();
+                    window.location.reload();
+                  }}
+                  className="px-3.5 py-2 bg-sky-700 hover:bg-sky-800 text-white font-bold rounded-lg text-xs cursor-pointer shadow-xs flex items-center gap-1.5 transition-colors"
                 >
-                  <span>คลิกที่นี่เพื่อเปลี่ยนไปใช้ HTTP ทันที ({httpUrl})</span>
+                  <span>เปิดใช้งาน HTTPS พอร์ต 3001 ทันที</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
