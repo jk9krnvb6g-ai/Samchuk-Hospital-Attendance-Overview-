@@ -3377,7 +3377,7 @@ async function syncHosofficeToAttendanceRawScan(options = {}) {
         const [r] = await poolAtt.query(`
           INSERT INTO attendance_raw_scan
           (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id, hr_department_sub_id, hr_mapped, push_status, source)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PUSHED', 'SYNC_CLI')
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'DEVICE')
           ON DUPLICATE KEY UPDATE 
             in_out_mode = VALUES(in_out_mode),
             verify_mode = VALUES(verify_mode),
@@ -3407,7 +3407,7 @@ async function syncHosofficeToAttendanceRawScan(options = {}) {
         const [r] = await poolAtt.query(`
           INSERT IGNORE INTO attendance_raw_scan
           (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode, person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id, hr_department_sub_id, hr_mapped, push_status, source)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PUSHED', 'SYNC_CLI')
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'DEVICE')
         `, [
           mNo, s.device_ip || '192.168.111.163', fid, sTimeStr, vMode, inOut,
           p?.id || null, p?.hr_fullname || s.hr_fullname || s.HR_FULLNAME || `เจ้าหน้าที่ ${fid}`,
@@ -4078,6 +4078,33 @@ app.post('/api/scanners/sync', async (req, res) => {
       console.warn('[scanner_sync_log] Warning: Could not write sync log:', logErr.message);
     }
 
+    // ซิงค์เข้าสู่ samchuk_attendance.attendance_raw_scan ทันทีเมื่อบันทึกจริง (!preview)
+    let stagingInserted = 0;
+    if (!preview && cliResult.success && cliResult.affectedDates && cliResult.affectedDates.length > 0) {
+      try {
+        const syncStagingRes = await syncHosofficeToAttendanceRawScan({
+          dates: cliResult.affectedDates,
+          days: days || 3,
+          strategy: 'SKIP_DUPLICATES'
+        });
+        stagingInserted = syncStagingRes.inserted || 0;
+        console.log(`[Staging Sync] บันทึก ${stagingInserted} รายการเข้าสู่ samchuk_attendance.attendance_raw_scan`);
+      } catch (stgErr) {
+        console.warn('[Staging Sync Warning] Could not sync to attendance_raw_scan:', stgErr.message);
+      }
+
+      // นโยบายไม่เขียนลง hosoffice อัตโนมัติ: ล้างข้อมูลชั่วคราว SCAN_SYNC ออกจาก hosoffice.fingle_scan ทันที
+      try {
+        const poolHos = getHosofficePool();
+        const [delHos] = await poolHos.query(`DELETE FROM fingle_scan WHERE CREATE_BY = 'SCAN_SYNC'`);
+        if (delHos && delHos.affectedRows > 0) {
+          console.log(`[Cleanup HosOffice] เคลียร์ข้อมูลดิบชั่วคราว ${delHos.affectedRows} รายการออกจาก hosoffice.fingle_scan เรียบร้อย`);
+        }
+      } catch (cleanErr) {
+        console.warn('[Cleanup HosOffice Notice] ไม่สามารถเคลียร์ SCAN_SYNC ใน hosoffice:', cleanErr.message);
+      }
+    }
+
     // ข้อ 13: ตรวจผลสำเร็จของการคำนวณแต่ละวัน และแยกสถานะ SUCCESS, PARTIAL, FAILED ชัดเจน
     if (cliResult.success && cliResult.affectedDates && Array.isArray(cliResult.affectedDates) && cliResult.affectedDates.length > 0) {
       const calcSummaries = [];
@@ -4276,23 +4303,87 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
       preview = false
     } = req.body || {};
 
-    // ถ้าดึงจากเครื่องสแกน (SCANNERS) ให้เรียก Reader CLI ตรงตามสถาปัตยกรรมใหม่
-    if (syncSource === 'SCANNERS') {
-      let daysBack = 7;
-      const today = new Date();
-      if (mode === 'TODAY') {
-        daysBack = 1;
-      } else if (mode === 'DATE' && date) {
-        const dObj = new Date(date);
-        const diffDays = Math.ceil((today.getTime() - dObj.getTime()) / (1000 * 60 * 60 * 24));
-        daysBack = Math.max(1, Math.min(60, diffDays + 1));
-      } else if (mode === 'RANGE' && dateFrom) {
-        const dObj = new Date(dateFrom);
-        const diffDays = Math.ceil((today.getTime() - dObj.getTime()) / (1000 * 60 * 60 * 24));
-        daysBack = Math.max(1, Math.min(60, diffDays + 1));
-      } else if (mode === 'MONTH' && month) {
-        daysBack = 31;
+    // 1. คำนวณชุดวันที่เป้าหมาย (targetDates) ตามเงื่อนไขที่เลือก 100%
+    const targetDatesSet = new Set();
+    const today = new Date();
+    const todayStr = toBangkokDateTimeStr(today).substring(0, 10);
+
+    if (mode === 'TODAY') {
+      targetDatesSet.add(date ? date.substring(0, 10) : todayStr);
+    } else if (mode === 'DATE' && date) {
+      // วันที่ระบุ เช่น 2026-10-14 -> บันทึกเฉพาะ 2026-10-14 วันเดียวเท่านั้น!
+      targetDatesSet.add(date.substring(0, 10));
+    } else if (mode === 'RANGE' && dateFrom && dateTo) {
+      let cur = new Date(dateFrom.substring(0, 10));
+      const end = new Date(dateTo.substring(0, 10));
+      let count = 0;
+      while (cur <= end && count < 366) {
+        targetDatesSet.add(cur.toISOString().substring(0, 10));
+        cur.setDate(cur.getDate() + 1);
+        count++;
       }
+    } else if (mode === 'MONTH' && month) {
+      const parts = month.split('-').map(Number);
+      const y = parts[0];
+      const m = parts[1];
+      const daysInMonth = new Date(y, m, 0).getDate();
+      for (let d = 1; d <= daysInMonth; d++) {
+        targetDatesSet.add(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+      }
+    } else if (mode === 'YEAR' && year) {
+      const y = parseInt(year, 10);
+      const isLeap = (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
+      const totalDays = isLeap ? 366 : 365;
+      const dObj = new Date(y, 0, 1);
+      for (let i = 0; i < totalDays; i++) {
+        targetDatesSet.add(dObj.toISOString().substring(0, 10));
+        dObj.setDate(dObj.getDate() + 1);
+      }
+    } else {
+      targetDatesSet.add(todayStr);
+    }
+
+    const targetDates = Array.from(targetDatesSet).sort();
+
+    // ฟังก์ชันจัดรูปแบบวันที่ภาษาไทย พ.ศ. (dd/MM/yyyy)
+    function formatThaiDateDisplay(dateStr) {
+      if (!dateStr) return '';
+      const parts = dateStr.split('-');
+      if (parts.length < 3) return dateStr;
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      const d = parseInt(parts[2], 10);
+      const thaiYear = y < 2400 ? y + 543 : y;
+      return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${thaiYear}`;
+    }
+
+    let targetLabel = '';
+    if (mode === 'DATE' && date) {
+      targetLabel = `เฉพาะวันที่ ${formatThaiDateDisplay(date)}`;
+    } else if (mode === 'TODAY') {
+      targetLabel = `เฉพาะวันนี้ (${formatThaiDateDisplay(todayStr)})`;
+    } else if (mode === 'RANGE' && dateFrom && dateTo) {
+      targetLabel = `ช่วงวันที่ ${formatThaiDateDisplay(dateFrom)} ถึง ${formatThaiDateDisplay(dateTo)}`;
+    } else if (mode === 'MONTH' && month) {
+      targetLabel = `ประจำเดือน ${month}`;
+    } else if (mode === 'YEAR' && year) {
+      targetLabel = `ประจำปี ${year}`;
+    } else {
+      targetLabel = `วันที่เลือก (${targetDates.length} วัน)`;
+    }
+
+    // กรณีที่ 1: ดึงจากเครื่องสแกนนิ้ว HIP CMiF68S (syncSource === 'SCANNERS')
+    if (syncSource === 'SCANNERS') {
+      // คำนวณวันย้อนหลัง (daysBack) จากวันนี้ไปถึงวันที่เก่าที่สุดใน targetDates
+      // เพื่อให้คำสั่งอ่านบัฟเฟอร์ฮาร์ดแวร์ CMiF68S ครอบคลุมวันที่ผู้ใช้ต้องการ
+      const earliestTargetDate = targetDates[0] || todayStr;
+      const earliestObj = new Date(earliestTargetDate);
+      const diffDays = Math.ceil((today.getTime() - earliestObj.getTime()) / (1000 * 60 * 60 * 24));
+      // +2 วัน เผื่อความคลาดเคลื่อนของเวลา/กะข้ามคืน
+      const daysBack = Math.max(1, Math.min(180, diffDays + 2));
+
+      console.log(`[ScannerReader] 🎯 เงื่อนไขที่เลือก: ${mode} (${targetLabel}) -> วันที่เป้าหมาย: [${targetDates.join(', ')}]`);
+      console.log(`[ScannerReader] 📡 สั่งอ่านบัฟเฟอร์ฮาร์ดแวร์ย้อนหลัง ${daysBack} วัน เพื่อดึงข้อมูลให้ครอบคลุม ${targetLabel}...`);
 
       let machineParam = undefined;
       if (machineNos && machineNos !== 'ALL') {
@@ -4323,7 +4414,7 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
           cliResult.totalNew || 0,
           cliResult.duplicates || 0,
           cliResult.unmapped || 0,
-          cliResult.affectedDates ? JSON.stringify(cliResult.affectedDates) : null,
+          JSON.stringify(targetDates),
           cliResult.machines ? JSON.stringify(cliResult.machines) : null,
           cliResult.exitCode || 0,
           cliResult.error || null,
@@ -4333,84 +4424,80 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
         console.warn('Record custom sync log error:', logErr.message);
       }
 
-      // ซิงค์จาก hosoffice.fingle_scan เข้าสู่ samchuk_attendance.attendance_raw_scan ทันทีเมื่อบันทึกจริง (!preview)
+      // ซิงค์เฉพาะ targetDates เข้าสู่ samchuk_attendance.attendance_raw_scan (กรองเฉพาะวันที่เลือกอย่างเข้มงวด)
       let stagingInserted = 0;
       let stagingUpdated = 0;
       let stagingSkipped = 0;
+      let stagingTotal = 0;
+
       if (!preview && cliResult.success) {
         try {
           const syncStagingRes = await syncHosofficeToAttendanceRawScan({
-            dates: cliResult.affectedDates && cliResult.affectedDates.length > 0 ? cliResult.affectedDates : null,
-            days: daysBack,
+            dates: targetDates, // กรองเฉพาะ targetDates ที่เลือกเท่านั้น!
             strategy: strategy || 'SKIP_DUPLICATES'
           });
-          stagingInserted = syncStagingRes.inserted;
-          stagingUpdated = syncStagingRes.updated;
-          stagingSkipped = syncStagingRes.skipped;
-          console.log(`[Staging Sync] Copied ${stagingInserted} scans into samchuk_attendance.attendance_raw_scan`);
+          stagingInserted = syncStagingRes.inserted || 0;
+          stagingUpdated = syncStagingRes.updated || 0;
+          stagingSkipped = syncStagingRes.skipped || 0;
+          stagingTotal = syncStagingRes.total || (stagingInserted + stagingSkipped);
+          console.log(`[Staging Sync] บันทึกเฉพาะข้อมูลของ ${targetLabel} ลงใน samchuk_attendance.attendance_raw_scan สำเร็จ: +${stagingInserted} รายการใหม่ (ซ้ำเดิม ${stagingSkipped} รายการ, รวมในวันที่เลือก ${stagingTotal} รายการ)`);
         } catch (stgErr) {
-          console.warn('[Staging Sync Warning] Could not sync fingle_scan to attendance_raw_scan:', stgErr.message);
+          console.warn('[Staging Sync Warning] Could not sync to attendance_raw_scan:', stgErr.message);
+        }
+
+        // นโยบายไม่เขียนลง hosoffice อัตโนมัติ: ล้างข้อมูลชั่วคราว SCAN_SYNC ออกจาก hosoffice.fingle_scan ทันที
+        // เพื่อให้ hosoffice.fingle_scan สะอาด และคงไว้ให้ ADMIN เป็นคนกดส่ง (SCAN_PUSH) ผ่านเมนู "ส่งข้อมูลเข้า HOSOffice" เท่านั้น
+        try {
+          const poolHos = getHosofficePool();
+          const [delHos] = await poolHos.query(`DELETE FROM fingle_scan WHERE CREATE_BY = 'SCAN_SYNC'`);
+          if (delHos && delHos.affectedRows > 0) {
+            console.log(`[Cleanup HosOffice] เคลียร์ข้อมูลดิบชั่วคราว ${delHos.affectedRows} รายการออกจาก hosoffice.fingle_scan เรียบร้อย (คงไว้เฉพาะที่ ADMIN ส่งเอง)`);
+          }
+        } catch (cleanErr) {
+          console.warn('[Cleanup HosOffice Notice] ไม่สามารถเคลียร์ SCAN_SYNC ใน hosoffice:', cleanErr.message);
         }
       }
 
-      // คำนวณผลรายวันอัตโนมัติหากบันทึกจริง (N3)
-      if (!preview && recalculate && cliResult.affectedDates && cliResult.affectedDates.length > 0) {
-        for (const affDate of cliResult.affectedDates) {
+      // คำนวณผลรายวันอัตโนมัติเฉพาะ targetDates หากบันทึกจริง (N3)
+      if (!preview && recalculate && targetDates.length > 0) {
+        for (const affDate of targetDates) {
           try {
             await calculateDailyAttendanceForDate(affDate);
+            console.log(`[Auto-Calculate] คำนวณสรุปเวลาทำงานของวันที่ ${affDate} สำเร็จ`);
           } catch (calcErr) {
             console.error(`Auto calculate for ${affDate} error:`, calcErr.message);
           }
         }
       }
 
-      const totalNewRecorded = stagingInserted > 0 ? stagingInserted : (cliResult.totalNew || 0);
+      const totalTargetFound = stagingTotal || (stagingInserted + stagingSkipped);
+      const responseMsg = preview
+        ? `ตรวจสอบเครื่องสแกน (${targetLabel}): พบข้อมูลสแกนตรงตามเงื่อนไขที่เลือก ${totalTargetFound} รายการ (ระบบจะบันทึกเฉพาะวันที่เลือกนี้เท่านั้น)`
+        : `ดึงข้อมูลสแกนสำเร็จ: ดึงและบันทึกข้อมูล${targetLabel} เข้าสู่ samchuk_attendance.attendance_raw_scan เรียบร้อยแล้ว (เพิ่มใหม่ +${stagingInserted} รายการ, ข้อมูลเดิมในระบบ ${stagingSkipped} รายการ) และคำนวณผลสรุปเวลาทำงานของ${targetLabel}เรียบร้อยแล้ว`;
 
       return res.json({
         success: cliResult.success,
         preview,
-        totalFound: cliResult.totalRead || 0,
-        newCount: totalNewRecorded,
-        duplicateCount: cliResult.duplicates || 0,
-        totalInserted: totalNewRecorded,
+        targetLabel,
+        targetDates,
+        targetDatesCount: targetDates.length,
+        selectedDateMode: mode,
+        totalFound: totalTargetFound,
+        newCount: stagingInserted,
+        duplicateCount: stagingSkipped,
+        totalInserted: stagingInserted,
         totalUpdated: stagingUpdated,
-        totalSkipped: cliResult.duplicates || 0,
+        totalSkipped: stagingSkipped,
         stagingInserted,
         stagingSkipped,
-        affectedDates: cliResult.affectedDates || [],
+        affectedDates: targetDates,
         machines: cliResult.machines || [],
-        message: preview
-          ? `ตรวจสอบเครื่องสแกน (จำลอง): อ่านจากหน่วยความจำเครื่องสแกนรวม ${cliResult.totalRead || 0} รายการ (รายการใหม่ +${cliResult.totalNew || 0}, มีในระบบแล้ว ${cliResult.duplicates || 0} รายการ)`
-          : `ซิงค์เครื่องสแกนสำเร็จ: อ่านประวัติสะสมจากเครื่องสแกน 3 เครื่องรวม ${cliResult.totalRead || 0} รายการ -> บันทึกลงตาราง attendance_raw_scan แล้ว +${stagingInserted} รายการ (ซ้ำเดิม ${cliResult.duplicates || 0} รายการ) และคำนวณผลสรุปเวลาเรียบร้อยแล้ว`
+        message: responseMsg
       });
     }
 
-    // กรณีดึงจากฐาน HOSOFFICE (syncSource === 'HOSOFFICE')
-    const targetDates = new Set();
-    const todayStr = new Date().toISOString().substring(0, 10);
-    if (mode === 'TODAY') {
-      targetDates.add(date || todayStr);
-    } else if (mode === 'DATE' && date) {
-      targetDates.add(date);
-    } else if (mode === 'MONTH' && month) {
-      const [y, m] = month.split('-').map(Number);
-      const daysInMonth = new Date(y, m, 0).getDate();
-      for (let d = 1; d <= daysInMonth; d++) {
-        targetDates.add(`${month}-${String(d).padStart(2, '0')}`);
-      }
-    } else if (mode === 'RANGE' && dateFrom && dateTo) {
-      let cur = new Date(dateFrom);
-      const end = new Date(dateTo);
-      let count = 0;
-      while (cur <= end && count < 62) {
-        targetDates.add(cur.toISOString().substring(0, 10));
-        cur.setDate(cur.getDate() + 1);
-        count++;
-      }
-    } else {
-      targetDates.add(todayStr);
-    }
-    const dateList = Array.from(targetDates).sort();
+    // กรณีที่ 2: ดึงจากฐาน HOSOFFICE (syncSource === 'HOSOFFICE')
+    const dateList = targetDates;
 
     // ดึงบุคลากรจริงเพื่อ map
     let personnelList = [];
@@ -4435,18 +4522,11 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
     } catch {}
 
     const poolHos = getHosofficePool();
-    let hosWhere = [];
-    let hosParams = [];
-    if (dateList.length > 0) {
-      hosWhere.push('DATE(scan_date_time) BETWEEN ? AND ?');
-      hosParams.push(dateList[0], dateList[dateList.length - 1]);
-    }
-
     let realHosScans = [];
-    if (hosWhere.length > 0) {
+    if (dateList.length > 0) {
       const [rows] = await poolHos.query(
-        `SELECT * FROM fingle_scan WHERE ${hosWhere.join(' AND ')} ORDER BY scan_date_time ASC LIMIT 50000`,
-        hosParams
+        `SELECT * FROM fingle_scan WHERE DATE(scan_date_time) IN (?) ORDER BY scan_date_time ASC LIMIT 50000`,
+        [dateList]
       );
       realHosScans = rows || [];
     }
@@ -4455,13 +4535,15 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
       return res.json({
         success: true,
         preview,
+        targetLabel,
+        targetDates: dateList,
         totalFound: 0,
         newCount: 0,
         duplicateCount: 0,
         totalInserted: 0,
         totalUpdated: 0,
         totalSkipped: 0,
-        message: 'ไม่พบประวัติการสแกนในตาราง hosoffice.fingle_scan ตามช่วงเวลาที่ระบุ'
+        message: `ไม่พบประวัติการสแกนในตาราง hosoffice.fingle_scan สำหรับ${targetLabel}`
       });
     }
 
@@ -4503,13 +4585,15 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
       return res.json({
         success: true,
         preview: true,
+        targetLabel,
+        targetDates: dateList,
         totalFound,
         newCount: newItems.length,
         duplicateCount: duplicateItems.length,
         strategy,
         sampleNew: newItems.slice(0, 5),
         sampleDuplicates: duplicateItems.slice(0, 5),
-        message: `ตรวจสอบล่วงหน้าพบข้อมูลใน HOSOffice ทั้งหมด ${totalFound} รายการ: เป็นข้อมูลใหม่ +${newItems.length} รายการ | มีในระบบแล้ว (ซ้ำ) ${duplicateItems.length} รายการ`
+        message: `ตรวจสอบล่วงหน้า (${targetLabel}) พบข้อมูลใน HOSOffice ทั้งหมด ${totalFound} รายการ: เป็นข้อมูลใหม่ +${newItems.length} รายการ | มีในระบบแล้ว (ซ้ำ) ${duplicateItems.length} รายการ`
       });
     }
 
@@ -4567,6 +4651,7 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
     res.json({
       success: true,
       mode,
+      targetLabel,
       strategy,
       totalFound,
       totalInserted,
@@ -4574,7 +4659,7 @@ app.post('/api/scanners/sync-custom', async (req, res) => {
       totalSkipped,
       datesCount: dateList.length,
       affectedDates: Array.from(affectedDates),
-      message: `นำเข้าจาก HOSOffice สำเร็จ: บันทึกใหม่ +${totalInserted} รายการ (ข้ามรายการซ้ำ ${totalSkipped} รายการ)`
+      message: `นำเข้าจาก HOSOffice สำหรับ${targetLabel} สำเร็จ: บันทึกใหม่ +${totalInserted} รายการ (ข้ามรายการซ้ำ ${totalSkipped} รายการ)`
     });
   } catch (err) {
     res.status(500).json({ success: false, message: `เกิดข้อผิดพลาดในการดึงข้อมูล: ${err.message}` });
