@@ -5394,11 +5394,12 @@ async function tryFallbackToLocalhost() {
 }
 
 if (require.main === module) {
+  // เริ่มต้น HTTP Server บนพอร์ต 3002 (สำหรับ IIS Reverse Proxy 127.0.0.1)
   app.listen(PORT, '0.0.0.0', async () => {
     console.log('=========================================================================');
     console.log(`   โรงพยาบาลสามชุก - Central API Gateway & Sam_Att v2.6.0`);
     console.log('=========================================================================');
-    console.log(`🚀 กำลังให้บริการ API บนพอร์ต: ${PORT}`);
+    console.log(`🚀 กำลังให้บริการ API บนพอร์ต: ${PORT} (HTTP สำหรับ IIS Reverse Proxy)`);
     console.log(`🌐 Base URL: http://10.2.0.13:${PORT}`);
     console.log(`🏥 จุดเชื่อมต่อทั้ง 3 ระบบ (พอร์ต 3002 รวมศูนย์):`);
     console.log(`   1. ระบบลงเวลา (Sam_Att):         http://10.2.0.13:${PORT}/api/Sam_Att/`);
@@ -5431,6 +5432,25 @@ if (require.main === module) {
     
     console.log('พร้อมรับคำสั่งทดสอบฐานข้อมูลทั้ง 2 ฐาน, เครื่องสแกนนิ้ว และการบันทึกข้อมูลแล้ว...');
   });
+
+  // เริ่มต้น HTTPS Server คู่ขนานบนพอร์ต 3005 สำหรับการเชื่อมต่อตรงแบบ HTTPS 100% โดยไม่ต้องผ่าน IIS ARR
+  try {
+    const https = require('https');
+    const sslKeyPath = path.join(__dirname, 'ssl', 'key.pem');
+    const sslCertPath = path.join(__dirname, 'ssl', 'cert.pem');
+    if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
+      const sslKey = fs.readFileSync(sslKeyPath);
+      const sslCert = fs.readFileSync(sslCertPath);
+      const HTTPS_PORT = process.env.HTTPS_PORT || 3005;
+      const httpsServer = https.createServer({ key: sslKey, cert: sslCert }, app);
+      httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+        console.log(`🔒 [Pure HTTPS Direct] ให้บริการ API แบบ HTTPS โดยตรงบนพอร์ต: ${HTTPS_PORT}`);
+        console.log(`🌐 Secure Endpoint: https://10.2.0.13:${HTTPS_PORT}`);
+      });
+    }
+  } catch (sslErr) {
+    console.warn('⚠️ ไม่สามารถเริ่ม HTTPS บนพอร์ต 3005 ได้:', sslErr.message);
+  }
 }
 
 module.exports = app;

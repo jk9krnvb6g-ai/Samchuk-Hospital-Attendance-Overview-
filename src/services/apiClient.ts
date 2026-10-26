@@ -105,6 +105,47 @@ class ApiClientService {
     }
   }
 
+  public switchToHttpsDirectPort3005(): void {
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname || '10.2.0.13';
+      this.setBaseUrl(`https://${host}:3005`);
+    }
+  }
+
+  private getFallbackUrlFor(url: string): string | null {
+    if (typeof window === 'undefined') return null;
+    const isHttps = window.location.protocol === 'https:';
+    const host = window.location.hostname || 'localhost';
+
+    if (isHttps) {
+      if (url.includes(':3001') || url.includes('/Sam_Att')) {
+        const cleanPath = url.replace(/^https?:\/\/[^\/]+(\/Sam_Att)?/, '');
+        return `https://${host}:3005${cleanPath.startsWith('/') ? '' : '/'}${cleanPath}`;
+      } else if (url.includes(':3005')) {
+        const cleanPath = url.replace(/^https?:\/\/[^\/]+/, '');
+        return `https://${host}:3001/Sam_Att${cleanPath.startsWith('/') ? '' : '/'}${cleanPath}`;
+      }
+    } else {
+      if (url.includes(':3002')) {
+        const cleanPath = url.replace(/^http:\/\/[^\/]+/, '');
+        return `http://${host}:3005${cleanPath.startsWith('/') ? '' : '/'}${cleanPath}`;
+      }
+    }
+    return null;
+  }
+
+  private extractOriginFromUrl(url: string): string {
+    try {
+      const u = new URL(url);
+      if (u.pathname.toLowerCase().startsWith('/sam_att')) {
+        return `${u.origin}/Sam_Att`;
+      }
+      return u.origin;
+    } catch {
+      return url;
+    }
+  }
+
   public getBaseUrl(): string {
     return this.customBaseUrl;
   }
@@ -165,7 +206,44 @@ class ApiClientService {
     }
     const customHeaders: Record<string, string> = (options.headers as Record<string, string>) || {};
     const mergedHeaders = this.getAuthHeaders(customHeaders);
-    return fetch(url, { ...options, headers: mergedHeaders });
+
+    let res: Response;
+    try {
+      res = await fetch(url, { ...options, headers: mergedHeaders });
+    } catch (fetchErr) {
+      // Auto-fallback: หากเรียกผ่าน IIS ไม่ได้ ให้ลองผ่าน Pure HTTPS พอร์ต 3005 อัตโนมัติ
+      const fallbackUrl = this.getFallbackUrlFor(url);
+      if (fallbackUrl && fallbackUrl !== url) {
+        try {
+          const fallbackRes = await fetch(fallbackUrl, { ...options, headers: mergedHeaders });
+          if (fallbackRes.ok || fallbackRes.status < 400) {
+            this.setBaseUrl(this.extractOriginFromUrl(fallbackUrl));
+            return fallbackRes;
+          }
+        } catch {}
+      }
+      throw fetchErr;
+    }
+
+    // ตรวจสอบว่า IIS ส่ง Error 405 (Method Not Allowed), 406 (Not Acceptable) หรือหน้า HTML แทน JSON หรือไม่
+    const contentType = res.headers.get('content-type') || '';
+    const isIisHtmlError = res.status === 405 || res.status === 406 || (res.status >= 500 && contentType.includes('text/html'));
+
+    if (isIisHtmlError) {
+      const fallbackUrl = this.getFallbackUrlFor(url);
+      if (fallbackUrl && fallbackUrl !== url) {
+        try {
+          const fallbackRes = await fetch(fallbackUrl, { ...options, headers: mergedHeaders });
+          const fbContentType = fallbackRes.headers.get('content-type') || '';
+          if (fallbackRes.ok && (fbContentType.includes('json') || fbContentType.includes('text/plain'))) {
+            this.setBaseUrl(this.extractOriginFromUrl(fallbackUrl));
+            return fallbackRes;
+          }
+        } catch {}
+      }
+    }
+
+    return res;
   }
 
   public async login(username: string, password: string): Promise<any> {
@@ -223,7 +301,7 @@ class ApiClientService {
   }
 
   /**
-   * ทดสอบการเชื่อมต่อ API พร้อม Auto-Fallback ระหว่างพอร์ต 3002 และ 3005
+   * ทดสอบการเชื่อมต่อ API พร้อม Auto-Fallback ระหว่างพอร์ต 3002, IIS Reverse Proxy, และ Pure HTTPS 3005
    */
   public async checkHealth(): Promise<{ online: boolean; latencyMs: number; data?: ApiHealthResponse; error?: string }> {
     const start = performance.now();
@@ -237,7 +315,8 @@ class ApiClientService {
           signal: controller.signal
         });
         clearTimeout(timeoutId);
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && !contentType.includes('text/html')) {
           const data: ApiHealthResponse = await res.json();
           return { ok: true, data };
         }
@@ -258,12 +337,17 @@ class ApiClientService {
       return { online: true, latencyMs: elapsed, data: primaryResult.data };
     }
 
-    // 2. ถ้าไม่สำเร็จ ลอง Ping Candidate สำรอง (3005 หรือ 3002)
+    // 2. ถ้าไม่สำเร็จ ลอง Ping Candidate สำรอง (3005 หรือ IIS /Sam_Att)
     const host = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
-    const fallbackUrls = [
-      `http://${host}:3005`,
-      `http://${host}:3002/api/Sam_Att`
-    ].filter(u => u !== this.customBaseUrl);
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const fallbackUrls = (isHttps ? [
+      `https://${host}:3005`,
+      `${window.location.origin}/Sam_Att`,
+      `${window.location.origin}`
+    ] : [
+      `http://${host}:3002`,
+      `http://${host}:3005`
+    ]).filter(u => u !== this.customBaseUrl);
 
     for (const altUrl of fallbackUrls) {
       const altResult = await tryPing(altUrl);
@@ -286,7 +370,7 @@ class ApiClientService {
     this.lastPingMs = elapsed;
     this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
     this.notify();
-    return { online: false, latencyMs: elapsed, error: 'Cannot connect to API (:3002 or :3005)' };
+    return { online: false, latencyMs: elapsed, error: 'Cannot connect to API (IIS ARR or HTTPS :3005)' };
   }
 
   /**
@@ -1019,7 +1103,7 @@ class ApiClientService {
         headers: { 'Accept': 'application/json' }
       });
 
-      // Fallback: หาก IIS มีโมดูล WebDAV บล็อกคำสั่ง POST ด้วย 405 (Method Not Allowed) ให้สลับเป็น GET อัตโนมัติ
+      // Fallback: หาก IIS บล็อกคำสั่ง POST ด้วย 405 (Method Not Allowed) ให้สลับเป็น GET อัตโนมัติ
       if (res.status === 405) {
         res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
           method: 'GET',
@@ -1027,9 +1111,33 @@ class ApiClientService {
         });
       }
 
-      return await res.json();
+      const rawText = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        return {
+          success: false,
+          isIisError: true,
+          status: res.status,
+          message: `เซิร์ฟเวอร์ IIS ส่งหน้า HTML Error (${res.status}) แทน JSON ข้อมูลบุคลากร: เกิดจาก IIS Manager บนเครื่อง 10.2.0.13 ยังไม่ได้เปิด Application Request Routing (ARR) Proxy หรือยังไม่ได้กดยอมรับใบรับรองพอร์ต 3005`
+        };
+      }
+
+      if (!res.ok) {
+        return {
+          success: false,
+          status: res.status,
+          message: data?.message || `เซิร์ฟเวอร์ส่งรหัสข้อผิดพลาด HTTP ${res.status}`
+        };
+      }
+
+      return data;
     } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อซิงค์บุคลากรได้'
+      };
     }
   }
 
