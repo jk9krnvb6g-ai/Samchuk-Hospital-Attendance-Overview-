@@ -49,11 +49,14 @@ export const resolveDefaultApiUrl = (): string => {
     const protocol = window.location.protocol;
     const host = window.location.hostname || 'localhost';
 
-    // นโยบายความปลอดภัยของโรงพยาบาล: ทำงานผ่าน HTTPS เท่านั้น
-    // เมื่อเข้าเว็บผ่าน HTTPS ให้ใช้ Same-Origin URL (พอร์ต 3001) ผ่าน IIS Reverse Proxy
-    // ซึ่งจะส่งต่อไปยัง 127.0.0.1:3002 ภายในเครื่องเซิร์ฟเวอร์โดยตรง เป็น HTTPS 100%
+    // นโยบายความปลอดภัยของโรงพยาบาล: ทำงานผ่าน HTTPS 100%
+    // เมื่อเข้าเว็บผ่าน HTTPS (เช่น https://10.2.0.13:3001/Sam_Att/):
+    // ต้องอ้างอิงผ่าน Virtual Directory /Sam_Att เพื่อให้ IIS web.config ทำ Reverse Proxy ไปยัง 127.0.0.1:3002
     if (protocol === 'https:') {
-      return window.location.origin;
+      const pathname = window.location.pathname || '';
+      const hasSamAtt = pathname.toLowerCase().includes('/sam_att');
+      const basePrefix = hasSamAtt ? '/Sam_Att' : '';
+      return `${window.location.origin}${basePrefix}`;
     }
     return `http://${host}:3002`;
   }
@@ -75,9 +78,12 @@ class ApiClientService {
       const saved = localStorage.getItem(STORAGE_API_KEY);
       const isHttps = window.location.protocol === 'https:';
 
-      // หากเปิดผ่าน HTTPS แต่มีค่าเดิมเป็น http:// ค้างใน localStorage
-      // ให้ Auto-migrate ไปใช้ HTTPS (Same-Origin Reverse Proxy) ทันที
-      if (isHttps && saved && saved.startsWith('http://')) {
+      // หากเปิดผ่าน HTTPS แต่ค่าใน localStorage ค้างเป็น http:// หรือไม่มี /Sam_Att (ทำให้เกิด 404)
+      // ให้อัปเดตเป็น HTTPS ที่มี /Sam_Att ทันที
+      const isMissingSamAtt = isHttps && saved === window.location.origin;
+      const isHttpOnHttps = isHttps && saved && saved.startsWith('http://');
+
+      if (isMissingSamAtt || isHttpOnHttps) {
         this.customBaseUrl = resolveDefaultApiUrl();
         localStorage.setItem(STORAGE_API_KEY, this.customBaseUrl);
       } else if (saved && saved.trim()) {
@@ -95,7 +101,7 @@ class ApiClientService {
 
   public switchToHttpsProxy(): void {
     if (typeof window !== 'undefined') {
-      this.setBaseUrl(window.location.origin);
+      this.setBaseUrl(resolveDefaultApiUrl());
     }
   }
 
