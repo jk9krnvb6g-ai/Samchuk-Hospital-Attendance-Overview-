@@ -14,7 +14,6 @@ import { MonthlyReportPage } from './pages/MonthlyReportPage';
 import { MyAttendancePage } from './pages/MyAttendancePage';
 import { CustomSyncModal } from './components/CustomSyncModal';
 import { SyncLoadingOverlay } from './components/SyncLoadingOverlay';
-import { MixedContentBanner } from './components/MixedContentBanner';
 import { User } from './types/attendance';
 
 export default function App() {
@@ -135,9 +134,6 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Mixed Content Alert Banner (if accessed via HTTPS while API is HTTP) */}
-        <MixedContentBanner />
-
         {/* Header */}
         <Header
           title={tabTitles[currentTab].title}

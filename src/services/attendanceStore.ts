@@ -1376,6 +1376,7 @@ class AttendanceStore {
             hrPersonTypeName: p.hrPersonTypeName || p.hr_person_type_name || 'ข้าราชการ',
             hrPersonTypeId: p.hrPersonTypeId || 1,
             hrDepartmentId: p.hrDepartmentId || 1,
+            hrDepartmentSubId: p.hrDepartmentSubId || p.hr_department_sub_id || 1,
             hrStatusId: p.hrStatusId || p.hr_status_id || '01',
             hrStatusName: p.hrStatusName || p.hr_status_name || 'ปฏิบัติราชการ',
             status: p.status || 'ACTIVE'

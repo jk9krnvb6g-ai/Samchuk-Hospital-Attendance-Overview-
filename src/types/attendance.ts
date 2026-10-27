@@ -204,9 +204,9 @@ export interface HrPerson {
   hrDepName: string; // HD.HR_DEPARTMENT_NAME
   hrDepSubName: string; // HDS.HR_DEPARTMENT_SUB_NAME AS HR_DEPARTMENT_SUB
   hrPersonTypeName: string; // HPT.HR_PERSON_TYPE_NAME
-  hrPersonTypeId: number;
-  hrDepartmentId: number;
-  hrDepartmentSubId: number;
+  hrPersonTypeId?: number;
+  hrDepartmentId?: number;
+  hrDepartmentSubId?: number;
   phone?: string;
   status: 'ACTIVE' | 'INACTIVE';
   hrStatusId?: string | number; // HP.HR_STATUS_ID เช่น '01'

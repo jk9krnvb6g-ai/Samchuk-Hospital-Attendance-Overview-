@@ -4,8 +4,8 @@ cd /d "%~dp0"
 chcp 65001 >nul
 
 echo =========================================================================
-echo    โรงพยาบาลสามชุก - รันระบบ Sam_Att (Web :3001 and API :3005)
-echo    * แยกพอร์ตอิสระ รันควบคู่กับระบบ Procurement (พอร์ต 3002) ได้พร้อมกัน
+echo    โรงพยาบาลสามชุก - รันระบบ Sam_Att (Web :3001 & Central Gateway :3002)
+echo    * เชื่อมต่อ Shared Backend API พอร์ต 3002 (/api/Sam_Att/*)
 echo =========================================================================
 echo [ไดเรกทอรีทำงาน]: %CD%
 echo.
@@ -33,17 +33,22 @@ if not exist "node_modules" (
     echo.
 )
 
-:: 3. สตาร์ท Backend API Service (พอร์ต 3005 - ไม่ชนกับ Procurement 3002)
-echo [1/2] กำลังตรวจสอบและเริ่มต้น Backend API Gateway (พอร์ต 3005)...
-set API_PORT=3005
-set PORT=3005
+:: 3. สตาร์ท Central Backend API Gateway (พอร์ต 3002 รวมศูนย์)
+echo [1/2] กำลังตรวจสอบสถานะ Central Backend API Gateway (พอร์ต 3002)...
+set API_PORT=3002
+set PORT=3002
 
-:: เคลียร์เฉพาะโปรเซสค้างที่พอร์ต 3005 (ไม่แตะต้องพอร์ต 3002 ของ Procurement)
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3005 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
+set BACKEND_3002_ACTIVE=0
+for /f "tokens=*" %%i in ('netstat -ano ^| findstr /r ":3002.*LISTENING"') do (
+    set BACKEND_3002_ACTIVE=1
+)
 
-:: สตาร์ท Node.js Backend API
-start "Samchuk Attendance API (:3005)" cmd /k "chcp 65001 >nul && set API_PORT=3005 && node backend\server.cjs"
-echo       [OK] Backend API Service สตาร์ทเรียบร้อยแล้ว (พอร์ต 3005)
+if "!BACKEND_3002_ACTIVE!"=="1" (
+    echo       [OK] Central Backend API Gateway กำลังให้บริการอยู่แล้วบนพอร์ต 3002
+) else (
+    start "Samchuk Central API Gateway (:3002)" cmd /k "chcp 65001 >nul && cd /d ""%~dp0"" && set API_PORT=3002 && node backend\server.cjs"
+    echo       [OK] สตาร์ท Central Backend API Gateway เรียบร้อยแล้ว (พอร์ต 3002)
+)
 
 :: 4. ตรวจสอบ Web Frontend (พอร์ต 3001)
 echo.
@@ -64,8 +69,8 @@ if "!IIS_ACTIVE!"=="1" (
     echo    ระบบ Sam_Att พร้อมใช้งานอย่างสมบูรณ์!
     echo =========================================================================
     echo  - Web Frontend (IIS HTTPS) : https://10.2.0.13:3001/Sam_Att/
-    echo  - Backend API Gateway     : http://10.2.0.13:3005
-    echo  - Procurement Backend     : http://localhost/Procurement/ (พอร์ต 3002 ทำงานปกติ)
+    echo  - Central API Gateway     : http://10.2.0.13:3002/api/Sam_Att/
+    echo  - All 3 Systems Gateway   : http://10.2.0.13:3002 (Sam_Att, Procurement, Cash_Cheque)
     echo =========================================================================
     echo.
     echo กำลังเปิดหน้าเว็บในเบราว์เซอร์ใน 3 วินาที...
@@ -82,9 +87,9 @@ if "!IIS_ACTIVE!"=="1" (
     echo =========================================================================
     echo    ระบบ Sam_Att พร้อมใช้งาน!
     echo =========================================================================
-    echo  - Web Frontend (HTTP)     : http://10.2.0.13:3001/Sam_Att/
-    echo  - Backend API Gateway     : http://10.2.0.13:3005
-    echo  - Procurement Backend     : http://localhost/Procurement/ (พอร์ต 3002 ทำงานปกติ)
+    echo  - Web Frontend            : https://10.2.0.13:3001/Sam_Att/
+    echo  - Central API Gateway     : http://10.2.0.13:3002/api/Sam_Att/
+    echo  - All 3 Systems Gateway   : http://10.2.0.13:3002 (Sam_Att, Procurement, Cash_Cheque)
     echo =========================================================================
     echo.
     echo กำลังเปิดหน้าเว็บในเบราว์เซอร์ใน 3 วินาที...

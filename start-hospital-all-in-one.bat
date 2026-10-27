@@ -61,7 +61,6 @@ if exist "%~dp0backend\server.cjs" (
 :: ---------------------------------------------------------------------------
 echo [เตรียมพร้อม] เคลียร์โปรเซสที่อาจค้างบนพอร์ต 3002...
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3002 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3005 ^| findstr LISTENING') do taskkill /F /PID %%a >nul 2>&1
 
 :: ---------------------------------------------------------------------------
 :: รันระบบ API Gateway พอร์ต 3002

@@ -1,7 +1,7 @@
 /**
  * Samchuk Hospital Attendance System - Node.js Backend API Service
- * ทำงานบนพอร์ต 3005 สำหรับรองรับ Web Frontend (พอร์ต 3001 /Sam_Att/)
- * ป้องกันการชนกับพอร์ต 3002 ของระบบ Procurement
+ * ทำงานบน Central Gateway พอร์ต 3002 สำหรับรองรับ Web Frontend (พอร์ต 3001 /Sam_Att/) ผ่าน IIS Reverse Proxy
+ * ให้บริการร่วมกับระบบจัดซื้อ (Procurement) และระบบเงินสด/เช็ค (Cash_Cheque)
  * เชื่อมต่อ MySQL 10.2.0.201 โดยตรงทั้ง 2 ฐานข้อมูล:
  *   1. samchuk_attendance (ฐานข้อมูลระบบลงเวลา, กะ, Roster, Staging สแกน)
  *   2. hosoffice (ฐานข้อมูลบุคลากร โรงพยาบาลสามชุก, fingle_scan)
@@ -113,6 +113,25 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' }));
+
+// ============================================================================
+// Shared API Gateway: Sam_Att Route Normalization (/api/Sam_Att/* -> /api/*)
+// รองรับคำขอทั้งแบบ /api/Sam_Att/* ตามสถาปัตยกรรม Gateway และ /api/* แบบ Direct
+// ============================================================================
+app.use((req, res, next) => {
+  if (req.url.startsWith('/api/Sam_Att/api/')) {
+    req.url = req.url.replace('/api/Sam_Att/api/', '/api/');
+  } else if (req.url.startsWith('/api/Sam_Att/')) {
+    req.url = req.url.replace('/api/Sam_Att/', '/api/');
+  } else if (req.url === '/api/Sam_Att') {
+    req.url = '/api/health';
+  } else if (req.url.startsWith('/api/sam_att/')) {
+    req.url = req.url.replace('/api/sam_att/', '/api/');
+  } else if (req.url === '/api/sam_att') {
+    req.url = '/api/health';
+  }
+  next();
+});
 
 // ============================================================================
 // ระบบ Authentication & Role-Based Access Control (RBAC) (P0.1, P0.2, P0.3)
@@ -2885,20 +2904,6 @@ app.all('/api/personnel/sync-from-hosoffice', async (req, res) => {
       else updated++;
     }
 
-    // สำหรับบุคลากรในฐาน samchuk_attendance ที่ "ไม่มีอยู่ใน HOSOffice":
-    // ให้ปรับสถานะเป็น 'INACTIVE' (ไม่ได้ใช้งาน)
-    let inactivated = 0;
-    if (hosPersonIds.length > 0) {
-      try {
-        const [resInact] = await poolAtt.query(`
-          UPDATE attendance_personnel 
-          SET status = 'INACTIVE', synced_at = NOW()
-          WHERE person_id NOT IN (?) AND status != 'INACTIVE'
-        `, [hosPersonIds]);
-        inactivated = resInact.affectedRows || 0;
-      } catch {}
-    }
-
     // ดึงรายชื่อบุคลากรทั้งหมดที่อัปเดตแล้วใน attendance_personnel ส่งกลับไปให้หน้าบ้านทันที
     const [allPersonnelRows] = await poolAtt.query(`
       SELECT * FROM attendance_personnel ORDER BY id ASC
@@ -5432,25 +5437,6 @@ if (require.main === module) {
     
     console.log('พร้อมรับคำสั่งทดสอบฐานข้อมูลทั้ง 2 ฐาน, เครื่องสแกนนิ้ว และการบันทึกข้อมูลแล้ว...');
   });
-
-  // เริ่มต้น HTTPS Server คู่ขนานบนพอร์ต 3005 สำหรับการเชื่อมต่อตรงแบบ HTTPS 100% โดยไม่ต้องผ่าน IIS ARR
-  try {
-    const https = require('https');
-    const sslKeyPath = path.join(__dirname, 'ssl', 'key.pem');
-    const sslCertPath = path.join(__dirname, 'ssl', 'cert.pem');
-    if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
-      const sslKey = fs.readFileSync(sslKeyPath);
-      const sslCert = fs.readFileSync(sslCertPath);
-      const HTTPS_PORT = process.env.HTTPS_PORT || 3005;
-      const httpsServer = https.createServer({ key: sslKey, cert: sslCert }, app);
-      httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
-        console.log(`🔒 [Pure HTTPS Direct] ให้บริการ API แบบ HTTPS โดยตรงบนพอร์ต: ${HTTPS_PORT}`);
-        console.log(`🌐 Secure Endpoint: https://10.2.0.13:${HTTPS_PORT}`);
-      });
-    }
-  } catch (sslErr) {
-    console.warn('⚠️ ไม่สามารถเริ่ม HTTPS บนพอร์ต 3005 ได้:', sslErr.message);
-  }
 }
 
 module.exports = app;

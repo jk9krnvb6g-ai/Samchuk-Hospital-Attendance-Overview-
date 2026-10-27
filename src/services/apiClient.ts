@@ -46,19 +46,12 @@ export const resolveDefaultApiUrl = (): string => {
     return import.meta.env.VITE_API_URL.replace(/\/+$/, '');
   }
   if (typeof window !== 'undefined') {
-    const protocol = window.location.protocol;
-    const host = window.location.hostname || 'localhost';
-
-    // นโยบายความปลอดภัยของโรงพยาบาล: ทำงานผ่าน HTTPS 100%
-    // เมื่อเข้าเว็บผ่าน HTTPS (เช่น https://10.2.0.13:3001/Sam_Att/):
-    // ต้องอ้างอิงผ่าน Virtual Directory /Sam_Att เพื่อให้ IIS web.config ทำ Reverse Proxy ไปยัง 127.0.0.1:3002
-    if (protocol === 'https:') {
-      const pathname = window.location.pathname || '';
-      const hasSamAtt = pathname.toLowerCase().includes('/sam_att');
-      const basePrefix = hasSamAtt ? '/Sam_Att' : '';
-      return `${window.location.origin}${basePrefix}`;
-    }
-    return `http://${host}:3002`;
+    // สถาปัตยกรรม HTTPS Same-Origin ผ่าน Virtual Directory /Sam_Att บน IIS พอร์ต 3001
+    // และ IIS Reverse Proxy จะส่งต่อไปยัง Shared Backend พอร์ต 3002: /api/Sam_Att/*
+    const origin = window.location.origin;
+    const pathname = window.location.pathname || '';
+    const hasSamAtt = pathname.toLowerCase().includes('/sam_att');
+    return hasSamAtt ? `${origin}/Sam_Att` : origin;
   }
   return 'http://localhost:3002';
 };
@@ -67,103 +60,26 @@ export const DEFAULT_API_URL = resolveDefaultApiUrl();
 export const HOSPITAL_WEB_URL = 'https://10.2.0.13:3001/Sam_Att/';
 
 class ApiClientService {
-  private customBaseUrl: string = resolveDefaultApiUrl();
+  private readonly baseUrl: string = resolveDefaultApiUrl();
   private isOnline: boolean = false;
   private lastPingMs: number = 0;
   private lastCheckTime: string = '';
   private listeners: Array<() => void> = [];
+  private authToken: string | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem(STORAGE_API_KEY);
-      const isHttps = window.location.protocol === 'https:';
-
-      // หากเปิดผ่าน HTTPS แต่ค่าใน localStorage ค้างเป็น http:// หรือไม่มี /Sam_Att (ทำให้เกิด 404)
-      // ให้อัปเดตเป็น HTTPS ที่มี /Sam_Att ทันที
-      const isMissingSamAtt = isHttps && saved === window.location.origin;
-      const isHttpOnHttps = isHttps && saved && saved.startsWith('http://');
-
-      if (isMissingSamAtt || isHttpOnHttps) {
-        this.customBaseUrl = resolveDefaultApiUrl();
-        localStorage.setItem(STORAGE_API_KEY, this.customBaseUrl);
-      } else if (saved && saved.trim()) {
-        this.customBaseUrl = saved.trim().replace(/\/+$/, '');
-      } else {
-        this.customBaseUrl = resolveDefaultApiUrl();
-      }
-    }
-  }
-
-  public isMixedContentBlocked(): boolean {
-    if (typeof window === 'undefined') return false;
-    return window.location.protocol === 'https:' && this.customBaseUrl.startsWith('http://');
-  }
-
-  public switchToHttpsProxy(): void {
-    if (typeof window !== 'undefined') {
-      this.setBaseUrl(resolveDefaultApiUrl());
-    }
-  }
-
-  public switchToHttpsDirectPort3005(): void {
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname || '10.2.0.13';
-      this.setBaseUrl(`https://${host}:3005`);
-    }
-  }
-
-  private getFallbackUrlFor(url: string): string | null {
-    if (typeof window === 'undefined') return null;
-    const isHttps = window.location.protocol === 'https:';
-    const host = window.location.hostname || 'localhost';
-
-    if (isHttps) {
-      if (url.includes(':3001') || url.includes('/Sam_Att')) {
-        const cleanPath = url.replace(/^https?:\/\/[^\/]+(\/Sam_Att)?/, '');
-        return `https://${host}:3005${cleanPath.startsWith('/') ? '' : '/'}${cleanPath}`;
-      } else if (url.includes(':3005')) {
-        const cleanPath = url.replace(/^https?:\/\/[^\/]+/, '');
-        return `https://${host}:3001/Sam_Att${cleanPath.startsWith('/') ? '' : '/'}${cleanPath}`;
-      }
-    } else {
-      if (url.includes(':3002')) {
-        const cleanPath = url.replace(/^http:\/\/[^\/]+/, '');
-        return `http://${host}:3005${cleanPath.startsWith('/') ? '' : '/'}${cleanPath}`;
-      }
-    }
-    return null;
-  }
-
-  private extractOriginFromUrl(url: string): string {
-    try {
-      const u = new URL(url);
-      if (u.pathname.toLowerCase().startsWith('/sam_att')) {
-        return `${u.origin}/Sam_Att`;
-      }
-      return u.origin;
-    } catch {
-      return url;
+      this.authToken = localStorage.getItem('samchuk_auth_token');
     }
   }
 
   public getBaseUrl(): string {
-    return this.customBaseUrl;
+    return this.baseUrl;
   }
 
-  public setBaseUrl(url: string) {
-    this.customBaseUrl = url.trim().replace(/\/+$/, '');
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(STORAGE_API_KEY, this.customBaseUrl);
-    }
-    this.notify();
-    this.checkHealth();
+  public get customBaseUrl(): string {
+    return this.baseUrl;
   }
-
-  public resetToDefault() {
-    this.setBaseUrl(DEFAULT_API_URL);
-  }
-
-  private authToken: string | null = null;
 
   public getAuthToken(): string | null {
     if (!this.authToken && typeof window !== 'undefined') {
@@ -190,82 +106,108 @@ class ApiClientService {
     return headers;
   }
 
-  public async ensureAuthenticated(): Promise<boolean> {
-    if (this.getAuthToken()) return true;
+  /**
+   * Central Request Method:
+   * 1. เรียก API ผ่าน HTTPS Same-Origin ไปยัง Shared Backend API พอร์ต 3002
+   * 2. ตรวจสอบ HTTP Status และ Content-Type ก่อน Parse JSON ทุกครั้ง
+   * 3. ป้องกันปัญหา HTML Error ทะลักเป็น SyntaxError (เช่น เมื่อได้ 405, 406, 500, 502)
+   * 4. แสดง Error ที่ตรงกับสาเหตุจริง
+   */
+  public async request<T = any>(endpoint: string, options: RequestInit = {}): Promise<{
+    success: boolean;
+    data?: T;
+    message?: string;
+    status?: number;
+    error?: string;
+    [key: string]: any;
+  }> {
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${cleanEndpoint}`;
+    const headers = this.getAuthHeaders((options.headers as Record<string, string>) || {});
+
+    if (!headers['Accept']) {
+      headers['Accept'] = 'application/json';
+    }
+    if (options.body && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     try {
-      const res = await this.login('admin', 'SamchukAdmin@2026');
-      return Boolean(res && res.success && res.token);
-    } catch {
-      return false;
+      const res = await fetch(url, { ...options, headers });
+      const contentType = res.headers.get('content-type') || '';
+      const text = await res.text();
+
+      // ตรวจสอบว่าเป็น HTML Error Page หรือไม่
+      if (contentType.includes('text/html') || text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+        let msg = `เซิร์ฟเวอร์ส่งกลับหน้า HTML (HTTP ${res.status})`;
+        if (res.status === 405) {
+          msg = `เซิร์ฟเวอร์แจ้ง HTTP 405 (Method Not Allowed) บนเส้นทาง ${cleanEndpoint}: กรุณาตรวจสอบการตั้งค่า URL Rewrite และ HTTP Verbs บน IIS`;
+        } else if (res.status === 406) {
+          msg = `เซิร์ฟเวอร์แจ้ง HTTP 406 (Not Acceptable): ปลายทางไม่สามารถส่งผลลัพธ์แบบ JSON ได้`;
+        } else if (res.status === 502 || res.status === 503) {
+          msg = `เซิร์ฟเวอร์แจ้ง HTTP ${res.status}: ไม่สามารถเชื่อมต่อ Shared Backend API พอร์ต 3002 ได้ (กรุณาตรวจสอบว่า Backend รันอยู่หรือไม่)`;
+        }
+        return {
+          success: false,
+          status: res.status,
+          error: `HTTP_${res.status}`,
+          message: msg
+        };
+      }
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return {
+          success: false,
+          status: res.status,
+          error: 'JSON_PARSE_ERROR',
+          message: `ผลลัพธ์จากเซิร์ฟเวอร์ไม่ใช่ JSON ที่ถูกต้อง (HTTP ${res.status}): ${text.slice(0, 150)}`
+        };
+      }
+
+      if (!res.ok) {
+        return {
+          success: false,
+          status: res.status,
+          error: parsed?.error || `HTTP_${res.status}`,
+          message: parsed?.message || `เซิร์ฟเวอร์ส่งรหัสข้อผิดพลาด HTTP ${res.status}`,
+          ...parsed
+        };
+      }
+
+      return parsed;
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Connection failed';
+      return {
+        success: false,
+        error: 'NETWORK_ERROR',
+        message: `ไม่สามารถเชื่อมต่อ Shared Backend API พอร์ต 3002 (${errorMsg})`
+      };
     }
   }
 
   public async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
-    if (!this.getAuthToken() && !url.includes('/api/auth/login')) {
-      await this.ensureAuthenticated();
-    }
     const customHeaders: Record<string, string> = (options.headers as Record<string, string>) || {};
     const mergedHeaders = this.getAuthHeaders(customHeaders);
-
-    let res: Response;
-    try {
-      res = await fetch(url, { ...options, headers: mergedHeaders });
-    } catch (fetchErr) {
-      // Auto-fallback: หากเรียกผ่าน IIS ไม่ได้ ให้ลองผ่าน Pure HTTPS พอร์ต 3005 อัตโนมัติ
-      const fallbackUrl = this.getFallbackUrlFor(url);
-      if (fallbackUrl && fallbackUrl !== url) {
-        try {
-          const fallbackRes = await fetch(fallbackUrl, { ...options, headers: mergedHeaders });
-          if (fallbackRes.ok || fallbackRes.status < 400) {
-            this.setBaseUrl(this.extractOriginFromUrl(fallbackUrl));
-            return fallbackRes;
-          }
-        } catch {}
-      }
-      throw fetchErr;
-    }
-
-    // ตรวจสอบว่า IIS ส่ง Error 405 (Method Not Allowed), 406 (Not Acceptable) หรือหน้า HTML แทน JSON หรือไม่
-    const contentType = res.headers.get('content-type') || '';
-    const isIisHtmlError = res.status === 405 || res.status === 406 || (res.status >= 500 && contentType.includes('text/html'));
-
-    if (isIisHtmlError) {
-      const fallbackUrl = this.getFallbackUrlFor(url);
-      if (fallbackUrl && fallbackUrl !== url) {
-        try {
-          const fallbackRes = await fetch(fallbackUrl, { ...options, headers: mergedHeaders });
-          const fbContentType = fallbackRes.headers.get('content-type') || '';
-          if (fallbackRes.ok && (fbContentType.includes('json') || fbContentType.includes('text/plain'))) {
-            this.setBaseUrl(this.extractOriginFromUrl(fallbackUrl));
-            return fallbackRes;
-          }
-        } catch {}
-      }
-    }
-
-    return res;
+    return fetch(url, { ...options, headers: mergedHeaders });
   }
 
   public async login(username: string, password: string): Promise<any> {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-      const data = await res.json();
-      if (data.success && data.token) {
-        this.setAuthToken(data.token);
-      }
-      return data;
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Login failed' };
+    const res = await this.request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password })
+    });
+    if (res.success && res.token) {
+      this.setAuthToken(res.token);
     }
+    return res;
   }
 
   public async logout(): Promise<void> {
     try {
-      await this.fetchWithAuth(`${this.customBaseUrl}/api/auth/logout`, { method: 'POST' });
+      await this.request('/api/auth/logout', { method: 'POST' });
     } catch {}
     this.setAuthToken(null);
   }
@@ -288,89 +230,55 @@ class ApiClientService {
   }
 
   public getStatus() {
-    const is3005 = this.customBaseUrl.includes(':3005');
     return {
-      baseUrl: this.customBaseUrl,
+      baseUrl: this.baseUrl,
       isOnline: this.isOnline,
       lastPingMs: this.lastPingMs,
       lastCheckTime: this.lastCheckTime,
       frontendUrl: HOSPITAL_WEB_URL,
-      apiPort: is3005 ? 3005 : 3002,
+      apiPort: 3002,
       frontendPort: 3001
     };
   }
 
   /**
-   * ทดสอบการเชื่อมต่อ API พร้อม Auto-Fallback ระหว่างพอร์ต 3002, IIS Reverse Proxy, และ Pure HTTPS 3005
+   * ตรวจสอบสถานะการเชื่อมต่อ Shared Backend API พอร์ต 3002
    */
   public async checkHealth(): Promise<{ online: boolean; latencyMs: number; data?: ApiHealthResponse; error?: string }> {
     const start = performance.now();
-    const tryPing = async (url: string): Promise<{ ok: boolean; data?: ApiHealthResponse; status?: number; statusText?: string }> => {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
-        const res = await fetch(`${url}/api/health`, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        const contentType = res.headers.get('content-type') || '';
-        if (res.ok && !contentType.includes('text/html')) {
-          const data: ApiHealthResponse = await res.json();
-          return { ok: true, data };
-        }
-        return { ok: false, status: res.status, statusText: res.statusText };
-      } catch {
-        return { ok: false };
-      }
-    };
-
-    // 1. ลอง Ping ที่ URL ปัจจุบันก่อน
-    const primaryResult = await tryPing(this.customBaseUrl);
-    if (primaryResult.ok && primaryResult.data) {
-      const elapsed = Math.round(performance.now() - start);
-      this.lastPingMs = elapsed;
-      this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
-      this.isOnline = true;
-      this.notify();
-      return { online: true, latencyMs: elapsed, data: primaryResult.data };
-    }
-
-    // 2. ถ้าไม่สำเร็จ ลอง Ping Candidate สำรอง (3005 หรือ IIS /Sam_Att)
-    const host = typeof window !== 'undefined' ? (window.location.hostname || 'localhost') : 'localhost';
-    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-    const fallbackUrls = (isHttps ? [
-      `https://${host}:3005`,
-      `${window.location.origin}/Sam_Att`,
-      `${window.location.origin}`
-    ] : [
-      `http://${host}:3002`,
-      `http://${host}:3005`
-    ]).filter(u => u !== this.customBaseUrl);
-
-    for (const altUrl of fallbackUrls) {
-      const altResult = await tryPing(altUrl);
-      if (altResult.ok && altResult.data) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch(`${this.baseUrl}/api/health`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && !contentType.includes('text/html')) {
+        const data: ApiHealthResponse = await res.json();
         const elapsed = Math.round(performance.now() - start);
-        this.customBaseUrl = altUrl;
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(STORAGE_API_KEY, altUrl);
-        }
         this.lastPingMs = elapsed;
         this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
         this.isOnline = true;
         this.notify();
-        return { online: true, latencyMs: elapsed, data: altResult.data };
+        return { online: true, latencyMs: elapsed, data };
       }
+      const elapsed = Math.round(performance.now() - start);
+      this.isOnline = false;
+      this.lastPingMs = elapsed;
+      this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
+      this.notify();
+      return { online: false, latencyMs: elapsed, error: `Backend HTTP ${res.status}` };
+    } catch (err: unknown) {
+      const elapsed = Math.round(performance.now() - start);
+      this.isOnline = false;
+      this.lastPingMs = elapsed;
+      this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
+      this.notify();
+      return { online: false, latencyMs: elapsed, error: err instanceof Error ? err.message : 'Cannot connect to API' };
     }
-
-    const elapsed = Math.round(performance.now() - start);
-    this.isOnline = false;
-    this.lastPingMs = elapsed;
-    this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
-    this.notify();
-    return { online: false, latencyMs: elapsed, error: 'Cannot connect to API (IIS ARR or HTTPS :3005)' };
   }
 
   /**
@@ -1082,63 +990,20 @@ class ApiClientService {
   }
 
   /**
-   * ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel (ค่าเริ่มต้นปกติ ไม่แตะต้อง hosoffice)
+   * ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel
    */
   public async getPersonnelFromDb() {
-    try {
-      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/personnel', { method: 'GET' });
   }
 
   /**
    * สั่งซิงค์รายชื่อบุคลากรจาก hosoffice เข้าสู่ฐาน samchuk_attendance (ทำงานเมื่อผู้ใช้กดปุ่มเท่านั้น)
+   * ใช้คำสั่ง HTTP POST เท่านั้นตามข้อกำหนดความปลอดภัย (ห้ามสลับเป็น GET)
    */
   public async syncPersonnelFromHosoffice() {
-    try {
-      let res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
-        method: 'POST',
-        headers: { 'Accept': 'application/json' }
-      });
-
-      // Fallback: หาก IIS บล็อกคำสั่ง POST ด้วย 405 (Method Not Allowed) ให้สลับเป็น GET อัตโนมัติ
-      if (res.status === 405) {
-        res = await this.fetchWithAuth(`${this.customBaseUrl}/api/personnel/sync-from-hosoffice`, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' }
-        });
-      }
-
-      const rawText = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        return {
-          success: false,
-          isIisError: true,
-          status: res.status,
-          message: `เซิร์ฟเวอร์ IIS ส่งหน้า HTML Error (${res.status}) แทน JSON ข้อมูลบุคลากร: เกิดจาก IIS Manager บนเครื่อง 10.2.0.13 ยังไม่ได้เปิด Application Request Routing (ARR) Proxy หรือยังไม่ได้กดยอมรับใบรับรองพอร์ต 3005`
-        };
-      }
-
-      if (!res.ok) {
-        return {
-          success: false,
-          status: res.status,
-          message: data?.message || `เซิร์ฟเวอร์ส่งรหัสข้อผิดพลาด HTTP ${res.status}`
-        };
-      }
-
-      return data;
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อซิงค์บุคลากรได้'
-      };
-    }
+    return this.request('/api/personnel/sync-from-hosoffice', {
+      method: 'POST'
+    });
   }
 
   /**

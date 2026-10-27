@@ -86,7 +86,7 @@ echo =========================================================================
 echo ข้อมูลระบบและการเข้าใช้งาน:
 echo - โฟลเดอร์ที่เก็บระบบ: Sam_Att
 echo - Web Frontend:      https://10.2.0.13:3001/Sam_Att/
-echo - Backend API:       http://10.2.0.13:3005 (API รับ-ส่งข้อมูล)
+echo - Central API Gateway: http://10.2.0.13:3002/api/Sam_Att/ (Shared Backend พอร์ต 3002)
 echo.
 echo ขั้นตอนต่อไป:
 echo 1. นำเข้าฐานข้อมูล:   setup-database.bat

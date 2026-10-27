@@ -86,7 +86,7 @@ function isAllowedOrigin(origin) {
   return false;
 }
 
-it('อนุญาต Localhost ทุก Port (3000, 3001, 3002, 3005, 80)', () => {
+it('อนุญาต Localhost ทุก Port (3000, 3001, 3002, 80)', () => {
   assert.strictEqual(isAllowedOrigin('http://localhost:3000'), true);
   assert.strictEqual(isAllowedOrigin('http://localhost:3001'), true);
   assert.strictEqual(isAllowedOrigin('http://localhost:3002'), true);
