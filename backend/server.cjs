@@ -119,15 +119,14 @@ app.use(express.json({ limit: '10mb' }));
 // รองรับคำขอทั้งแบบ /api/Sam_Att/* ตามสถาปัตยกรรม Gateway และ /api/* แบบ Direct
 // ============================================================================
 app.use((req, res, next) => {
-  if (req.url.startsWith('/api/Sam_Att/api/')) {
-    req.url = req.url.replace('/api/Sam_Att/api/', '/api/');
-  } else if (req.url.startsWith('/api/Sam_Att/')) {
-    req.url = req.url.replace('/api/Sam_Att/', '/api/');
-  } else if (req.url === '/api/Sam_Att') {
-    req.url = '/api/health';
-  } else if (req.url.startsWith('/api/sam_att/')) {
-    req.url = req.url.replace('/api/sam_att/', '/api/');
-  } else if (req.url === '/api/sam_att') {
+  // รองรับคำขอทั้งแบบ /api/Sam_Att/*, /api/sam_att/*, /api/Sam_Att/api/* และ Direct
+  while (req.url.startsWith('/api/Sam_Att/') || req.url.startsWith('/api/sam_att/')) {
+    req.url = req.url.replace(/^\/api\/[sS]am_[aA]tt\//, '/api/');
+  }
+  if (req.url.startsWith('/api/api/')) {
+    req.url = req.url.replace(/^\/api\/api\//, '/api/');
+  }
+  if (req.url === '/api/Sam_Att' || req.url === '/api/sam_att' || req.url === '/api/Sam_Att/' || req.url === '/api/sam_att/') {
     req.url = '/api/health';
   }
   next();

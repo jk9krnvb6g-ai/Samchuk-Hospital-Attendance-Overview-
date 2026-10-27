@@ -123,19 +123,22 @@ it('บล็อก Domain ภายนอกหรือผู้ไม่ป�
 console.log('\n🔀 ทดสอบกลุ่มที่ 3: ระบบแปลง URL ผ่าน API Gateway (/api/Sam_Att/*)');
 
 function rewriteGatewayUrl(url) {
-  if (url.startsWith('/api/Sam_Att/api/')) {
-    return url.replace('/api/Sam_Att/api/', '/api/');
-  } else if (url.startsWith('/api/Sam_Att/')) {
-    return url.replace('/api/Sam_Att/', '/api/');
-  } else if (url === '/api/Sam_Att') {
-    return '/api/health';
-  } else if (url.startsWith('/api/sam_att/')) {
-    return url.replace('/api/sam_att/', '/api/');
-  } else if (url === '/api/sam_att') {
+  while (url.startsWith('/api/Sam_Att/') || url.startsWith('/api/sam_att/')) {
+    url = url.replace(/^\/api\/[sS]am_[aA]tt\//, '/api/');
+  }
+  if (url.startsWith('/api/api/')) {
+    url = url.replace(/^\/api\/api\//, '/api/');
+  }
+  if (url === '/api/Sam_Att' || url === '/api/sam_att' || url === '/api/Sam_Att/' || url === '/api/sam_att/') {
     return '/api/health';
   }
   return url;
 }
+
+it('แปลง /api/Sam_Att/personnel/sync-from-hosoffice เป็น /api/personnel/sync-from-hosoffice ถูกต้อง', () => {
+  const result = rewriteGatewayUrl('/api/Sam_Att/personnel/sync-from-hosoffice');
+  assert.strictEqual(result, '/api/personnel/sync-from-hosoffice');
+});
 
 it('แปลง /api/Sam_Att/api/scanners/sync-custom เป็น /api/scanners/sync-custom ถูกต้อง', () => {
   const result = rewriteGatewayUrl('/api/Sam_Att/api/scanners/sync-custom');
