@@ -126,7 +126,7 @@ class ApiClientService {
     const headers = this.getAuthHeaders((options.headers as Record<string, string>) || {});
 
     if (!headers['Accept']) {
-      headers['Accept'] = 'application/json';
+      headers['Accept'] = 'application/json, text/plain, */*';
     }
     if (options.body && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
@@ -1002,7 +1002,11 @@ class ApiClientService {
    */
   public async syncPersonnelFromHosoffice() {
     return this.request('/api/personnel/sync-from-hosoffice', {
-      method: 'POST'
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
     });
   }
 

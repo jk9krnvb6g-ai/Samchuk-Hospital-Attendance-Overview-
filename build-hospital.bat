@@ -108,6 +108,15 @@ if exist "public\web.config" (
     echo       [OK] อัปเดต web.config เรียบร้อย
 )
 
+:: ตั้งค่า IIS อัตโนมัติ: เปิด ARR Proxy, ปลดล็อก WebDAV เพื่อป้องกัน HTTP 405 Method Not Allowed
+if exist "%windir%\system32\inetsrv\appcmd.exe" (
+    "%windir%\system32\inetsrv\appcmd.exe" set config -section:system.webServer/proxy /enabled:"True" /commit:apphost >nul 2>&1
+    "%windir%\system32\inetsrv\appcmd.exe" unlock config -section:system.webServer/modules >nul 2>&1
+    "%windir%\system32\inetsrv\appcmd.exe" unlock config -section:system.webServer/handlers >nul 2>&1
+    "%windir%\system32\inetsrv\appcmd.exe" set config "Default Web Site/Sam_Att" -section:system.webServer/webdav/authoring /enabled:"False" /commit:apphost >nul 2>&1
+    echo       [OK] ตั้งค่า IIS Reverse Proxy และปลดล็อก WebDAV สำเร็จ
+)
+
 echo.
 echo =========================================================================
 echo  [สำเร็จ 100%%] คอมไพล์และติดตั้งไฟล์สำหรับ IIS เรียบร้อยแล้ว!

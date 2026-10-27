@@ -2686,7 +2686,9 @@ app.post('/api/raw-scans/seed-sample', async (req, res) => {
 });
 
 // 4.6.1 ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel (ค่าเริ่มต้น ไม่แตะต้อง hosoffice)
-app.get('/api/personnel', async (req, res) => {
+// 4.6.1 ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel (ค่าเริ่มต้น ไม่แตะต้อง hosoffice)
+// รองรับทั้ง Route /api/Sam_Att/personnel และ /api/personnel
+app.get(['/api/Sam_Att/personnel', '/api/personnel'], async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2701,7 +2703,7 @@ app.get('/api/personnel', async (req, res) => {
     query += ' ORDER BY FIELD(status, "ACTIVE", "INACTIVE"), hr_dep_name ASC, hr_fullname ASC';
 
     const [rows] = await pool.query(query, params);
-    const mapped = rows.map(r => ({
+    const mapped = (rows || []).map(r => ({
       id: r.id,
       personId: r.person_id,
       fingleId: r.fingle_id,
@@ -2732,147 +2734,155 @@ app.get('/api/personnel', async (req, res) => {
       data: mapped 
     });
   } catch (err) {
-    console.warn('[Personnel] DB Query warning:', err.message);
-    res.json({ success: true, count: 0, activeCount: 0, inactiveCount: 0, data: [], dbConnected: false, warning: err.message });
+    console.error('[Personnel] DB Query error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: 'ATTENDANCE_DB_ERROR', 
+      message: `ไม่สามารถดึงข้อมูลบุคลากรจากฐานข้อมูล samchuk_attendance: ${err.message}`,
+      data: []
+    });
   }
 });
 
-// 4.6.2 ซิงค์รายชื่อบุคลากรจาก hosoffice.hr_person เข้ามาบันทึกใน samchuk_attendance.attendance_personnel (ทำงานเมื่อกดสั่งเท่านั้น)
-// โดยยึดฐาน HOSOffice เป็นหลัก (Single Source of Truth) ถ้าใน HOSOffice ไม่มี ให้ตั้งค่าในฐานเราเป็น 'INACTIVE' (ไม่ได้ใช้งาน)
-// รองรับทั้ง POST และ GET เพื่อป้องกันปัญหา HTTP 405 (Method Not Allowed) บน IIS WebDAV
-app.all('/api/personnel/sync-from-hosoffice', async (req, res) => {
+// 4.6.2 ซิงค์รายชื่อบุคลากรจาก hosoffice.hr_person เข้ามาบันทึกใน samchuk_attendance.attendance_personnel (ทำงานเมื่อกดปุ่มเท่านั้น)
+// สถาปัตยกรรม:
+// 1. Frontend ส่งคำขอ POST มายัง /Sam_Att/api/personnel/sync-from-hosoffice ผ่าน IIS พอร์ต 3001
+// 2. IIS ส่งต่อไปยัง Shared Backend พอร์ต 3002 ที่ Route /api/Sam_Att/personnel/sync-from-hosoffice
+// 3. Backend ใช้ Connection Pool ของ HOSOffice อ่านตาราง hosoffice.hr_person พร้อม JOIN ตารางบุคลากรที่จำเป็น
+// 4. นำข้อมูลที่ตรวจสอบแล้วมาเพิ่มหรืออัปเดตใน samchuk_attendance.attendance_personnel ด้วย Upsert โดยไม่ลบข้อมูลเดิม
+// 5. เมื่อซิงค์สำเร็จ Frontend โหลดข้อมูลจาก /Sam_Att/api/personnel ซึ่งเชื่อมกับ Backend Route /api/Sam_Att/personnel
+app.all(['/api/Sam_Att/personnel/sync-from-hosoffice', '/api/personnel/sync-from-hosoffice'], async (req, res) => {
   try {
     await ensureTablesExist();
     const poolAtt = getDbPool();
     const poolHos = getHosofficePool();
 
-    let rows = [];
-    // 1. ดึงแบบ JOIN ข้อมูลตำแหน่งและกลุ่มงาน โดยไม่ใช้ WITH syntax (รองรับ MySQL 5.5, 5.7, 8.0, MariaDB ทุกเวอร์ชัน)
-    // และไม่ใช้ WHERE ที่ตัด HR_STATUS_ID แบบตายตัว เพื่อป้องกันกรณี HR_STATUS_ID เป็น NULL หรือค่าอื่นๆ ใน HOSOffice
+    // 1. ตรวจสอบ SQL Schema จริงของตาราง hosoffice.hr_person ก่อนเริ่มการคิวรี่
+    let hpColumns = [];
     try {
-      const [hosRows] = await poolHos.query(`
-        SELECT 
-          hp.ID AS id,
-          hp.FINGLE_ID AS fingle_id,
-          hp.HR_CID AS hr_cid,
-          TRIM(CONCAT(
-            COALESCE(hf.HR_PREFIX_NAME, ''),
-            COALESCE(hp.HR_FNAME, ''),
-            CASE 
-              WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' 
-              THEN CONCAT(' ', TRIM(hp.HR_LNAME)) 
-              ELSE '' 
-            END
-          )) AS hr_fullname,
-          hp.HR_FNAME AS hr_fname,
-          hp.HR_LNAME AS hr_lname,
-          COALESCE(ht.HR_POSITION_NAME, '') AS hr_position_name,
-          COALESCE(hd.HR_DEPARTMENT_NAME, '') AS hr_dep_name,
-          COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') AS hr_dep_sub_name,
-          COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') AS hr_person_type_name,
-          COALESCE(hl.HR_LEVEL_NAME, '') AS hr_level_name,
-          hp.HR_STATUS_ID AS hr_status_id,
-          COALESCE(hs.HR_STATUS_NAME, 'ปฏิบัติราชการ') AS hr_status_name
-        FROM hr_person hp
-        LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID
-        LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID
-        LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID
-        LEFT JOIN hr_department_sub hds ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID
-        LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID
-        LEFT JOIN hr_level hl ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID
-        LEFT JOIN hr_status hs ON hp.HR_STATUS_ID = hs.HR_STATUS_ID
-        ORDER BY hp.ID ASC
-      `);
-      if (hosRows && hosRows.length > 0) {
-        rows = hosRows;
-      }
-    } catch (errJoined) {
-      console.warn('[Sync Personnel] Joined query failed, falling back to direct SELECT:', errJoined.message);
-    }
-
-    // 2. Fallback: หากคิวรี่ JOIN ไม่พบหรือได้ 0 รายการ ให้ดึงตรงจาก hr_person ทันที (รองรับทุกโครงสร้าง)
-    if (!rows || rows.length === 0) {
+      const [colRows] = await poolHos.query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'hr_person'
+      `, [hosofficeDbName]);
+      hpColumns = (colRows || []).map(c => c.COLUMN_NAME.toUpperCase());
+    } catch (errSchema) {
       try {
-        const [rawHp] = await poolHos.query('SELECT * FROM hr_person ORDER BY ID ASC LIMIT 3000');
-        if (rawHp && rawHp.length > 0) {
-          rows = rawHp.map(r => ({
-            id: r.ID || r.id || r.person_id || r.PERSON_ID,
-            fingle_id: r.FINGLE_ID || r.fingle_id || 0,
-            hr_cid: r.HR_CID || r.hr_cid || r.cid || '',
-            hr_fullname: (r.HR_FNAME ? `${r.HR_FNAME} ${r.HR_LNAME || ''}` : (r.hr_fname ? `${r.hr_fname} ${r.hr_lname || ''}` : (r.name || `เจ้าหน้าที่ ${r.ID || r.id}`))).trim(),
-            hr_fname: r.HR_FNAME || r.hr_fname || '',
-            hr_lname: r.HR_LNAME || r.hr_lname || '',
-            hr_position_name: r.HR_POSITION_NAME || r.hr_position_name || r.position || '',
-            hr_dep_name: r.HR_DEPARTMENT_NAME || r.hr_department_name || r.hr_dep_name || r.department || 'โรงพยาบาลสามชุก',
-            hr_dep_sub_name: r.HR_DEPARTMENT_SUB_NAME || r.hr_dep_sub_name || '',
-            hr_person_type_name: r.HR_PERSON_TYPE_NAME || r.hr_person_type_name || 'ข้าราชการ',
-            hr_status_id: r.HR_STATUS_ID !== undefined ? r.HR_STATUS_ID : (r.hr_status_id || '01'),
-            hr_status_name: r.HR_STATUS_NAME || r.hr_status_name || 'ปฏิบัติราชการ'
-          }));
-        }
-      } catch (errDirect) {
-        console.warn('[Sync Personnel] Direct hr_person query failed:', errDirect.message);
+        const [descRows] = await poolHos.query('DESCRIBE hr_person');
+        hpColumns = (descRows || []).map(r => (r.Field || r.field || '').toUpperCase());
+      } catch (errDesc) {
+        console.error('[Sync Personnel] Schema inspection failed:', errDesc);
+        return res.status(500).json({
+          success: false,
+          error: 'HOSOFFICE_SCHEMA_ERROR',
+          message: `ไม่สามารถตรวจสอบ SQL Schema ของตาราง hosoffice.hr_person ได้: ${errDesc.message}`
+        });
       }
     }
 
-    // 3. Fallback: กรณีฐานข้อมูลใช้ชื่อตาราง person (HOSxP Standard)
-    if (!rows || rows.length === 0) {
-      try {
-        const [rawPerson] = await poolHos.query('SELECT * FROM person ORDER BY person_id ASC LIMIT 3000');
-        if (rawPerson && rawPerson.length > 0) {
-          rows = rawPerson.map(r => ({
-            id: r.person_id || r.id || r.ID,
-            fingle_id: r.fingle_id || r.FINGLE_ID || 0,
-            hr_cid: r.cid || r.hr_cid || '',
-            hr_fullname: (r.name || `${r.fname || ''} ${r.lname || ''}` || `เจ้าหน้าที่ ${r.person_id}`).trim(),
-            hr_fname: r.fname || '',
-            hr_lname: r.lname || '',
-            hr_position_name: r.position_name || r.position || '',
-            hr_dep_name: r.department_name || r.department || 'โรงพยาบาลสามชุก',
-            hr_dep_sub_name: '',
-            hr_person_type_name: 'ข้าราชการ',
-            hr_status_id: '01',
-            hr_status_name: 'ปฏิบัติราชการ'
-          }));
-        }
-      } catch {}
-    }
-
-    if (!rows || rows.length === 0) {
-      return res.json({
-        success: true,
-        count: 0,
-        inserted: 0,
-        updated: 0,
-        data: [],
-        message: 'ไม่พบข้อมูลบุคลากรในตาราง hosoffice.hr_person (หรือสถานะการทำงานไม่ใช่ 01/1)'
+    if (!hpColumns || hpColumns.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'TABLE_NOT_FOUND',
+        message: `ไม่พบตาราง hr_person ในฐานข้อมูล ${hosofficeDbName} (กรุณาตรวจสอบการตั้งค่า HOSOffice Database)`
       });
     }
 
-    const hosPersonIds = rows.map(r => r.id);
+    // 2. ตรวจสอบตารางที่สามารถ JOIN ได้ในฐานข้อมูล hosoffice
+    let availableTables = [];
+    try {
+      const [tblRows] = await poolHos.query(`
+        SELECT TABLE_NAME 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME LIKE 'hr_%'
+      `, [hosofficeDbName]);
+      availableTables = (tblRows || []).map(t => t.TABLE_NAME.toLowerCase());
+    } catch {
+      availableTables = ['hr_person', 'hr_prefix', 'hr_position', 'hr_department', 'hr_department_sub', 'hr_person_type', 'hr_level', 'hr_status'];
+    }
+
+    const hasPrefix = availableTables.includes('hr_prefix') && hpColumns.includes('HR_PREFIX_ID');
+    const hasPosition = availableTables.includes('hr_position') && hpColumns.includes('HR_POSITION_ID');
+    const hasDepartment = availableTables.includes('hr_department') && hpColumns.includes('HR_DEPARTMENT_ID');
+    const hasDepartmentSub = availableTables.includes('hr_department_sub') && hpColumns.includes('HR_DEPARTMENT_SUB_ID');
+    const hasPersonType = availableTables.includes('hr_person_type') && hpColumns.includes('HR_PERSON_TYPE_ID');
+    const hasLevel = availableTables.includes('hr_level') && hpColumns.includes('HR_LEVEL_ID');
+    const hasStatus = availableTables.includes('hr_status') && hpColumns.includes('HR_STATUS_ID');
+
+    // 3. ประกอบคำสั่ง SQL สำหรับ JOIN ตาม Schema จริงที่ตรวจพบ
+    const selectFields = [
+      'hp.ID AS id',
+      hpColumns.includes('FINGLE_ID') ? 'hp.FINGLE_ID AS fingle_id' : 'hp.ID AS fingle_id',
+      hpColumns.includes('HR_CID') ? 'hp.HR_CID AS hr_cid' : "'' AS hr_cid",
+      hasPrefix 
+        ? "TRIM(CONCAT(COALESCE(hf.HR_PREFIX_NAME, ''), COALESCE(hp.HR_FNAME, ''), CASE WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' THEN CONCAT(' ', TRIM(hp.HR_LNAME)) ELSE '' END)) AS hr_fullname"
+        : "TRIM(CONCAT(COALESCE(hp.HR_FNAME, ''), CASE WHEN hp.HR_LNAME IS NOT NULL AND TRIM(hp.HR_LNAME) != '' THEN CONCAT(' ', TRIM(hp.HR_LNAME)) ELSE '' END)) AS hr_fullname",
+      hpColumns.includes('HR_FNAME') ? 'hp.HR_FNAME AS hr_fname' : "'' AS hr_fname",
+      hpColumns.includes('HR_LNAME') ? 'hp.HR_LNAME AS hr_lname' : "'' AS hr_lname",
+      hasPosition ? "COALESCE(ht.HR_POSITION_NAME, '') AS hr_position_name" : "'' AS hr_position_name",
+      hasDepartment ? "COALESCE(hd.HR_DEPARTMENT_NAME, '') AS hr_dep_name" : "'' AS hr_dep_name",
+      hasDepartmentSub ? "COALESCE(hds.HR_DEPARTMENT_SUB_NAME, '') AS hr_dep_sub_name" : "'' AS hr_dep_sub_name",
+      hasPersonType ? "COALESCE(hpt.HR_PERSON_TYPE_NAME, 'ข้าราชการ') AS hr_person_type_name" : "'ข้าราชการ' AS hr_person_type_name",
+      hpColumns.includes('HR_PERSON_TYPE_ID') ? 'hp.HR_PERSON_TYPE_ID AS hr_person_type_id' : '1 AS hr_person_type_id',
+      hasLevel ? "COALESCE(hl.HR_LEVEL_NAME, '') AS hr_level_name" : "'' AS hr_level_name",
+      hpColumns.includes('HR_STATUS_ID') ? 'hp.HR_STATUS_ID AS hr_status_id' : "'01' AS hr_status_id",
+      hasStatus ? "COALESCE(hs.HR_STATUS_NAME, 'ปฏิบัติราชการ') AS hr_status_name" : "'ปฏิบัติราชการ' AS hr_status_name"
+    ];
+
+    const joins = [];
+    if (hasPrefix) joins.push('LEFT JOIN hr_prefix hf ON hp.HR_PREFIX_ID = hf.HR_PREFIX_ID');
+    if (hasPosition) joins.push('LEFT JOIN hr_position ht ON hp.HR_POSITION_ID = ht.HR_POSITION_ID');
+    if (hasDepartment) joins.push('LEFT JOIN hr_department hd ON hp.HR_DEPARTMENT_ID = hd.HR_DEPARTMENT_ID');
+    if (hasDepartmentSub) joins.push('LEFT JOIN hr_department_sub hds ON hp.HR_DEPARTMENT_SUB_ID = hds.HR_DEPARTMENT_SUB_ID');
+    if (hasPersonType) joins.push('LEFT JOIN hr_person_type hpt ON hp.HR_PERSON_TYPE_ID = hpt.HR_PERSON_TYPE_ID');
+    if (hasLevel) joins.push('LEFT JOIN hr_level hl ON hp.HR_LEVEL_ID = hl.HR_LEVEL_ID');
+    if (hasStatus) joins.push('LEFT JOIN hr_status hs ON hp.HR_STATUS_ID = hs.HR_STATUS_ID');
+
+    const sql = `
+      SELECT 
+        ${selectFields.join(',\n        ')}
+      FROM hr_person hp
+      ${joins.join('\n      ')}
+      ORDER BY hp.ID ASC
+    `;
+
+    let rows = [];
+    try {
+      const [hosRows] = await poolHos.query(sql);
+      rows = hosRows || [];
+    } catch (errQuery) {
+      console.error('[Sync Personnel] Query on hosoffice failed:', errQuery);
+      return res.status(500).json({
+        success: false,
+        error: 'HOSOFFICE_QUERY_ERROR',
+        message: `เกิดข้อผิดพลาดในการดึงข้อมูลจากตาราง hosoffice.hr_person: ${errQuery.message}`
+      });
+    }
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'NO_PERSONNEL_FOUND',
+        message: 'ไม่พบรายการบุคลากรในตาราง hosoffice.hr_person บนฐานข้อมูล MySQL'
+      });
+    }
+
+    // 4. นำข้อมูลที่ตรวจสอบแล้วมาเพิ่มหรืออัปเดตใน samchuk_attendance.attendance_personnel ด้วย Upsert โดยไม่ลบข้อมูลเดิม
     let inserted = 0;
     let updated = 0;
-    let activeInHos = 0;
-    let inactiveInHos = 0;
 
     for (const r of rows) {
       let fullname = (r.hr_fullname || '').trim();
       if (!fullname && r.hr_fname) fullname = `${r.hr_fname} ${r.hr_lname || ''}`.trim();
       if (!fullname) fullname = `เจ้าหน้าที่ รหัส ${r.id}`;
 
-      // ตรวจสอบสถานะจาก HOSOffice: ถ้า HR_STATUS_ID != 1 หรือลาออก ให้เป็น INACTIVE
+      // กำหนดสถานะตาม HR_STATUS_ID จริงจาก HOSOffice
       const isHosActive = !r.hr_status_id || String(r.hr_status_id) === '01' || String(r.hr_status_id) === '1' || Number(r.hr_status_id) === 1;
       const targetStatus = isHosActive ? 'ACTIVE' : 'INACTIVE';
-      if (isHosActive) activeInHos++;
-      else inactiveInHos++;
-
       const statusName = r.hr_status_name || (isHosActive ? 'ปฏิบัติราชการ' : 'ไม่ได้ปฏิบัติราชการ');
 
-      let typeId = 1;
-      const typeStr = (r.hr_person_type_name || '').toLowerCase();
-      if (typeStr.includes('พนักงานกระทรวง')) typeId = 2;
-      else if (typeStr.includes('ลูกจ้าง')) typeId = 4;
-      else if (typeStr.includes('ราชการ') && typeStr.includes('พนักงาน')) typeId = 3;
+      // ใช้รหัสประเภทบุคลากรจริงจาก HOSOffice
+      const personTypeId = Number(r.hr_person_type_id) || 1;
 
       const [resIns] = await poolAtt.query(`
         INSERT INTO attendance_personnel
@@ -2896,48 +2906,29 @@ app.all('/api/personnel/sync-from-hosoffice', async (req, res) => {
         r.id, r.fingle_id || r.id, r.hr_cid || '', fullname,
         r.hr_position_name || '', r.hr_level_name || '', r.hr_dep_name || '',
         r.hr_dep_sub_name || '', r.hr_person_type_name || 'ข้าราชการ',
-        typeId, r.hr_status_id || '01', statusName, targetStatus
+        personTypeId, r.hr_status_id || '01', statusName, targetStatus
       ]);
 
       if (resIns.affectedRows === 1) inserted++;
-      else updated++;
+      else if (resIns.affectedRows > 1) updated++;
     }
 
-    // ดึงรายชื่อบุคลากรทั้งหมดที่อัปเดตแล้วใน attendance_personnel ส่งกลับไปให้หน้าบ้านทันที
-    const [allPersonnelRows] = await poolAtt.query(`
-      SELECT * FROM attendance_personnel ORDER BY id ASC
-    `);
-
-    const mapped = (allPersonnelRows || []).map(r => ({
-      id: r.id,
-      personId: r.person_id,
-      fingleId: r.fingle_id,
-      hrCid: r.hr_cid || '',
-      hrFullname: r.hr_fullname,
-      hrPositionName: r.hr_position_name || '',
-      hrLevelName: r.hr_level_name || '',
-      hrDepName: r.hr_dep_name || '',
-      hrDepSubName: r.hr_dep_sub_name || '',
-      hrPersonTypeName: r.hr_person_type_name || 'ข้าราชการ',
-      hrPersonTypeId: r.hr_person_type_id || 1,
-      hrStatusId: r.hr_status_id || '01',
-      hrStatusName: r.hr_status_name || 'ปฏิบัติราชการ',
-      status: r.status || 'ACTIVE'
-    }));
-
+    // 5. ส่งผลการประมวลผลกลับไปยัง Frontend ทันที
     res.json({
       success: true,
       totalHos: rows.length,
       inserted,
       updated,
-      inactivated,
-      currentTotal: mapped.length,
-      data: mapped,
-      message: `ดึงข้อมูลบุคลากรและรหัสสแกนนิ้วจาก HOSOffice (hr_person) สำเร็จ: นำเข้า ${mapped.length} ท่าน (เพิ่มใหม่ ${inserted}, ปรับปรุง ${updated}) - บุคลากรมีข้อมูลครบโดยไม่ต้องกรอกเอง`
+      currentTotal: rows.length,
+      message: `ซิงค์ข้อมูลบุคลากรและรหัสสแกนนิ้วจาก HOSOffice สำเร็จ: นำเข้า ${rows.length} ท่าน (เพิ่มใหม่ ${inserted}, ปรับปรุง ${updated}) โดยไม่ลบข้อมูลเดิม`
     });
   } catch (err) {
     console.error('[Sync Personnel] Error:', err);
-    res.status(500).json({ success: false, message: `ซิงค์บุคลากรจาก hosoffice ล้มเหลว: ${err.message}` });
+    res.status(500).json({ 
+      success: false, 
+      error: 'SYNC_ERROR',
+      message: `ซิงค์บุคลากรจาก hosoffice ล้มเหลว: ${err.message}` 
+    });
   }
 });
 

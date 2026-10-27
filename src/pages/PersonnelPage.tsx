@@ -237,34 +237,46 @@ ORDER BY hp.ID ASC;`;
 
   // Perform Sync from HOSOffice เข้าสู่ samchuk_attendance.attendance_personnel
   // วัตถุประสงค์: ดึงข้อมูลมาเก็บไว้ในทำเนียบบุคลากร เพื่อไม่ต้องบันทึกข้อมูลเองทีละคน (ไม่เช็คสถานะสแกน)
+  // Perform Sync from HOSOffice เข้าสู่ samchuk_attendance.attendance_personnel
+  // วัตถุประสงค์: ดึงข้อมูลมาเก็บไว้ในทำเนียบบุคลากร เพื่อไม่ต้องบันทึกข้อมูลเองทีละคน (ไม่เช็คสถานะสแกน)
+  // หลักการซิงค์:
+  // 1. Frontend ส่ง POST ผ่าน HTTPS พอร์ต 3001 ไปยัง /Sam_Att/api/personnel/sync-from-hosoffice
+  // 2. IIS ส่งต่อไปยัง Shared Backend พอร์ต 3002 ที่ Route /api/Sam_Att/personnel/sync-from-hosoffice
+  // 3. Backend ใช้ Connection Pool ของ HOSOffice อ่านตาราง hosoffice.hr_person พร้อม JOIN ตารางข้อมูลบุคลากรที่จำเป็น
+  // 4. นำข้อมูลที่ตรวจสอบแล้วมาเพิ่มหรืออัปเดตใน samchuk_attendance.attendance_personnel ด้วย Upsert โดยไม่ลบข้อมูลเดิม
+  // 5. เมื่อซิงค์สำเร็จ ให้ Frontend โหลดข้อมูลจาก /Sam_Att/api/personnel ซึ่งเชื่อมกับ Backend Route /api/Sam_Att/personnel
   const handleExecuteSync = async (simulateChanges = false) => {
     setIsSyncing(true);
     setSyncErrorMessage(null);
-    let customData: any = undefined;
 
     if (!simulateChanges) {
       try {
         const syncRes = await apiClient.syncPersonnelFromHosoffice();
-        if (syncRes && syncRes.success && Array.isArray(syncRes.data)) {
-          if (syncRes.data.length > 0) {
-            customData = syncRes.data.map((r: any) => ({
-              ID: r.personId || r.id,
-              HR_CID: r.hrCid || r.hr_cid || '',
-              FULLNAME: (r.hrFullname || r.hr_fullname || '').trim() || `เจ้าหน้าที่ รหัส ${r.personId || r.id}`,
-              HR_POSITION_NAME: r.hrPositionName || r.hr_position_name || 'เจ้าหน้าที่',
-              HR_LEVEL_NAME: r.hrLevelName || r.hr_level_name || '',
-              HR_DEPARTMENT_NAME: r.hrDepName || r.hr_dep_name || 'โรงพยาบาลสามชุก',
-              HR_DEPARTMENT_SUB: r.hrDepSubName || r.hr_dep_sub_name || '',
-              HR_PERSON_TYPE_NAME: r.hrPersonTypeName || r.hr_person_type_name || 'ข้าราชการ',
-              FINGLE_ID: r.fingleId || r.fingle_id || r.id,
-              HR_STATUS_ID: r.hrStatusId || r.hr_status_id || '01',
-              HR_STATUS_NAME: r.hrStatusName || r.hr_status_name || 'ปฏิบัติราชการ'
-            }));
-          } else {
-            setSyncErrorMessage(syncRes.message || 'ไม่พบข้อมูลบุคลากรในตาราง hosoffice.hr_person บนฐานข้อมูล MySQL (ตารางว่างหรือสถานะไม่ใช่ 01)');
-            setIsSyncing(false);
-            return;
-          }
+        if (syncRes && syncRes.success) {
+          // ซิงค์สำเร็จ! โหลดข้อมูลบุคลากรล่าสุดจาก /Sam_Att/api/personnel ทันที
+          await attendanceStore.loadFromMySqlDb();
+          const currentList = attendanceStore.getState().personnel || [];
+          attendanceStore.logAudit(
+            state.currentUser?.username || 'admin',
+            'ATTENDANCE',
+            syncRes.message || `ซิงค์ข้อมูลบุคลากรจาก HOSOffice สำเร็จ (${currentList.length} รายการ)`
+          );
+          setSyncResult({
+            totalFromHosoffice: syncRes.totalHos || currentList.length,
+            insertedCount: syncRes.inserted !== undefined ? syncRes.inserted : currentList.length,
+            updatedCount: syncRes.updated || 0,
+            skippedCount: 0,
+            inserted: currentList,
+            updated: [],
+            skipped: [],
+            syncedAt: new Date().toISOString()
+          });
+          setIsSyncing(false);
+          setIsSyncModalOpen(true);
+          if ((syncRes.inserted || 0) > 0) setSyncActiveTab('INSERTED');
+          else if ((syncRes.updated || 0) > 0) setSyncActiveTab('UPDATED');
+          else setSyncActiveTab('SKIPPED');
+          return;
         } else {
           setSyncErrorMessage(syncRes?.message || 'ไม่สามารถดึงข้อมูลบุคลากรจาก HOSOffice ได้ (เซิร์ฟเวอร์ส่งรหัสผิดพลาด)');
           setIsSyncing(false);
@@ -277,46 +289,16 @@ ORDER BY hp.ID ASC;`;
         return;
       }
     } else {
-      // Create an on-the-fly change to test dynamic update
-      customData = [
-        ...attendanceStore.getState().personnel.map(p => ({
-          ID: p.personId,
-          HR_CID: p.hrCid,
-          FULLNAME: p.hrFullname,
-          HR_POSITION_NAME: p.personId === 1 ? 'นายแพทย์ทรงคุณวุฒิ' : p.hrPositionName,
-          HR_LEVEL_NAME: p.personId === 1 ? 'ทรงคุณวุฒิ' : p.hrLevelName,
-          HR_DEPARTMENT_NAME: p.hrDepName,
-          HR_DEPARTMENT_SUB: p.personId === 2 ? 'งานห้องคลอดและทารกแรกเกิด' : p.hrDepSubName,
-          HR_PERSON_TYPE_NAME: p.personId === 7 ? 'พนักงานกระทรวงสาธารณสุข' : p.hrPersonTypeName,
-          FINGLE_ID: p.fingleId,
-          HR_STATUS_ID: p.hrStatusId || '01',
-          HR_STATUS_NAME: p.hrStatusName || 'ปฏิบัติราชการ'
-        })),
-        {
-          ID: 99,
-          HR_CID: '3-7204-99999-99-9',
-          FULLNAME: 'นพ. วรปรัชญ์ ศรีสวัสดิ์',
-          HR_POSITION_NAME: 'นายแพทย์ปฏิบัติการ',
-          HR_LEVEL_NAME: 'ปฏิบัติการ',
-          HR_DEPARTMENT_NAME: 'กลุ่มงานการแพทย์',
-          HR_DEPARTMENT_SUB: 'งานศัลยกรรม',
-          HR_PERSON_TYPE_NAME: 'ข้าราชการ',
-          FINGLE_ID: 155,
-          HR_STATUS_ID: '01',
-          HR_STATUS_NAME: 'ปฏิบัติราชการ'
-        }
-      ];
+      // โหมดทดสอบจำลอง
+      const result = attendanceStore.syncPersonnelFromHosoffice(state.currentUser);
+      await attendanceStore.loadFromMySqlDb();
+      setSyncResult(result);
+      setIsSyncing(false);
+      setIsSyncModalOpen(true);
+      if (result.insertedCount > 0) setSyncActiveTab('INSERTED');
+      else if (result.updatedCount > 0) setSyncActiveTab('UPDATED');
+      else setSyncActiveTab('SKIPPED');
     }
-
-    // ซิงค์เข้า Store และแสดงผลทันที
-    const result = attendanceStore.syncPersonnelFromHosoffice(state.currentUser, customData);
-    await attendanceStore.loadFromMySqlDb();
-    setSyncResult(result);
-    setIsSyncing(false);
-    setIsSyncModalOpen(true);
-    if (result.insertedCount > 0) setSyncActiveTab('INSERTED');
-    else if (result.updatedCount > 0) setSyncActiveTab('UPDATED');
-    else setSyncActiveTab('SKIPPED');
   };
 
   // ล้างข้อมูลบุคลากรในฐาน samchuk_attendance
