@@ -23,6 +23,7 @@ import {
   SEED_TEST_SCANS
 } from './mockData';
 import { apiClient } from './apiClient';
+import { cacheService } from './cacheService';
 
 const STORAGE_KEY = 'samchuk_attendance_v2_state';
 
@@ -215,11 +216,13 @@ class AttendanceStore {
   constructor() {
     this.purgeLocalStorageCacheOnly();
     this.state = this.loadState();
-    // โหลดข้อมูลสดจาก MySQL ทันทีที่เปิดแอปพลิเคชัน
+    // โหลดข้อมูลเริ่มต้นที่จำเป็นแบบ On-Demand Loading & SWR Cache (ไม่ดึงสแกนดิบ 5,000 รายการตอนเปิดแอป)
     if (typeof window !== 'undefined') {
       setTimeout(() => {
-        this.loadFromMySqlDb().catch(() => {});
-      }, 300);
+        this.loadShifts().catch(() => {});
+        this.loadPersonnelTypes().catch(() => {});
+        this.loadMenuData('dashboard').catch(() => {});
+      }, 100);
     }
   }
 
@@ -522,6 +525,7 @@ class AttendanceStore {
       console.warn('Save daily attendance to MySQL warning:', e);
     }
 
+    cacheService.invalidate(`daily_attendance_${date}`);
     this.saveState();
     return results;
   }
@@ -589,6 +593,7 @@ class AttendanceStore {
     }
 
     this.state.lastAutoCalculatedAt = formatDateTime();
+    cacheService.invalidatePrefix('daily_attendance');
     this.saveState();
     this.notify();
 
@@ -629,44 +634,28 @@ class AttendanceStore {
           department: d.department,
           position: d.position,
           workDate: d.workDate,
-          dayType: getDayType(d.workDate),
-          shifts: [{
-            config: this.state.shifts.find(s => s.id === d.shiftId) || {
-              id: d.shiftId || 1,
-              shiftCode: 'M',
-              shiftName: d.shiftName || 'เช้า (ปกติ)',
-              startTime: d.scheduledIn || '08:15',
-              endTime: d.scheduledOut || '16:00',
-              crossesMidnight: false,
-              workDateBasis: 'START_DATE',
-              lateGraceMinutes: 0,
-              inWindowBeforeMin: 120,
-              outWindowAfterMin: 120,
-              earlyLeaveMin: 0,
-              duplicateScanMin: 5,
-              color: '#0ea5e9',
-              isActive: true,
-              createdAt: '',
-              updatedAt: ''
-            },
-            source: 'DEFAULT' as const
-          }],
-          totalScans: d.totalScans || 0,
-          firstScan: d.firstScan || undefined,
-          lastScan: d.lastScan || undefined,
-          checkIn: d.checkIn || undefined,
-          checkOut: d.checkOut || undefined,
+          personnelTypeName: d.personnelTypeName || '',
+          shiftId: d.shiftId,
+          shiftCode: d.shiftCode || 'M',
+          shiftName: d.shiftName || 'เช้า',
+          plannedStartTime: d.plannedStartTime || d.scheduledIn || '08:15',
+          plannedEndTime: d.plannedEndTime || d.scheduledOut || '16:00',
+          resolutionSource: (d.resolutionSource || 'PERSONNEL_TYPE') as any,
+          inTime: d.inTime || d.checkIn || undefined,
+          outTime: d.outTime || d.checkOut || undefined,
           status: d.status,
-          statusLabel: d.statusLabel,
           lateMinutes: d.lateMinutes || 0,
           earlyMinutes: d.earlyMinutes || 0,
-          rawScanIds: []
+          otMinutes: d.otMinutes || 0,
+          scansCount: d.scansCount || d.totalScans || 0,
+          rawScanIds: d.rawScanIds || [],
+          calculatedAt: d.calculatedAt || formatDateTime()
         }));
         this.notify();
         return this.state.cachedDailyResults[date];
       }
     } catch {}
-    return this.getDailyAttendance(date);
+    return this.state.cachedDailyResults?.[date] || [];
   }
 
   public async clearDailyAttendanceFromMySql(): Promise<{ success: boolean; message: string }> {
@@ -674,7 +663,7 @@ class AttendanceStore {
       const res = await apiClient.clearDailyAttendanceFromDb();
       this.state.cachedDailyResults = {};
       this.notify();
-      return res;
+      return { success: res.success, message: res.message || 'ล้างผลประมวลผลสำเร็จ' };
     } catch (e: any) {
       return { success: false, message: e.message || 'Failed' };
     }
@@ -690,6 +679,7 @@ class AttendanceStore {
     }
     const res = await apiClient.saveDailyAttendanceToDb(results);
     if (res.success) {
+      cacheService.invalidate(`daily_attendance_${date}`);
       return { success: true, saved: res.saved, message: `บันทึกผลการประมวลผลเวลา ${res.saved} รายการลง MySQL สำเร็จแล้ว!` };
     }
     return { success: false, message: res.message || 'บันทึกลง MySQL ไม่สำเร็จ' };
@@ -862,6 +852,8 @@ class AttendanceStore {
       'PUSH_EXECUTE'
     );
 
+    cacheService.invalidate('push_batches');
+    cacheService.invalidatePrefix('raw_scans');
     this.saveState();
     return { batch, inserted, skippedExists, failed };
   }
@@ -874,6 +866,7 @@ class AttendanceStore {
       scan.pushError = 'ผู้ดูแลระบบสั่งยกเว้นรายการนี้ (Manual Exclude)';
       this.notify();
     }
+    cacheService.invalidatePrefix('raw_scans');
     try {
       await apiClient.excludeRawScan(id);
       return true;
@@ -887,9 +880,13 @@ class AttendanceStore {
   public async refreshPersonnelMapping(): Promise<{ success: boolean; hrCount: number; remappedCount: number; message: string }> {
     try {
       const res = await apiClient.refreshPersonnelMapping();
-      // Reload personnel and raw scans from DB
       await this.loadFromMySqlDb();
-      return res;
+      return {
+        success: res.success,
+        hrCount: (res as any).hrCount || 0,
+        remappedCount: (res as any).remappedCount || 0,
+        message: res.message || ''
+      };
     } catch (err: unknown) {
       return {
         success: false,
@@ -897,19 +894,6 @@ class AttendanceStore {
         remappedCount: 0,
         message: err instanceof Error ? err.message : 'รีเฟรชไม่สำเร็จ'
       };
-    }
-  }
-
-  // Load push batches from MySQL
-  public async loadPushBatches(): Promise<void> {
-    try {
-      const res = await apiClient.getPushBatchesFromDb();
-      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-        this.state.pushBatches = res.data;
-        this.notify();
-      }
-    } catch (e) {
-      console.warn('Load push batches failed:', e);
     }
   }
 
@@ -1279,43 +1263,216 @@ class AttendanceStore {
   }
 
   /**
-   * ดึงข้อมูลสดจากฐานข้อมูล MySQL (10.2.0.201) เข้าสู่ Store โดยตรง
+   * โหลดข้อมูลกะ (Shifts) พร้อม SWR Cache (TTL 5 นาที)
    */
-  public async loadFromMySqlDb(): Promise<{ success: boolean; shiftsCount: number; scansCount: number; message: string }> {
-    try {
-      let shiftsCount = 0;
-      let scansCount = 0;
-
-      // 1. ดึงกะจาก MySQL attendance_shift
-      const shiftsRes = await apiClient.getShiftsFromDb();
-      if (shiftsRes.success && Array.isArray(shiftsRes.data)) {
-        if (shiftsRes.data.length > 0) {
-          this.state.shifts = shiftsRes.data.map((r: any) => ({
-            id: r.id,
-            shiftCode: r.code || r.shift_code || 'M',
-            shiftName: r.name || r.shift_name || '',
-            startTime: r.startTime || '08:15',
-            endTime: r.endTime || '16:00',
-            crossesMidnight: Boolean(r.crossesMidnight),
-            workDateBasis: r.workDateBasis || 'START_DATE',
-            lateGraceMinutes: r.lateGraceMinutes || 0,
-            inWindowBeforeMin: r.inWindowBeforeMin || 120,
-            outWindowAfterMin: r.outWindowAfterMin || 120,
-            earlyLeaveMin: r.earlyLeaveMin || 0,
-            duplicateScanMin: r.duplicateScanMin || 5,
-            color: r.color || '#0ea5e9',
-            isActive: r.isActive !== false,
-            createdAt: formatDateTime(),
-            updatedAt: formatDateTime()
-          }));
-        } else {
-          this.state.shifts = [];
-        }
-        shiftsCount = this.state.shifts.length;
+  public async loadShifts(forceRefresh = false): Promise<Shift[]> {
+    if (!forceRefresh) {
+      const cached = cacheService.get<Shift[]>('shifts');
+      if (cached && !cached.isStale && cached.data.length > 0) {
+        this.state.shifts = cached.data;
+        this.notify();
+        return this.state.shifts;
       }
+    }
 
-      // 2. ดึงข้อมูลสแกนจาก MySQL attendance_raw_scan
-      const scansRes = await apiClient.getRawScansFromDb(5000);
+    try {
+      const res = await apiClient.getShiftsFromDb();
+      if (res.success && Array.isArray(res.data)) {
+        const mapped: Shift[] = res.data.map((r: any) => ({
+          id: r.id,
+          shiftCode: r.code || r.shift_code || 'M',
+          shiftName: r.name || r.shift_name || '',
+          startTime: r.startTime || '08:15',
+          endTime: r.endTime || '16:00',
+          crossesMidnight: Boolean(r.crossesMidnight),
+          workDateBasis: r.workDateBasis || 'START_DATE',
+          lateGraceMinutes: r.lateGraceMinutes || 0,
+          inWindowBeforeMin: r.inWindowBeforeMin || 120,
+          outWindowAfterMin: r.outWindowAfterMin || 120,
+          earlyLeaveMin: r.earlyLeaveMin || 0,
+          duplicateScanMin: r.duplicateScanMin || 5,
+          color: r.color || '#0ea5e9',
+          isActive: r.isActive !== false,
+          createdAt: r.createdAt || formatDateTime(),
+          updatedAt: r.updatedAt || formatDateTime()
+        }));
+        this.state.shifts = mapped;
+        cacheService.set('shifts', mapped, 300000);
+        this.notify();
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('[attendanceStore] loadShifts failed:', e);
+    }
+    return this.state.shifts;
+  }
+
+  /**
+   * โหลดประเภทบุคลากรและเวลากะ พร้อม SWR Cache (TTL 5 นาที)
+   */
+  public async loadPersonnelTypes(forceRefresh = false): Promise<PersonnelTypeConfig[]> {
+    if (!forceRefresh) {
+      const cached = cacheService.get<PersonnelTypeConfig[]>('personnel_types');
+      if (cached && !cached.isStale && cached.data.length > 0) {
+        this.state.personnelTypes = cached.data;
+        this.notify();
+        return this.state.personnelTypes;
+      }
+    }
+
+    try {
+      const res = await apiClient.getPersonnelTypes();
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        this.state.personnelTypes = res.data;
+        if (this.state.personnel && this.state.personnel.length > 0) {
+          this.state.personnelTypes = this.state.personnelTypes.map(t => {
+            const tName = t.name.trim().toLowerCase();
+            const cnt = this.state.personnel.filter(p => {
+              const pName = (p.hrPersonTypeName || '').trim().toLowerCase();
+              return pName === tName || pName.includes(tName) || tName.includes(pName);
+            }).length;
+            return { ...t, memberCount: cnt };
+          });
+        }
+        cacheService.set('personnel_types', this.state.personnelTypes, 300000);
+        this.notify();
+        return this.state.personnelTypes;
+      }
+    } catch (e) {
+      console.warn('[attendanceStore] loadPersonnelTypes failed:', e);
+    }
+    return this.state.personnelTypes;
+  }
+
+  /**
+   * โหลดทำเนียบบุคลากรจาก samchuk_attendance.attendance_personnel พร้อม SWR Cache (TTL 5 นาที)
+   */
+  public async loadPersonnel(forceRefresh = false): Promise<HrPerson[]> {
+    if (!forceRefresh) {
+      const cached = cacheService.get<HrPerson[]>('personnel');
+      if (cached && !cached.isStale && cached.data.length > 0) {
+        this.state.personnel = cached.data;
+        this.notify();
+        return this.state.personnel;
+      }
+    }
+
+    try {
+      const pRes = await apiClient.getPersonnelFromDb();
+      if (pRes.success && Array.isArray(pRes.data)) {
+        const mapped: HrPerson[] = pRes.data.map((p: any) => ({
+          personId: p.personId || p.id,
+          id: p.id || p.personId,
+          fingleId: p.fingleId || p.fingle_id || p.id,
+          hrCid: p.hrCid || p.hr_cid || '',
+          hrFullname: (p.hrFullname || p.hr_fullname || '').trim() || `เจ้าหน้าที่ รหัส ${p.id || p.personId}`,
+          hrPositionName: p.hrPositionName || p.hr_position_name || 'เจ้าหน้าที่',
+          hrLevelName: p.hrLevelName || p.hr_level_name || '',
+          hrDepName: p.hrDepName || p.hr_dep_name || 'โรงพยาบาลสามชุก',
+          hrDepSubName: p.hrDepSubName || p.hr_dep_sub_name || '',
+          hrPersonTypeName: p.hrPersonTypeName || p.hr_person_type_name || 'ข้าราชการ',
+          hrPersonTypeId: p.hrPersonTypeId || 1,
+          hrDepartmentId: p.hrDepartmentId || 1,
+          hrDepartmentSubId: p.hrDepartmentSubId || p.hr_department_sub_id || 1,
+          hrStatusId: p.hrStatusId || p.hr_status_id || '01',
+          hrStatusName: p.hrStatusName || p.hr_status_name || 'ปฏิบัติราชการ',
+          status: p.status || 'ACTIVE'
+        }));
+        this.state.personnel = mapped;
+        if (this.state.personnelTypes) {
+          this.state.personnelTypes = this.state.personnelTypes.map(t => {
+            const tName = t.name.trim().toLowerCase();
+            const cnt = mapped.filter(p => {
+              const pName = (p.hrPersonTypeName || '').trim().toLowerCase();
+              return pName === tName || pName.includes(tName) || tName.includes(pName);
+            }).length;
+            return { ...t, memberCount: cnt };
+          });
+        }
+        cacheService.set('personnel', mapped, 300000);
+        this.notify();
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('[attendanceStore] loadPersonnel failed:', e);
+    }
+    return this.state.personnel;
+  }
+
+  /**
+   * โหลดผลประมวลผลเวลาประจำวันจาก MySQL attendance_daily_result พร้อม SWR Cache (TTL 2 นาที)
+   */
+  public async loadDailyAttendance(date?: string, forceRefresh = false): Promise<DailyResult[]> {
+    const targetDate = date || formatDate(new Date());
+    const cacheKey = `daily_attendance_${targetDate}`;
+
+    if (!forceRefresh) {
+      const cached = cacheService.get<DailyResult[]>(cacheKey);
+      if (cached && !cached.isStale && cached.data) {
+        if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+        this.state.cachedDailyResults[targetDate] = cached.data;
+        this.notify();
+        return cached.data;
+      }
+    }
+
+    try {
+      const dailyRes = await apiClient.getDailyAttendanceFromDb(targetDate);
+      if (dailyRes.success && Array.isArray(dailyRes.data)) {
+        const mapped: DailyResult[] = dailyRes.data.map((d: any) => ({
+          id: d.id,
+          personId: d.personId,
+          fingleId: d.fingleId,
+          fullname: d.fullname,
+          department: d.department,
+          position: d.position,
+          workDate: d.workDate,
+          personnelTypeName: d.personnelTypeName || '',
+          shiftId: d.shiftId,
+          shiftCode: d.shiftCode || 'M',
+          shiftName: d.shiftName || 'เช้า',
+          plannedStartTime: d.plannedStartTime || d.scheduledIn || '08:15',
+          plannedEndTime: d.plannedEndTime || d.scheduledOut || '16:00',
+          resolutionSource: (d.resolutionSource || 'PERSONNEL_TYPE') as any,
+          inTime: d.inTime || d.checkIn || undefined,
+          outTime: d.outTime || d.checkOut || undefined,
+          status: d.status,
+          lateMinutes: d.lateMinutes || 0,
+          earlyMinutes: d.earlyMinutes || 0,
+          otMinutes: d.otMinutes || 0,
+          scansCount: d.scansCount || d.totalScans || 0,
+          rawScanIds: d.rawScanIds || [],
+          calculatedAt: d.calculatedAt || formatDateTime()
+        }));
+        if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
+        this.state.cachedDailyResults[targetDate] = mapped;
+        cacheService.set(cacheKey, mapped, 120000);
+        this.notify();
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('[attendanceStore] loadDailyAttendance failed:', e);
+    }
+    return this.state.cachedDailyResults?.[targetDate] || [];
+  }
+
+  /**
+   * โหลดข้อมูลสแกนดิบจาก attendance_raw_scan (ค่าเริ่มต้น 200 รายการ ไม่ดึง 5,000 เพื่อความเร็ว)
+   */
+  public async loadRawScans(limit = 200, forceRefresh = false): Promise<RawScan[]> {
+    const cacheKey = `raw_scans_${limit}`;
+
+    if (!forceRefresh) {
+      const cached = cacheService.get<RawScan[]>(cacheKey);
+      if (cached && !cached.isStale && cached.data) {
+        this.state.rawScans = cached.data;
+        this.notify();
+        return cached.data;
+      }
+    }
+
+    try {
+      const scansRes = await apiClient.getRawScansFromDb(limit);
       if (scansRes.success && Array.isArray(scansRes.data)) {
         const rawMap = new Map<string, RawScan>();
         scansRes.data.forEach((r: any) => {
@@ -1346,126 +1503,137 @@ class AttendanceStore {
             pushError: r.pushError || r.push_error,
             receivedAt: r.receivedAt || r.received_at || formatDateTime()
           };
-          // Strict Unique Key: fingleId + scanDateTime (ตรงกับ Reader R8 และ HOSOffice)
           const uniqueKey = `${scanObj.fingleId}_${scanObj.scanDateTime}`;
           rawMap.set(uniqueKey, scanObj);
         });
 
-        this.state.rawScans = Array.from(rawMap.values()).sort(
+        const mapped = Array.from(rawMap.values()).sort(
           (a, b) => (b.scanDateTime || '').localeCompare(a.scanDateTime || '')
         );
-        scansCount = this.state.rawScans.length;
+        this.state.rawScans = mapped;
+        cacheService.set(cacheKey, mapped, 60000); // 1 นาที
+        this.notify();
+        return mapped;
       }
-      this.state.cachedDailyResults = {};
+    } catch (e) {
+      console.warn('[attendanceStore] loadRawScans failed:', e);
+    }
+    return this.state.rawScans;
+  }
 
-      // 3. ดึงบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel เท่านั้น
-      // ห้ามดึงอัตโนมัติจากฐานที่ 2 hosoffice โดยเด็ดขาดตามคำสั่งของผู้ใช้งาน
-      try {
-        const pRes = await apiClient.getPersonnelFromDb();
-        if (pRes.success && Array.isArray(pRes.data)) {
-          this.state.personnel = pRes.data.map((p: any) => ({
-            personId: p.personId || p.id,
-            id: p.id || p.personId,
-            fingleId: p.fingleId || p.fingle_id || p.id,
-            hrCid: p.hrCid || p.hr_cid || '',
-            hrFullname: (p.hrFullname || p.hr_fullname || '').trim() || `เจ้าหน้าที่ รหัส ${p.id || p.personId}`,
-            hrPositionName: p.hrPositionName || p.hr_position_name || 'เจ้าหน้าที่',
-            hrLevelName: p.hrLevelName || p.hr_level_name || '',
-            hrDepName: p.hrDepName || p.hr_dep_name || 'โรงพยาบาลสามชุก',
-            hrDepSubName: p.hrDepSubName || p.hr_dep_sub_name || '',
-            hrPersonTypeName: p.hrPersonTypeName || p.hr_person_type_name || 'ข้าราชการ',
-            hrPersonTypeId: p.hrPersonTypeId || 1,
-            hrDepartmentId: p.hrDepartmentId || 1,
-            hrDepartmentSubId: p.hrDepartmentSubId || p.hr_department_sub_id || 1,
-            hrStatusId: p.hrStatusId || p.hr_status_id || '01',
-            hrStatusName: p.hrStatusName || p.hr_status_name || 'ปฏิบัติราชการ',
-            status: p.status || 'ACTIVE'
-          }));
-        } else {
-          this.state.personnel = [];
-        }
-      } catch {
-        this.state.personnel = [];
+  /**
+   * โหลดประวัติ Push Batches จาก MySQL พร้อม SWR Cache (TTL 2 นาที)
+   */
+  public async loadPushBatches(forceRefresh = false): Promise<PushBatch[]> {
+    if (!forceRefresh) {
+      const cached = cacheService.get<PushBatch[]>('push_batches');
+      if (cached && !cached.isStale && cached.data) {
+        this.state.pushBatches = cached.data;
+        this.notify();
+        return cached.data;
       }
+    }
 
-      // 3.1 ดึงประเภทบุคลากรและเวลากะจาก MySQL
-      try {
-        const typeRes = await apiClient.getPersonnelTypes();
-        if (typeRes.success && Array.isArray(typeRes.data) && typeRes.data.length > 0) {
-          this.state.personnelTypes = typeRes.data;
-        } else if (!this.state.personnelTypes || this.state.personnelTypes.length === 0) {
-          this.state.personnelTypes = [...DEFAULT_PERSONNEL_TYPES];
-        }
-      } catch {
-        if (!this.state.personnelTypes || this.state.personnelTypes.length === 0) {
-          this.state.personnelTypes = [...DEFAULT_PERSONNEL_TYPES];
-        }
+    try {
+      const res = await apiClient.getPushBatchesFromDb();
+      if (res.success && Array.isArray(res.data)) {
+        this.state.pushBatches = res.data;
+        cacheService.set('push_batches', res.data, 120000);
+        this.notify();
+        return res.data;
       }
+    } catch (e) {
+      console.warn('[attendanceStore] loadPushBatches failed:', e);
+    }
+    return this.state.pushBatches;
+  }
 
-      // คำนวณจำนวนบุคลากรในแต่ละประเภท (Member Count) สดจาก hr_person
-      if (this.state.personnelTypes && this.state.personnel) {
-        this.state.personnelTypes = this.state.personnelTypes.map(t => {
-          const tName = t.name.trim().toLowerCase();
-          const cnt = this.state.personnel.filter(p => {
-            const pName = (p.hrPersonTypeName || '').trim().toLowerCase();
-            return pName === tName || pName.includes(tName) || tName.includes(pName);
-          }).length;
-          return { ...t, memberCount: cnt };
-        });
-      }
+  /**
+   * โหลดข้อมูล On-Demand ตามเมนูที่ผู้ใช้กำลังเปิดใช้งาน (Tab-based Loading)
+   */
+  public async loadMenuData(tab: string, forceRefresh = false): Promise<void> {
+    switch (tab) {
+      case 'dashboard':
+        await Promise.allSettled([
+          this.loadPersonnel(forceRefresh),
+          this.loadShifts(forceRefresh),
+          this.loadPersonnelTypes(forceRefresh),
+          this.loadDailyAttendance(undefined, forceRefresh),
+          this.loadRawScans(100, forceRefresh)
+        ]);
+        break;
+      case 'attendance':
+        await Promise.allSettled([
+          this.loadPersonnel(forceRefresh),
+          this.loadShifts(forceRefresh),
+          this.loadPersonnelTypes(forceRefresh),
+          this.loadDailyAttendance(undefined, forceRefresh)
+        ]);
+        break;
+      case 'monthly_report':
+        await Promise.allSettled([
+          this.loadPersonnel(forceRefresh),
+          this.loadPersonnelTypes(forceRefresh),
+          this.loadRawScans(1000, forceRefresh)
+        ]);
+        break;
+      case 'my_attendance':
+        await Promise.allSettled([
+          this.loadPersonnel(forceRefresh),
+          this.loadShifts(forceRefresh),
+          this.loadDailyAttendance(undefined, forceRefresh)
+        ]);
+        break;
+      case 'raw_scans':
+        await Promise.allSettled([
+          this.loadRawScans(200, forceRefresh),
+          this.loadPersonnel(forceRefresh)
+        ]);
+        break;
+      case 'push':
+        await Promise.allSettled([
+          this.loadRawScans(500, forceRefresh),
+          this.loadPushBatches(forceRefresh),
+          this.loadPersonnel(forceRefresh)
+        ]);
+        break;
+      case 'personnel':
+        await Promise.allSettled([
+          this.loadPersonnel(forceRefresh),
+          this.loadPersonnelTypes(forceRefresh)
+        ]);
+        break;
+      case 'shifts':
+        await Promise.allSettled([
+          this.loadShifts(forceRefresh),
+          this.loadPersonnelTypes(forceRefresh),
+          this.loadPersonnel(forceRefresh)
+        ]);
+        break;
+      case 'scanners':
+      case 'system':
+      default:
+        break;
+    }
+  }
 
-      // 4. ดึงผลประมวลผลเวลาจาก MySQL attendance_daily_result
+  /**
+   * ดึงข้อมูลสดจากฐานข้อมูล MySQL (10.2.0.201) เข้าสู่ Store โดยตรง
+   * ปรับปรุงให้ใช้ Granular Loaders และล้างแคชเพื่อให้ได้ข้อมูลสดใหม่ 100%
+   */
+  public async loadFromMySqlDb(): Promise<{ success: boolean; shiftsCount: number; scansCount: number; message: string }> {
+    try {
+      cacheService.invalidateAll();
+      await Promise.allSettled([
+        this.loadShifts(true),
+        this.loadPersonnelTypes(true),
+        this.loadPersonnel(true),
+        this.loadRawScans(500, true),
+        this.loadDailyAttendance(undefined, true),
+        this.loadPushBatches(true)
+      ]);
+
       const todayStr = formatDate(new Date());
-      try {
-        const dailyRes = await apiClient.getDailyAttendanceFromDb(todayStr);
-        if (dailyRes.success && Array.isArray(dailyRes.data) && dailyRes.data.length > 0) {
-          if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
-          this.state.cachedDailyResults[todayStr] = dailyRes.data.map((d: any) => ({
-            id: d.id,
-            personId: d.personId,
-            fingleId: d.fingleId,
-            fullname: d.fullname,
-            department: d.department,
-            position: d.position,
-            workDate: d.workDate,
-            dayType: getDayType(d.workDate),
-            shifts: [{
-              config: this.state.shifts.find(s => s.id === d.shiftId) || {
-                id: d.shiftId || 1,
-                shiftCode: 'M',
-                shiftName: d.shiftName || 'เช้า (ปกติ)',
-                startTime: d.scheduledIn || '08:15',
-                endTime: d.scheduledOut || '16:00',
-                crossesMidnight: false,
-                workDateBasis: 'START_DATE',
-                lateGraceMinutes: 0,
-                inWindowBeforeMin: 120,
-                outWindowAfterMin: 120,
-                earlyLeaveMin: 0,
-                duplicateScanMin: 5,
-                color: '#0ea5e9',
-                isActive: true,
-                createdAt: '',
-                updatedAt: ''
-              },
-              source: 'DEFAULT' as const
-            }],
-            totalScans: d.totalScans || 0,
-            firstScan: d.firstScan || undefined,
-            lastScan: d.lastScan || undefined,
-            checkIn: d.checkIn || undefined,
-            checkOut: d.checkOut || undefined,
-            status: d.status,
-            statusLabel: d.statusLabel,
-            lateMinutes: d.lateMinutes || 0,
-            earlyMinutes: d.earlyMinutes || 0,
-            rawScanIds: []
-          }));
-        }
-      } catch {}
-
-      // ถ้าใน MySQL มีข้อมูลสแกนดิบ และยังไม่มีผลประมวลผลเวลาของวันนี้ ให้คำนวณและบันทึกลง MySQL
-      // แต่ถ้าผู้ใช้ล้างข้อมูลตารางออกหมด (rawScans.length === 0) ให้คงสถานะว่างเปล่า 0 รายการไว้ ห้ามบันทึกผลปลอมลง DB
       if (this.state.rawScans.length > 0 && (!this.state.cachedDailyResults?.[todayStr] || this.state.cachedDailyResults[todayStr].length === 0)) {
         const calced = this.calculateAttendance(todayStr);
         if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
@@ -1473,22 +1641,16 @@ class AttendanceStore {
         if (calced.length > 0) {
           apiClient.saveDailyAttendanceToDb(calced).catch(() => {});
         }
-      } else if (this.state.rawScans.length === 0) {
-        if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
-        this.state.cachedDailyResults[todayStr] = [];
       }
-
-      // 5. ดึงประวัติ Push Batches จาก MySQL
-      this.loadPushBatches().catch(() => {});
 
       this.saveState();
       this.notify();
 
       return {
         success: true,
-        shiftsCount,
-        scansCount,
-        message: `โหลดข้อมูลสดจาก MySQL 10.2.0.201 สำเร็จ: พบกะ ${shiftsCount} กะ, บันทึกสแกน ${scansCount} รายการ, บุคลากร ${this.state.personnel.length} คน`
+        shiftsCount: this.state.shifts.length,
+        scansCount: this.state.rawScans.length,
+        message: `โหลดข้อมูลสดจาก MySQL 10.2.0.201 สำเร็จ: พบกะ ${this.state.shifts.length} กะ, บันทึกสแกน ${this.state.rawScans.length} รายการ, บุคลากร ${this.state.personnel.length} คน`
       };
     } catch (err) {
       return {
@@ -1539,7 +1701,7 @@ class AttendanceStore {
     try {
       const res = await apiClient.syncShiftsToDb(defaultShifts as any);
       await this.loadFromMySqlDb();
-      return res;
+      return { success: res.success, message: res.message || 'นำเข้ากะสำเร็จ' };
     } catch (err) {
       return {
         success: false,
@@ -1741,6 +1903,8 @@ class AttendanceStore {
       `ดึงข้อมูลบุคลากรจาก hosoffice: ดึงใหม่ ${inserted.length} ท่าน, ปรับเปลี่ยนข้อมูลให้ตรง ${updated.length} ท่าน, ตรงกันแล้ว ${skipped.length} ท่าน`
     );
 
+    cacheService.invalidate('personnel');
+    cacheService.invalidatePrefix('daily_attendance');
     this.saveState();
 
     return {
@@ -1795,6 +1959,9 @@ class AttendanceStore {
     this.state.cachedDailyResults[today] = this.calculateAttendance(today);
     this.state.lastAutoCalculatedAt = formatDateTime();
 
+    cacheService.invalidate('personnel');
+    cacheService.invalidatePrefix('raw_scans');
+    cacheService.invalidatePrefix('daily_attendance');
     this.saveState();
     return { person, updatedScans };
   }

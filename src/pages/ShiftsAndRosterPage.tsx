@@ -290,7 +290,7 @@ export const ShiftsAndRosterPage: React.FC<ShiftsAndRosterPageProps> = ({ state 
     try {
       const res = await attendanceStore.syncAllPersonnelTypesToDb(state.currentUser);
       if (res.success) {
-        setActionMsg({ type: 'success', text: `บันทึกลง MySQL attendance_personnel_type_shift สำเร็จ (${res.data?.count || state.personnelTypes.length} รายการ)` });
+        setActionMsg({ type: 'success', text: `บันทึกลง MySQL attendance_personnel_type_shift สำเร็จ (${(res as any).data?.count || state.personnelTypes.length} รายการ)` });
       } else {
         setActionMsg({ type: 'error', text: `บันทึกไม่สำเร็จ: ${res.message}` });
       }

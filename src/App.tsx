@@ -32,6 +32,11 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  // โหลดข้อมูล On-Demand ตามเมนูที่กำลังเปิดใช้งาน (พร้อม SWR Cache ป้องกันการโหลดซ้ำ)
+  useEffect(() => {
+    attendanceStore.loadMenuData(currentTab).catch(() => {});
+  }, [currentTab]);
+
   // เมื่อผู้ใช้กดปุ่ม Sync ด่วนจาก Header หรือปุ่มดึงด่วนในหน้าต่างๆ ให้เริ่มดึงข้อมูลดิบจากเครื่อง 1, 2, 3 พร้อมหน้า Loading ล็อกจอ
   const handleQuickSync = async () => {
     setIsSyncing(true);

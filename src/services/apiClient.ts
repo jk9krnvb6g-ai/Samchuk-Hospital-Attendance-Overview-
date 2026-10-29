@@ -743,89 +743,55 @@ class ApiClientService {
    * ดึงรายการกะจาก MySQL โดยตรง
    */
   public async getShiftsFromDb() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/shifts`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/shifts', { method: 'GET' });
   }
 
   /**
    * สร้างกะใหม่ลงใน MySQL โดยตรง
    */
   public async createShiftInDb(shift: any) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/shifts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(shift)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/shifts', {
+      method: 'POST',
+      body: JSON.stringify(shift)
+    });
   }
 
   /**
    * แก้ไขกะใน MySQL โดยตรง
    */
   public async updateShiftInDb(id: number, shift: any) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/shifts/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(shift)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request(`/api/shifts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(shift)
+    });
   }
 
   /**
    * ลบกะออกจาก MySQL โดยตรง
    */
   public async deleteShiftFromDb(id: number) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/shifts/${id}`, {
-        method: 'DELETE'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request(`/api/shifts/${id}`, {
+      method: 'DELETE'
+    });
   }
 
   /**
    * ซิงค์กะทั้งหมดจากหน้าเว็บเข้าสู่ MySQL
    */
   public async syncShiftsToDb(shifts: any[]) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/shifts/sync-all`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shifts })
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/shifts/sync-all', {
+      method: 'POST',
+      body: JSON.stringify({ shifts })
+    });
   }
 
   /**
    * ซ่อมแซมและปรับปรุงชื่อภาษาไทย 4 กะหลัก (เช้า, บ่าย, ดึก, เช้าควบบ่าย) ใน MySQL
    */
   public async repairThaiShifts() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/shifts/repair-thai`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/shifts/repair-thai', {
+      method: 'POST'
+    });
   }
 
   /**
@@ -843,150 +809,101 @@ class ApiClientService {
     machineNo?: number | string;
     pushStatus?: string;
   }) {
-    try {
-      let queryStr = '';
-      if (typeof params === 'number') {
-        queryStr = `limit=${params}`;
-      } else if (params && typeof params === 'object') {
-        const qp = new URLSearchParams();
-        if (params.limit) qp.set('limit', String(params.limit));
-        if (params.search) qp.set('search', params.search);
-        if (params.fingleId) qp.set('fingleId', String(params.fingleId));
-        if (params.personId) qp.set('personId', String(params.personId));
-        if (params.date) qp.set('date', params.date);
-        if (params.month) qp.set('month', params.month);
-        if (params.dateFrom) qp.set('dateFrom', params.dateFrom);
-        if (params.dateTo) qp.set('dateTo', params.dateTo);
-        if (params.machineNo) qp.set('machineNo', String(params.machineNo));
-        if (params.pushStatus) qp.set('pushStatus', params.pushStatus);
-        queryStr = qp.toString();
-      } else {
-        queryStr = 'limit=5000';
-      }
-
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans?${queryStr}`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
+    let queryStr = '';
+    if (typeof params === 'number') {
+      queryStr = `limit=${params}`;
+    } else if (params && typeof params === 'object') {
+      const qp = new URLSearchParams();
+      qp.set('limit', String(params.limit || 200));
+      if (params.search) qp.set('search', params.search);
+      if (params.fingleId) qp.set('fingleId', String(params.fingleId));
+      if (params.personId) qp.set('personId', String(params.personId));
+      if (params.date) qp.set('date', params.date);
+      if (params.month) qp.set('month', params.month);
+      if (params.dateFrom) qp.set('dateFrom', params.dateFrom);
+      if (params.dateTo) qp.set('dateTo', params.dateTo);
+      if (params.machineNo) qp.set('machineNo', String(params.machineNo));
+      if (params.pushStatus) qp.set('pushStatus', params.pushStatus);
+      queryStr = qp.toString();
+    } else {
+      queryStr = 'limit=200';
     }
+
+    return this.request(`/api/raw-scans?${queryStr}`, { method: 'GET' });
   }
 
   /**
    * ลบรายการสแกนดิบ 1 รายการจาก MySQL (กรณีสแกนทดสอบหรือข้อมูลซ้ำ)
    */
   public async deleteRawScanFromDb(id: number | string) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/${id}`, {
-        method: 'DELETE'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request(`/api/raw-scans/${id}`, {
+      method: 'DELETE'
+    });
   }
 
   /**
    * บันทึกข้อมูลสแกนใหม่ 1 รายการลง MySQL โดยตรง
    */
   public async addRawScanToDb(scan: any) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(scan)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/raw-scans', {
+      method: 'POST',
+      body: JSON.stringify(scan)
+    });
   }
 
   /**
    * บันทึกข้อมูลสแกนแบบกลุ่มลง MySQL attendance_raw_scan
    */
   public async batchAddRawScans(scans: any[]) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scans })
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/raw-scans/batch', {
+      method: 'POST',
+      body: JSON.stringify({ scans })
+    });
   }
 
   /**
    * ดึงผลการประมวลผลเวลา (attendance_daily_result) จาก MySQL ตามวันที่
    */
   public async getDailyAttendanceFromDb(date?: string) {
-    try {
-      const queryDate = date ? `?date=${encodeURIComponent(date)}` : '';
-      const res = await fetch(`${this.customBaseUrl}/api/attendance/daily${queryDate}`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    const queryDate = date ? `?date=${encodeURIComponent(date)}` : '';
+    return this.request(`/api/attendance${queryDate}`, { method: 'GET' });
   }
 
   /**
    * บันทึกผลการประมวลผลเวลา (attendance_daily_result) ลง MySQL แบบกลุ่ม
    */
   public async saveDailyAttendanceToDb(results: any[]) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/attendance/daily/batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ results })
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/attendance/batch', {
+      method: 'POST',
+      body: JSON.stringify({ results })
+    });
   }
-
 
   /**
    * ล้างผลการประมวลผลเวลา (attendance_daily_result) ใน MySQL ทั้งหมด
    */
   public async clearDailyAttendanceFromDb() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/attendance/daily/clear`, {
-        method: 'DELETE'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/attendance/clear', {
+      method: 'DELETE'
+    });
   }
 
   /**
    * ล้างข้อมูลสแกนทั้งหมดใน MySQL
    */
   public async clearAllRawScansFromDb() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/clear-all`, {
-        method: 'POST'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/raw-scans/clear-all', {
+      method: 'POST'
+    });
   }
 
   /**
    * เติมข้อมูลสแกนตัวอย่างจำลองลง MySQL
    */
   public async seedSampleRawScansToDb() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/seed-sample`, {
-        method: 'POST'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/raw-scans/seed-sample', {
+      method: 'POST'
+    });
   }
 
   /**
@@ -1003,9 +920,6 @@ class ApiClientService {
   public async syncPersonnelFromHosoffice() {
     return this.request('/api/personnel/sync-from-hosoffice', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
       body: JSON.stringify({})
     });
   }
@@ -1014,182 +928,113 @@ class ApiClientService {
    * ล้างข้อมูลบุคลากรในฐาน samchuk_attendance
    */
   public async clearPersonnelInDb() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel/clear`, {
-        method: 'DELETE'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/personnel/clear', {
+      method: 'DELETE'
+    });
   }
 
   /**
    * ดึงข้อมูลบุคลากรจาก hosoffice.hr_person โดยตรง (เมื่อต้องการตรวจสอบข้อมูลต้นทาง)
    */
   public async getPersonnelFromHosoffice(limit: number = 500) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/hosoffice/personnel?limit=${limit}`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request(`/api/hosoffice/personnel?limit=${limit}`, { method: 'GET' });
   }
 
   /**
    * ทดสอบบันทึกข้อมูลสแกนเวลาเข้า hosoffice.fingle_scan
    */
   public async testPushToHosoffice(payload?: { fingleId?: number; scanDateTime?: string; machineNo?: number }) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/hosoffice/test-push`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {})
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/hosoffice/test-push', {
+      method: 'POST',
+      body: JSON.stringify(payload || {})
+    });
   }
 
   /**
    * Probe ตรวจสอบพอร์ต 3306 บนหลาย IP พร้อมกัน
    */
   public async probeDatabasePorts() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/db/probe`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/db/probe', { method: 'GET' });
   }
 
   /**
    * ดึงประวัติ Push Batches จาก MySQL
    */
   public async getPushBatchesFromDb() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/push/batches`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed', data: [] };
-    }
+    return this.request('/api/push/batches', { method: 'GET' });
   }
 
   /**
    * ยกเว้นรายการสแกนดิบไม่ให้นำมารวมในคิวส่ง (Exclude)
    */
   public async excludeRawScan(id: number | string) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/raw-scans/${id}/exclude`, {
-        method: 'POST'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request(`/api/raw-scans/${id}/exclude`, {
+      method: 'POST'
+    });
   }
 
   /**
    * รีเฟรชข้อมูลบุคลากรจาก hosoffice.hr_person และ Map ใหม่อัตโนมัติ
    */
   public async refreshPersonnelMapping() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/hosoffice/personnel/refresh-mapping`, {
-        method: 'POST'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/hosoffice/personnel/refresh-mapping', {
+      method: 'POST'
+    });
   }
 
   /**
    * ดึงรายการประเภทบุคลากรและเวลากะจาก MySQL
    */
   public async getPersonnelTypes() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel-types`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed', data: [] };
-    }
+    return this.request('/api/personnel-types', { method: 'GET' });
   }
 
   /**
    * เพิ่มประเภทบุคลากรใหม่ใน MySQL
    */
   public async createPersonnelType(data: any) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel-types`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/personnel-types', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
   }
 
   /**
    * อัปเดตประเภทบุคลากรใน MySQL
    */
   public async updatePersonnelType(id: number, data: any) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel-types/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request(`/api/personnel-types/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
   }
 
   /**
    * ลบประเภทบุคลากรใน MySQL
    */
   public async deletePersonnelType(id: number) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel-types/${id}`, {
-        method: 'DELETE'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request(`/api/personnel-types/${id}`, {
+      method: 'DELETE'
+    });
   }
 
   /**
    * คืนค่าประเภทบุคลากรเริ่มต้น (Reset to Presets)
    */
   public async resetPersonnelTypesToDefault() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel-types/reset-default`, {
-        method: 'POST'
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/personnel-types/reset-default', {
+      method: 'POST'
+    });
   }
 
   /**
    * บันทึกประเภทบุคลากรทั้งหมดลง MySQL
    */
   public async syncAllPersonnelTypesToDb(types: any[]) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/personnel-types/sync-all`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ types })
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed' };
-    }
+    return this.request('/api/personnel-types/sync-all', {
+      method: 'POST',
+      body: JSON.stringify({ types })
+    });
   }
 }
 

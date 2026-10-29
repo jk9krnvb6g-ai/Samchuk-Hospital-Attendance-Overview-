@@ -236,7 +236,7 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => attendanceStore.loadFromMySqlDb()}
+            onClick={() => attendanceStore.loadRawScans(500, true)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg shadow-xs cursor-pointer border border-slate-300"
             title="ดึงข้อมูลสแกนสดจาก MySQL attendance_raw_scan"
           >

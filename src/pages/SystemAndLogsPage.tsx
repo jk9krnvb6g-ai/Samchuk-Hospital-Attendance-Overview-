@@ -131,9 +131,9 @@ export const SystemAndLogsPage: React.FC<SystemAndLogsPageProps> = ({ state }) =
       });
       setHosTestPushResult(res);
       if (res.success) {
-        setDbActionMsg({ type: 'success', text: res.message });
+        setDbActionMsg({ type: 'success', text: res.message || 'ส่งข้อมูลทดสอบสำเร็จ' });
       } else {
-        setDbActionMsg({ type: 'error', text: res.message });
+        setDbActionMsg({ type: 'error', text: res.message || 'ส่งข้อมูลทดสอบไม่สำเร็จ' });
       }
     } catch (err) {
       setDbActionMsg({ type: 'error', text: `เกิดข้อผิดพลาด: ${err instanceof Error ? err.message : 'Failed'}` });

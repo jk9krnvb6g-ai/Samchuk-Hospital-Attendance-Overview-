@@ -254,7 +254,8 @@ ORDER BY hp.ID ASC;`;
         const syncRes = await apiClient.syncPersonnelFromHosoffice();
         if (syncRes && syncRes.success) {
           // ซิงค์สำเร็จ! โหลดข้อมูลบุคลากรล่าสุดจาก /Sam_Att/api/personnel ทันที
-          await attendanceStore.loadFromMySqlDb();
+          await attendanceStore.loadPersonnel(true);
+          await attendanceStore.loadPersonnelTypes(true);
           const currentList = attendanceStore.getState().personnel || [];
           attendanceStore.logAudit(
             state.currentUser?.username || 'admin',
@@ -306,7 +307,7 @@ ORDER BY hp.ID ASC;`;
     setIsSyncing(true);
     try {
       await apiClient.clearPersonnelInDb();
-      await attendanceStore.loadFromMySqlDb();
+      await attendanceStore.loadPersonnel(true);
     } finally {
       setIsSyncing(false);
     }
