@@ -119,29 +119,17 @@ app.use(express.json({ limit: '10mb' }));
 // ============================================================================
 function samRoute(routePath) {
   if (Array.isArray(routePath)) {
-    const res = [];
-    for (const p of routePath) {
-      if (typeof p === 'string') {
-        if (p.startsWith('/api/Sam_Att/')) {
-          res.push(p);
-          res.push(p.replace(/^\/api\/Sam_Att\//, '/api/'));
-        } else if (p.startsWith('/api/')) {
-          res.push(`/api/Sam_Att${p.slice(4)}`);
-          res.push(p);
-        } else {
-          res.push(p);
-        }
-      }
-    }
-    return Array.from(new Set(res));
+    return Array.from(new Set(routePath.flatMap(p => samRoute(p))));
   }
   if (typeof routePath === 'string') {
-    if (routePath.startsWith('/api/Sam_Att/')) {
-      return [routePath, routePath.replace(/^\/api\/Sam_Att\//, '/api/')];
-    }
-    if (routePath.startsWith('/api/')) {
-      return [`/api/Sam_Att${routePath.slice(4)}`, routePath];
-    }
+    const clean = routePath.replace(/^\/api\/[sS]am_[aA]tt\//, '/').replace(/^\/api\//, '/');
+    return Array.from(new Set([
+      routePath,
+      clean,
+      '/api' + clean,
+      '/api/Sam_Att' + clean,
+      '/api/sam_att' + clean
+    ]));
   }
   return routePath;
 }
@@ -263,6 +251,34 @@ function enforceDenyByDefault(req, res, next) {
 
 app.use(enforceDenyByDefault);
 
+// ============================================================================
+// Sam_Att Express Router Module for Central API Gateway (:3002)
+// ============================================================================
+const samRouter = express.Router();
+
+samRouter.use((req, res, next) => {
+  while (req.url.startsWith('/api/Sam_Att/') || req.url.startsWith('/api/sam_att/')) {
+    req.url = req.url.replace(/^\/api\/[sS]am_[aA]tt\//, '/');
+  }
+  if (req.url.startsWith('/api/')) {
+    req.url = req.url.slice(4);
+  }
+  if (req.url.startsWith('/Sam_Att/')) {
+    req.url = req.url.slice('/Sam_Att'.length);
+  }
+  if (!req.url.startsWith('/')) {
+    req.url = '/' + req.url;
+  }
+  if (req.url === '' || req.url === '/' || req.url === '/Sam_Att' || req.url === '/api') {
+    req.url = '/health';
+  }
+  next();
+});
+
+samRouter.use(authenticateToken);
+samRouter.use(enforceDenyByDefault);
+
+
 function requireAuth(req, res, next) {
   if (!req.user) {
     return res.status(401).json({ success: false, error: 'UNAUTHORIZED', message: 'กรุณาเข้าสู่ระบบก่อนใช้งาน' });
@@ -298,7 +314,7 @@ async function recordAuditLog(req, action, targetTable = null, targetId = null, 
 }
 
 // P0.1: Login ผ่านฐานข้อมูลจริง attendance_user (ยกเลิกรหัสผ่านตายตัวในซอร์สโค้ด 100%)
-app.post(samRoute('/api/auth/login'), async (req, res) => {
+samRouter.post(samRoute('/api/auth/login'), async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) {
     return res.status(400).json({ success: false, message: 'กรุณาระบุชื่อผู้ใช้งานและรหัสผ่าน' });
@@ -378,7 +394,7 @@ app.post(samRoute('/api/auth/login'), async (req, res) => {
   }
 });
 
-app.get(samRoute('/api/auth/me'), (req, res) => {
+samRouter.get(samRoute('/api/auth/me'), (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, authenticated: false, user: null });
   }
@@ -389,7 +405,7 @@ app.get(samRoute('/api/auth/me'), (req, res) => {
   });
 });
 
-app.post(samRoute('/api/auth/logout'), (req, res) => {
+samRouter.post(samRoute('/api/auth/logout'), (req, res) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
   if (token && activeSessions.has(token)) {
@@ -399,7 +415,7 @@ app.post(samRoute('/api/auth/logout'), (req, res) => {
 });
 
 // เปลี่ยนรหัสผ่านสำหรับผู้ใช้ปัจจุบัน
-app.post(samRoute('/api/auth/change-password'), requireAuth, async (req, res) => {
+samRouter.post(samRoute('/api/auth/change-password'), requireAuth, async (req, res) => {
   const { oldPassword, newPassword } = req.body || {};
   if (!oldPassword || !newPassword || newPassword.length < 6) {
     return res.status(400).json({ success: false, message: 'รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 6 ตัวอักษร' });
@@ -431,7 +447,7 @@ app.post(samRoute('/api/auth/change-password'), requireAuth, async (req, res) =>
 });
 
 // P0.1: การจัดการบัญชีผู้ใช้งาน (User Management - ADMIN เท่านั้น)
-app.get(samRoute('/api/users'), requireAuth, requireRole(['ADMIN']), async (req, res) => {
+samRouter.get(samRoute('/api/users'), requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
     const pool = getDbPool();
     const [rows] = await pool.query(`
@@ -445,7 +461,7 @@ app.get(samRoute('/api/users'), requireAuth, requireRole(['ADMIN']), async (req,
   }
 });
 
-app.post(samRoute('/api/users'), requireAuth, requireRole(['ADMIN']), async (req, res) => {
+samRouter.post(samRoute('/api/users'), requireAuth, requireRole(['ADMIN']), async (req, res) => {
   const { username, password, fullname, role = 'USER', department = 'โรงพยาบาลสามชุก' } = req.body || {};
   if (!username || !password || !fullname) {
     return res.status(400).json({ success: false, message: 'กรุณาระบุ username, password และ fullname' });
@@ -471,7 +487,7 @@ app.post(samRoute('/api/users'), requireAuth, requireRole(['ADMIN']), async (req
   }
 });
 
-app.put(samRoute('/api/users/:id/status'), requireAuth, requireRole(['ADMIN']), async (req, res) => {
+samRouter.put(samRoute('/api/users/:id/status'), requireAuth, requireRole(['ADMIN']), async (req, res) => {
   const { status } = req.body || {};
   if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
     return res.status(400).json({ success: false, message: 'สถานะต้องเป็น ACTIVE หรือ SUSPENDED' });
@@ -487,7 +503,7 @@ app.put(samRoute('/api/users/:id/status'), requireAuth, requireRole(['ADMIN']), 
   }
 });
 
-app.post(samRoute('/api/users/:id/reset-password'), requireAuth, requireRole(['ADMIN']), async (req, res) => {
+samRouter.post(samRoute('/api/users/:id/reset-password'), requireAuth, requireRole(['ADMIN']), async (req, res) => {
   const { newPassword } = req.body || {};
   if (!newPassword || newPassword.length < 6) {
     return res.status(400).json({ success: false, message: 'รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 6 ตัวอักษร' });
@@ -694,15 +710,20 @@ let activeDbConfig = {
 let hosofficeDbName = process.env.HOSOFFICE_DB || config.HosOfficeDb || 'hosoffice';
 
 // รัน auto-migration ใน background อัตโนมัติทันที
-setTimeout(() => {
-  ensureTablesExist().catch(err => {
+if (process.env.AUTO_MIGRATE_ON_STARTUP === 'true') {
+  setTimeout(() => {
+    ensureTablesExist().catch(err => {
     console.warn('[Sam_Att] Database auto-migration notice:', err.message);
-  });
-}, 500);
+    });
+  }, 500);
+}
 
 // Pool สำหรับ samchuk_attendance
+let dependenciesDbPool = null;
+let dependenciesHosPool = null;
 let dbPool = null;
 function getDbPool() {
+  if (dependenciesDbPool) return dependenciesDbPool;
   if (!dbPool) {
     dbPool = mysql.createPool({
       host: activeDbConfig.host,
@@ -729,6 +750,7 @@ function getDbPool() {
 // Pool สำหรับ hosoffice (ฐานข้อมูลบุคลากร HR และ fingle_scan)
 let hosofficePool = null;
 function getHosofficePool() {
+  if (dependenciesHosPool) return dependenciesHosPool;
   if (!hosofficePool) {
     const hosHost = process.env.HOSOFFICE_HOST || activeDbConfig.host;
     const hosPort = parseInt(process.env.HOSOFFICE_PORT || activeDbConfig.port, 10);
@@ -1391,7 +1413,7 @@ function testScannerTcpSocket(ip, port = 5005, timeoutMs = 3000) {
 // --------------------------------------------------------------------------
 
 // 4.1 Health Check
-app.get(samRoute(['/api/health', '/health']), (req, res) => {
+samRouter.get(samRoute(['/api/health', '/health']), (req, res) => {
   res.json({
     status: 'ONLINE',
     service: 'Samchuk Hospital Attendance Node.js API Service',
@@ -1413,7 +1435,7 @@ app.get(samRoute(['/api/health', '/health']), (req, res) => {
 });
 
 // 4.2 ตรวจสอบและทดสอบการเชื่อมต่อฐานข้อมูล samchuk_attendance
-app.get(samRoute('/api/db/test'), async (req, res) => {
+samRouter.get(samRoute('/api/db/test'), async (req, res) => {
   const start = Date.now();
   try {
     let pool = getDbPool();
@@ -1482,7 +1504,7 @@ app.get(samRoute('/api/db/test'), async (req, res) => {
 });
 
 // 4.2.1 ตรวจสอบและทดสอบการเชื่อมต่อฐานข้อมูลที่ 2: hosoffice
-app.get(samRoute('/api/db/test-hosoffice'), async (req, res) => {
+samRouter.get(samRoute('/api/db/test-hosoffice'), async (req, res) => {
   const start = Date.now();
   try {
     const pool = getHosofficePool();
@@ -1536,7 +1558,7 @@ app.get(samRoute('/api/db/test-hosoffice'), async (req, res) => {
 });
 
 // 4.2.2 ทดสอบทั้ง 2 ฐานข้อมูลพร้อมกันในครั้งเดียว (Dual DB Test)
-app.get(samRoute('/api/db/test-both'), async (req, res) => {
+samRouter.get(samRoute('/api/db/test-both'), async (req, res) => {
   const start = Date.now();
   let attResult = { success: false, message: 'กำลังทดสอบ' };
   let hosResult = { success: false, message: 'กำลังทดสอบ' };
@@ -1642,7 +1664,7 @@ app.get(samRoute('/api/db/test-both'), async (req, res) => {
 });
 
 // 4.2.2.1 รายงานสรุปฐานข้อมูลทั้งหมดในระบบ (Database Architecture Overview)
-app.get('/api/db/overview', async (req, res) => {
+samRouter.get(samRoute('/api/db/overview'), async (req, res) => {
   const poolAtt = getDbPool();
   const poolHos = getHosofficePool();
   
@@ -1703,7 +1725,7 @@ app.get('/api/db/overview', async (req, res) => {
 });
 
 // 4.2.3 Probe ตรวจสอบพอร์ต 3306 บนหลาย IP พร้อมกัน
-app.get('/api/db/probe', async (req, res) => {
+samRouter.get(samRoute('/api/db/probe'), async (req, res) => {
   const candidates = [
     { name: '10.2.0.201 (เป้าหมายปัจจุบัน)', host: '10.2.0.201', port: 3306 },
     { name: '10.1.0.201 (HosOffice เครื่องเดิม)', host: '10.1.0.201', port: 3306 },
@@ -1731,7 +1753,7 @@ app.get('/api/db/probe', async (req, res) => {
 });
 
 // ข้อ 6: ปิด API ทดลองรหัสผ่านฐานข้อมูล probe-auth ใน Production (ป้องกันการรั่วไหลของ Credentials)
-app.get('/api/db/probe-auth', (req, res) => {
+samRouter.get(samRoute('/api/db/probe-auth'), (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'PROHIBITED_ENDPOINT',
@@ -1740,7 +1762,7 @@ app.get('/api/db/probe-auth', (req, res) => {
 });
 
 // ข้อ 6: ปิด API ปรับเปลี่ยนการตั้งค่าเชื่อมต่อฐานข้อมูล /api/db/configure ใน Production
-app.post('/api/db/configure', (req, res) => {
+samRouter.post(samRoute('/api/db/configure'), (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'FORBIDDEN_CONFIGURATION',
@@ -1749,7 +1771,7 @@ app.post('/api/db/configure', (req, res) => {
 });
 
 // 4.3 สร้างตารางทั้งหมดลง MySQL 10.2.0.201 ทันที
-app.post(samRoute('/api/db/init'), async (req, res) => {
+samRouter.post(samRoute('/api/db/init'), async (req, res) => {
   const result = await ensureTablesExist();
   if (result.success) {
     res.json({ success: true, message: 'สร้างโครงสร้างตารางและ Seed ข้อมูลเริ่มต้นใน 10.2.0.201 เรียบร้อยแล้ว' });
@@ -1759,7 +1781,7 @@ app.post(samRoute('/api/db/init'), async (req, res) => {
 });
 
 // 4.4 จัดการกะ (Shifts CRUD) โดยตรงกับ MySQL 10.2.0.201
-app.get(samRoute('/api/shifts'), async (req, res) => {
+samRouter.get(samRoute('/api/shifts'), async (req, res) => {
   try {
     const pool = getDbPool();
     const [rows] = await pool.query('SELECT * FROM attendance_shift ORDER BY id ASC');
@@ -1794,7 +1816,7 @@ app.get(samRoute('/api/shifts'), async (req, res) => {
 });
 
 // 4.4.1 ซ่อมแซมและตั้งค่าชื่อกะภาษาไทยให้ถูกต้อง 100% (แก้ปัญหาตัวอักษรต่างดาว Mojibake)
-app.post(samRoute('/api/shifts/repair-thai'), async (req, res) => {
+samRouter.post(samRoute('/api/shifts/repair-thai'), async (req, res) => {
   try {
     const pool = getDbPool();
     // อัปเดตกะหลักทั้ง 4 กะด้วยชื่อภาษาไทย UTF-8 ที่ถูกต้อง
@@ -1828,7 +1850,7 @@ app.post(samRoute('/api/shifts/repair-thai'), async (req, res) => {
   }
 });
 
-app.post(samRoute('/api/shifts'), async (req, res) => {
+samRouter.post(samRoute('/api/shifts'), async (req, res) => {
   try {
     const pool = getDbPool();
     const s = req.body;
@@ -1857,7 +1879,7 @@ app.post(samRoute('/api/shifts'), async (req, res) => {
   }
 });
 
-app.put(samRoute('/api/shifts/:id'), async (req, res) => {
+samRouter.put(samRoute('/api/shifts/:id'), async (req, res) => {
   try {
     const pool = getDbPool();
     const id = req.params.id;
@@ -1888,7 +1910,7 @@ app.put(samRoute('/api/shifts/:id'), async (req, res) => {
   }
 });
 
-app.delete(samRoute('/api/shifts/:id'), async (req, res) => {
+samRouter.delete(samRoute('/api/shifts/:id'), async (req, res) => {
   try {
     const pool = getDbPool();
     const id = req.params.id;
@@ -1900,7 +1922,7 @@ app.delete(samRoute('/api/shifts/:id'), async (req, res) => {
 });
 
 // 4.5 ซิงค์กะทั้งหมดจากหน้าเว็บเข้าสู่ MySQL 10.2.0.201 ทันที
-app.post(samRoute('/api/shifts/sync-all'), async (req, res) => {
+samRouter.post(samRoute('/api/shifts/sync-all'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -1949,7 +1971,7 @@ app.post(samRoute('/api/shifts/sync-all'), async (req, res) => {
 });
 
 // 4.5.1 จัดการประเภทบุคลากรและเวลากะ (Personnel Type Shifts Config - CRUD)
-app.get(samRoute('/api/personnel-types'), async (req, res) => {
+samRouter.get(samRoute('/api/personnel-types'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2013,7 +2035,7 @@ app.get(samRoute('/api/personnel-types'), async (req, res) => {
   }
 });
 
-app.post(samRoute('/api/personnel-types'), async (req, res) => {
+samRouter.post(samRoute('/api/personnel-types'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2048,7 +2070,7 @@ app.post(samRoute('/api/personnel-types'), async (req, res) => {
   }
 });
 
-app.put(samRoute('/api/personnel-types/:id'), async (req, res) => {
+samRouter.put(samRoute('/api/personnel-types/:id'), async (req, res) => {
   try {
     const pool = getDbPool();
     const id = req.params.id;
@@ -2087,7 +2109,7 @@ app.put(samRoute('/api/personnel-types/:id'), async (req, res) => {
   }
 });
 
-app.delete(samRoute('/api/personnel-types/:id'), async (req, res) => {
+samRouter.delete(samRoute('/api/personnel-types/:id'), async (req, res) => {
   try {
     const pool = getDbPool();
     const id = req.params.id;
@@ -2098,7 +2120,7 @@ app.delete(samRoute('/api/personnel-types/:id'), async (req, res) => {
   }
 });
 
-app.post(samRoute('/api/personnel-types/reset-default'), async (req, res) => {
+samRouter.post(samRoute('/api/personnel-types/reset-default'), async (req, res) => {
   try {
     const pool = getDbPool();
     await pool.query('TRUNCATE TABLE attendance_personnel_type_shift');
@@ -2118,7 +2140,7 @@ app.post(samRoute('/api/personnel-types/reset-default'), async (req, res) => {
   }
 });
 
-app.post(samRoute('/api/personnel-types/sync-all'), async (req, res) => {
+samRouter.post(samRoute('/api/personnel-types/sync-all'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2166,7 +2188,7 @@ app.post(samRoute('/api/personnel-types/sync-all'), async (req, res) => {
 });
 
 // 4.6 จัดการข้อมูลสแกน (attendance_raw_scan CRUD โดยตรงใน MySQL)
-app.get(samRoute('/api/raw-scans'), async (req, res) => {
+samRouter.get(samRoute('/api/raw-scans'), async (req, res) => {
   try {
     const pool = getDbPool();
     const limit = parseInt(req.query.limit, 10) || 200;
@@ -2208,7 +2230,7 @@ app.get(samRoute('/api/raw-scans'), async (req, res) => {
 });
 
 // บันทึกสแกนใหม่ 1 รายการลง MySQL attendance_raw_scan (ข้อ 2, ข้อ 3: ตรวจสอบความถูกต้อง ห้ามเติมค่าปลอม)
-app.post(samRoute('/api/raw-scans'), async (req, res) => {
+samRouter.post(samRoute('/api/raw-scans'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2346,7 +2368,7 @@ app.post(samRoute('/api/raw-scans'), async (req, res) => {
 });
 
 // บันทึกสแกนแบบกลุ่ม (Batch Insert) ลง MySQL attendance_raw_scan พร้อม Strict Validation (ข้อ 2, ข้อ 3)
-app.post(samRoute('/api/raw-scans/batch'), async (req, res) => {
+samRouter.post(samRoute('/api/raw-scans/batch'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2494,7 +2516,7 @@ app.post(samRoute('/api/raw-scans/batch'), async (req, res) => {
 });
 
 // 4.7 ผลการประมวลผลเวลาปฏิบัติงาน (attendance_daily_result ใน MySQL)
-app.get(samRoute(['/api/attendance', '/api/attendance/daily']), async (req, res) => {
+samRouter.get(samRoute(['/api/attendance', '/api/attendance/daily']), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2547,7 +2569,7 @@ app.get(samRoute(['/api/attendance', '/api/attendance/daily']), async (req, res)
 });
 
 // ข้อ 3 & ข้อ 4: ปิดการลบและ TRUNCATE ผลคำนวณเวลาปฏิบัติงานใน Production 100%
-app.delete(samRoute(['/api/attendance/daily/clear', '/api/attendance/clear']), async (req, res) => {
+samRouter.delete(samRoute(['/api/attendance/daily/clear', '/api/attendance/clear']), async (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'PROHIBITED_ACTION',
@@ -2555,7 +2577,7 @@ app.delete(samRoute(['/api/attendance/daily/clear', '/api/attendance/clear']), a
   });
 });
 
-app.post(samRoute(['/api/attendance/daily/batch', '/api/attendance/batch']), async (req, res) => {
+samRouter.post(samRoute(['/api/attendance/daily/batch', '/api/attendance/batch']), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2627,7 +2649,7 @@ app.post(samRoute(['/api/attendance/daily/batch', '/api/attendance/batch']), asy
 });
 
 // คำนวณผลการลงเวลาใหม่ (Recalculate Attendance & Shifts) เมื่อมีการแก้ไขกะหรือตารางเวลา
-app.post(samRoute('/api/attendance/recalculate'), async (req, res) => {
+samRouter.post(samRoute('/api/attendance/recalculate'), async (req, res) => {
   try {
     await ensureTablesExist();
     const { date, dates, days, dateFrom, dateTo, month, year, mode } = req.body || {};
@@ -2694,7 +2716,7 @@ app.post(samRoute('/api/attendance/recalculate'), async (req, res) => {
 
 
 // ข้อ 3 & ข้อ 4: ปิดการลบข้อมูลสแกนจริงโดยตรงใน Production (รักษาประวัติดิบ 100%)
-app.delete(samRoute('/api/raw-scans/:id'), (req, res) => {
+samRouter.delete(samRoute('/api/raw-scans/:id'), (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'PROHIBITED_ACTION',
@@ -2703,7 +2725,7 @@ app.delete(samRoute('/api/raw-scans/:id'), (req, res) => {
 });
 
 // ข้อ 7: ห้าม TRUNCATE attendance_raw_scan ในระบบ Production ป้องกันข้อมูลสูญหาย 100%
-app.post(samRoute('/api/raw-scans/clear-all'), (req, res) => {
+samRouter.post(samRoute('/api/raw-scans/clear-all'), (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'PROHIBITED_ACTION',
@@ -2712,7 +2734,7 @@ app.post(samRoute('/api/raw-scans/clear-all'), (req, res) => {
 });
 
 // ข้อ 4: ปิดการลบเวลาอนาคตโดยตรง (หากพบข้อมูลผิดปกติให้เก็บไว้และคัดกรองในขั้นตอนคำนวณ)
-app.post(samRoute('/api/raw-scans/clean-future'), (req, res) => {
+samRouter.post(samRoute('/api/raw-scans/clean-future'), (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'PROHIBITED_ACTION',
@@ -2721,7 +2743,7 @@ app.post(samRoute('/api/raw-scans/clean-future'), (req, res) => {
 });
 
 // ข้อ 5: ปิด Endpoint สร้างข้อมูลจำลอง seed-sample ใน Production
-app.post(samRoute('/api/raw-scans/seed-sample'), async (req, res) => {
+samRouter.post(samRoute('/api/raw-scans/seed-sample'), async (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'MOCK_DISABLED',
@@ -2731,7 +2753,7 @@ app.post(samRoute('/api/raw-scans/seed-sample'), async (req, res) => {
 
 // 4.6.1 ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 1: samchuk_attendance.attendance_personnel (ค่าเริ่มต้น ไม่แตะต้อง hosoffice)
 // รองรับทั้ง Route /api/Sam_Att/personnel และ /api/personnel
-app.get(samRoute('/api/personnel'), async (req, res) => {
+samRouter.get(samRoute('/api/personnel'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -2794,7 +2816,7 @@ app.get(samRoute('/api/personnel'), async (req, res) => {
 // 3. Backend ใช้ Connection Pool ของ HOSOffice อ่านตาราง hosoffice.hr_person พร้อม JOIN ตารางบุคลากรที่จำเป็น
 // 4. นำข้อมูลที่ตรวจสอบแล้วมาเพิ่มหรืออัปเดตใน samchuk_attendance.attendance_personnel ด้วย Upsert โดยไม่ลบข้อมูลเดิม
 // 5. เมื่อซิงค์สำเร็จ Frontend โหลดข้อมูลจาก /Sam_Att/api/personnel ซึ่งเชื่อมกับ Backend Route /api/Sam_Att/personnel
-app.all(samRoute('/api/personnel/sync-from-hosoffice'), async (req, res) => {
+samRouter.all(samRoute('/api/personnel/sync-from-hosoffice'), async (req, res) => {
   try {
     await ensureTablesExist();
     const poolAtt = getDbPool();
@@ -2976,7 +2998,7 @@ app.all(samRoute('/api/personnel/sync-from-hosoffice'), async (req, res) => {
 });
 
 // ข้อ 1 & 2: ปิดการ TRUNCATE ข้อมูลบุคลากรและผล Attendance ใน Production ถาวร (ยกเลิก Admin Key สำรอง)
-app.delete(samRoute('/api/personnel/clear'), async (req, res) => {
+samRouter.delete(samRoute('/api/personnel/clear'), async (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'OPERATION_DISABLED',
@@ -2985,7 +3007,7 @@ app.delete(samRoute('/api/personnel/clear'), async (req, res) => {
 });
 
 // 4.7 ดึงข้อมูลบุคลากรจากฐานข้อมูลที่ 2: hosoffice.hr_person โดยตรง
-app.get(samRoute('/api/hosoffice/personnel'), async (req, res) => {
+samRouter.get(samRoute('/api/hosoffice/personnel'), async (req, res) => {
   try {
     const pool = getHosofficePool();
     const limit = parseInt(req.query.limit, 10) || 1000;
@@ -3132,7 +3154,7 @@ app.get(samRoute('/api/hosoffice/personnel'), async (req, res) => {
 });
 
 // ข้อ 5 & 10: ปิด Endpoint สร้างข้อมูลจำลองและการสั่ง CREATE TABLE ใน HOSOffice
-app.post(samRoute('/api/hosoffice/test-push'), async (req, res) => {
+samRouter.post(samRoute('/api/hosoffice/test-push'), async (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'ENDPOINT_DISABLED',
@@ -3141,7 +3163,7 @@ app.post(samRoute('/api/hosoffice/test-push'), async (req, res) => {
 });
 
 // 4.9 รายการเครื่องสแกน
-app.get(samRoute('/api/scanners'), (req, res) => {
+samRouter.get(samRoute('/api/scanners'), (req, res) => {
   res.json({
     success: true,
     total: config.Scanners.length,
@@ -3150,7 +3172,7 @@ app.get(samRoute('/api/scanners'), (req, res) => {
 });
 
 // 4.10 ทดสอบเชื่อมต่อเครื่องสแกนเดี่ยว (POST)
-app.post(samRoute('/api/scanners/test-connection'), async (req, res) => {
+samRouter.post(samRoute('/api/scanners/test-connection'), async (req, res) => {
   const { machineNo = 1, ipAddress = '192.168.111.163', port = 5005, timeoutMs = 3000 } = req.body;
   const result = await testScannerTcpSocket(ipAddress, port, timeoutMs);
   res.json({
@@ -3164,7 +3186,7 @@ app.post(samRoute('/api/scanners/test-connection'), async (req, res) => {
 });
 
 // 4.11 ทดสอบ Socket ผ่าน GET
-app.get(samRoute('/api/scanners/test-socket'), async (req, res) => {
+samRouter.get(samRoute('/api/scanners/test-socket'), async (req, res) => {
   const ip = req.query.ip || '192.168.111.163';
   const port = parseInt(req.query.port, 10) || 5005;
   const result = await testScannerTcpSocket(ip, port, 3000);
@@ -3172,7 +3194,7 @@ app.get(samRoute('/api/scanners/test-socket'), async (req, res) => {
 });
 
 // 4.12 ทดสอบทุกเครื่องพร้อมกัน (POST /api/scanners/test-all)
-app.post(samRoute('/api/scanners/test-all'), async (req, res) => {
+samRouter.post(samRoute('/api/scanners/test-all'), async (req, res) => {
   const targets = (Array.isArray(req.body) && req.body.length > 0)
     ? req.body
     : config.Scanners.map(s => ({ machineNo: s.MachineNo, ipAddress: s.IP, port: s.Port }));
@@ -4123,7 +4145,7 @@ async function calculateDailyAttendanceForDate(workDate) {
 }
 
 // 4.12.1 N1: แทนที่ /api/scanners/sync ด้วยการเรียก Standalone Reader ผ่าน execFile
-app.post(samRoute('/api/scanners/sync'), async (req, res) => {
+samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
   // N2: ตรวจสอบสถานะการทำงานเพื่อป้องกันรันซ้อน (Sync Mutex Lock)
   if (syncRunning) {
     return res.status(409).json({
@@ -4245,7 +4267,7 @@ app.post(samRoute('/api/scanners/sync'), async (req, res) => {
 });
 
 // 4.12.2 N4: GET /api/scanners/sync-log คืนสถานะและเวลาซิงค์ล่าสุดของแต่ละเครื่อง
-app.get(samRoute('/api/scanners/sync-log'), async (req, res) => {
+samRouter.get(samRoute('/api/scanners/sync-log'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -4309,7 +4331,7 @@ app.get(samRoute('/api/scanners/sync-log'), async (req, res) => {
 });
 
 // ประวัติการซิงค์ย้อนหลัง
-app.get(samRoute('/api/scanners/sync-logs'), async (req, res) => {
+samRouter.get(samRoute('/api/scanners/sync-logs'), async (req, res) => {
   try {
     await ensureTablesExist();
     const pool = getDbPool();
@@ -4322,7 +4344,7 @@ app.get(samRoute('/api/scanners/sync-logs'), async (req, res) => {
 });
 
 // 4.12.2 ดึงข้อมูลสแกนแบบกำหนดเอง (Custom Scanner Sync: เลือกเครื่องสแกน, วันที่, ช่วงเวลา, รายเดือน, รายปี)
-app.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
+samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
   if (syncRunning) {
     return res.status(409).json({
       success: false,
@@ -4722,7 +4744,7 @@ app.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
 });
 
 // 4.12.3 นำเข้าประวัติสแกนจากตาราง hosoffice.fingle_scan เข้าสู่ attendance_raw_scan (รองรับโครงสร้างตารางทุกแบบ)
-app.post(samRoute('/api/scans/import-from-hosoffice'), async (req, res) => {
+samRouter.post(samRoute('/api/scans/import-from-hosoffice'), async (req, res) => {
   try {
     await ensureTablesExist();
     const poolAtt = getDbPool();
@@ -4971,7 +4993,7 @@ app.post(samRoute('/api/scans/import-from-hosoffice'), async (req, res) => {
 });
 
 // ซิงค์ข้อมูลทั้งหมดจาก hosoffice.fingle_scan เข้าสู่ attendance_raw_scan โดยตรง
-app.post(samRoute('/api/scans/sync-to-raw'), async (req, res) => {
+samRouter.post(samRoute('/api/scans/sync-to-raw'), async (req, res) => {
   try {
     await ensureTablesExist();
     const { dates, dateFrom, dateTo, strategy = 'SKIP_DUPLICATES', limit = 20000 } = req.body || {};
@@ -4994,7 +5016,7 @@ app.post(samRoute('/api/scans/sync-to-raw'), async (req, res) => {
 });
 
 // ข้อ 5: ปิด Endpoint สร้างข้อมูลจำลอง seed-month ใน Production 100%
-app.post(samRoute('/api/attendance/seed-month'), async (req, res) => {
+samRouter.post(samRoute('/api/attendance/seed-month'), async (req, res) => {
   return res.status(403).json({
     success: false,
     error: 'MOCK_DISABLED',
@@ -5003,7 +5025,7 @@ app.post(samRoute('/api/attendance/seed-month'), async (req, res) => {
 });
 
 // 4.13 ตรวจสอบไฟล์ DLL
-app.get(samRoute('/api/scanners/check-dll'), (req, res) => {
+samRouter.get(samRoute('/api/scanners/check-dll'), (req, res) => {
   const dllPaths = [
     path.join(__dirname, 'FK623Attend.dll'),
     path.join(__dirname, 'bin', 'FK623Attend.dll'),
@@ -5023,7 +5045,7 @@ app.get(samRoute('/api/scanners/check-dll'), (req, res) => {
 });
 
 // 4.14 ส่งข้อมูลเข้า hosoffice (Batch Push) - Manual Push Only (ข้อ 9, 24)
-app.post(samRoute('/api/push/batch'), requireRole(['ADMIN', 'HR']), async (req, res) => {
+samRouter.post(samRoute('/api/push/batch'), requireRole(['ADMIN', 'HR']), async (req, res) => {
   const { dateFrom, dateTo, machineNo } = req.body;
   const currentUserId = req.user ? req.user.userId : 1;
   const currentUsername = req.user ? req.user.username : 'ADMIN';
@@ -5204,7 +5226,7 @@ app.post(samRoute('/api/push/batch'), requireRole(['ADMIN', 'HR']), async (req, 
 });
 
 // 4.14.1 ดึงรายการประวัติ Batch การส่ง
-app.get(samRoute('/api/push/batches'), async (req, res) => {
+samRouter.get(samRoute('/api/push/batches'), async (req, res) => {
   try {
     const poolAtt = getDbPool();
     await poolAtt.query(`
@@ -5247,7 +5269,7 @@ app.get(samRoute('/api/push/batches'), async (req, res) => {
 });
 
 // 4.14.2 ยกเว้นรายการสแกน (Manual Exclude)
-app.post(samRoute('/api/raw-scans/:id/exclude'), async (req, res) => {
+samRouter.post(samRoute('/api/raw-scans/:id/exclude'), async (req, res) => {
   try {
     const pool = getDbPool();
     const scanId = req.params.id;
@@ -5263,7 +5285,7 @@ app.post(samRoute('/api/raw-scans/:id/exclude'), async (req, res) => {
 });
 
 // 4.14.3 รีเฟรชข้อมูลบุคลากรจาก hosoffice.hr_person และ Map ใหม่อัตโนมัติ
-app.post(samRoute('/api/hosoffice/personnel/refresh-mapping'), async (req, res) => {
+samRouter.post(samRoute('/api/hosoffice/personnel/refresh-mapping'), async (req, res) => {
   try {
     const poolAtt = getDbPool();
     const poolHos = getHosofficePool();
@@ -5425,5 +5447,21 @@ if (require.main === module) {
   });
 }
 
+
+function createSamAttRouter(dependencies = {}) {
+  if (dependencies.dbPool) dependenciesDbPool = dependencies.dbPool;
+  if (dependencies.hosofficePool) dependenciesHosPool = dependencies.hosofficePool;
+  if (dependencies.config) Object.assign(config, dependencies.config);
+  return samRouter;
+}
+
+// Mount Sam_Att Router on standalone app (for Central Gateway / Backward-compatibility)
+app.use('/api/Sam_Att', samRouter);
+app.use('/api', samRouter);
+app.use(samRouter);
+
 module.exports = app;
+module.exports.createSamAttRouter = createSamAttRouter;
+module.exports.app = app;
+module.exports.samRouter = samRouter;
 

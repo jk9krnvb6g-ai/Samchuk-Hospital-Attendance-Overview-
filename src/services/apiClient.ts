@@ -121,7 +121,10 @@ class ApiClientService {
     error?: string;
     [key: string]: any;
   }> {
-    const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    if (this.baseUrl.endsWith('/Sam_Att') && cleanEndpoint.startsWith('/Sam_Att/')) {
+      cleanEndpoint = cleanEndpoint.slice('/Sam_Att'.length);
+    }
     const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${cleanEndpoint}`;
     const headers = this.getAuthHeaders((options.headers as Record<string, string>) || {});
 

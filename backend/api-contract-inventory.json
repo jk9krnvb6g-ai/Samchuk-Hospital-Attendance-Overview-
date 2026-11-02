@@ -1,0 +1,307 @@
+[
+  {
+    "id": 1,
+    "method": "POST",
+    "path": "/api/auth/login"
+  },
+  {
+    "id": 2,
+    "method": "GET",
+    "path": "/api/auth/me"
+  },
+  {
+    "id": 3,
+    "method": "POST",
+    "path": "/api/auth/logout"
+  },
+  {
+    "id": 4,
+    "method": "POST",
+    "path": "/api/auth/change-password"
+  },
+  {
+    "id": 5,
+    "method": "GET",
+    "path": "/api/users"
+  },
+  {
+    "id": 6,
+    "method": "POST",
+    "path": "/api/users"
+  },
+  {
+    "id": 7,
+    "method": "PUT",
+    "path": "/api/users/:id/status"
+  },
+  {
+    "id": 8,
+    "method": "POST",
+    "path": "/api/users/:id/reset-password"
+  },
+  {
+    "id": 9,
+    "method": "GET",
+    "path": "/api/health"
+  },
+  {
+    "id": 10,
+    "method": "GET",
+    "path": "/api/db/test"
+  },
+  {
+    "id": 11,
+    "method": "GET",
+    "path": "/api/db/test-hosoffice"
+  },
+  {
+    "id": 12,
+    "method": "GET",
+    "path": "/api/db/test-both"
+  },
+  {
+    "id": 13,
+    "method": "GET",
+    "path": "/api/db/overview"
+  },
+  {
+    "id": 14,
+    "method": "GET",
+    "path": "/api/db/probe"
+  },
+  {
+    "id": 15,
+    "method": "GET",
+    "path": "/api/db/probe-auth"
+  },
+  {
+    "id": 16,
+    "method": "POST",
+    "path": "/api/db/configure"
+  },
+  {
+    "id": 17,
+    "method": "POST",
+    "path": "/api/db/init"
+  },
+  {
+    "id": 18,
+    "method": "GET",
+    "path": "/api/shifts"
+  },
+  {
+    "id": 19,
+    "method": "POST",
+    "path": "/api/shifts/repair-thai"
+  },
+  {
+    "id": 20,
+    "method": "POST",
+    "path": "/api/shifts"
+  },
+  {
+    "id": 21,
+    "method": "PUT",
+    "path": "/api/shifts/:id"
+  },
+  {
+    "id": 22,
+    "method": "DELETE",
+    "path": "/api/shifts/:id"
+  },
+  {
+    "id": 23,
+    "method": "POST",
+    "path": "/api/shifts/sync-all"
+  },
+  {
+    "id": 24,
+    "method": "GET",
+    "path": "/api/personnel-types"
+  },
+  {
+    "id": 25,
+    "method": "POST",
+    "path": "/api/personnel-types"
+  },
+  {
+    "id": 26,
+    "method": "PUT",
+    "path": "/api/personnel-types/:id"
+  },
+  {
+    "id": 27,
+    "method": "DELETE",
+    "path": "/api/personnel-types/:id"
+  },
+  {
+    "id": 28,
+    "method": "POST",
+    "path": "/api/personnel-types/reset-default"
+  },
+  {
+    "id": 29,
+    "method": "POST",
+    "path": "/api/personnel-types/sync-all"
+  },
+  {
+    "id": 30,
+    "method": "GET",
+    "path": "/api/raw-scans"
+  },
+  {
+    "id": 31,
+    "method": "POST",
+    "path": "/api/raw-scans"
+  },
+  {
+    "id": 32,
+    "method": "POST",
+    "path": "/api/raw-scans/batch"
+  },
+  {
+    "id": 33,
+    "method": "GET",
+    "path": "/api/attendance"
+  },
+  {
+    "id": 34,
+    "method": "DELETE",
+    "path": "/api/attendance/daily/clear"
+  },
+  {
+    "id": 35,
+    "method": "POST",
+    "path": "/api/attendance/daily/batch"
+  },
+  {
+    "id": 36,
+    "method": "POST",
+    "path": "/api/attendance/recalculate"
+  },
+  {
+    "id": 37,
+    "method": "DELETE",
+    "path": "/api/raw-scans/:id"
+  },
+  {
+    "id": 38,
+    "method": "POST",
+    "path": "/api/raw-scans/clear-all"
+  },
+  {
+    "id": 39,
+    "method": "POST",
+    "path": "/api/raw-scans/clean-future"
+  },
+  {
+    "id": 40,
+    "method": "POST",
+    "path": "/api/raw-scans/seed-sample"
+  },
+  {
+    "id": 41,
+    "method": "GET",
+    "path": "/api/personnel"
+  },
+  {
+    "id": 42,
+    "method": "_ALL",
+    "path": "/api/personnel/sync-from-hosoffice"
+  },
+  {
+    "id": 43,
+    "method": "DELETE",
+    "path": "/api/personnel/clear"
+  },
+  {
+    "id": 44,
+    "method": "GET",
+    "path": "/api/hosoffice/personnel"
+  },
+  {
+    "id": 45,
+    "method": "POST",
+    "path": "/api/hosoffice/test-push"
+  },
+  {
+    "id": 46,
+    "method": "GET",
+    "path": "/api/scanners"
+  },
+  {
+    "id": 47,
+    "method": "POST",
+    "path": "/api/scanners/test-connection"
+  },
+  {
+    "id": 48,
+    "method": "GET",
+    "path": "/api/scanners/test-socket"
+  },
+  {
+    "id": 49,
+    "method": "POST",
+    "path": "/api/scanners/test-all"
+  },
+  {
+    "id": 50,
+    "method": "POST",
+    "path": "/api/scanners/sync"
+  },
+  {
+    "id": 51,
+    "method": "GET",
+    "path": "/api/scanners/sync-log"
+  },
+  {
+    "id": 52,
+    "method": "GET",
+    "path": "/api/scanners/sync-logs"
+  },
+  {
+    "id": 53,
+    "method": "POST",
+    "path": "/api/scanners/sync-custom"
+  },
+  {
+    "id": 54,
+    "method": "POST",
+    "path": "/api/scans/import-from-hosoffice"
+  },
+  {
+    "id": 55,
+    "method": "POST",
+    "path": "/api/scans/sync-to-raw"
+  },
+  {
+    "id": 56,
+    "method": "POST",
+    "path": "/api/attendance/seed-month"
+  },
+  {
+    "id": 57,
+    "method": "GET",
+    "path": "/api/scanners/check-dll"
+  },
+  {
+    "id": 58,
+    "method": "POST",
+    "path": "/api/push/batch"
+  },
+  {
+    "id": 59,
+    "method": "GET",
+    "path": "/api/push/batches"
+  },
+  {
+    "id": 60,
+    "method": "POST",
+    "path": "/api/raw-scans/:id/exclude"
+  },
+  {
+    "id": 61,
+    "method": "POST",
+    "path": "/api/hosoffice/personnel/refresh-mapping"
+  }
+]
