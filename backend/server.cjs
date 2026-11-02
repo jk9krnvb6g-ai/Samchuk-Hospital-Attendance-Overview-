@@ -40,6 +40,8 @@ const net = require('net');
 const mysql = require('mysql2/promise');
 const http = require('http');
 const { execFile } = require('child_process');
+const { AsyncLocalStorage } = require('async_hooks');
+const routerContextStorage = new AsyncLocalStorage();
 
 // N2: กำหนดเขตเวลา Asia/Bangkok
 process.env.TZ = process.env.TZ || 'Asia/Bangkok';
@@ -709,21 +711,30 @@ let activeDbConfig = {
 
 let hosofficeDbName = process.env.HOSOFFICE_DB || config.HosOfficeDb || 'hosoffice';
 
-// รัน auto-migration ใน background อัตโนมัติทันที
-if (process.env.AUTO_MIGRATE_ON_STARTUP === 'true') {
+// รัน auto-migration เฉพาะเมื่อรัน Standalone และได้รับอนุญาตอย่างชัดเจนเท่านั้น (ป้องกันการรันบน require/import)
+if (require.main === module && process.env.AUTO_MIGRATE_ON_STARTUP === 'true' && process.env.ALLOW_SCHEMA_MIGRATION === 'true') {
   setTimeout(() => {
     ensureTablesExist().catch(err => {
-    console.warn('[Sam_Att] Database auto-migration notice:', err.message);
+      console.warn('[Sam_Att] Database auto-migration notice:', err.message);
     });
   }, 500);
 }
 
-// Pool สำหรับ samchuk_attendance
-let dependenciesDbPool = null;
-let dependenciesHosPool = null;
+function getActiveConfig() {
+  const store = routerContextStorage.getStore();
+  if (store && store.config) {
+    return { ...config, ...store.config };
+  }
+  return config;
+}
+
+// Pool สำหรับ samchuk_attendance (Scoped via AsyncLocalStorage, no global mutation)
 let dbPool = null;
 function getDbPool() {
-  if (dependenciesDbPool) return dependenciesDbPool;
+  const store = routerContextStorage.getStore();
+  if (store && store.dbPool) {
+    return store.dbPool;
+  }
   if (!dbPool) {
     dbPool = mysql.createPool({
       host: activeDbConfig.host,
@@ -747,10 +758,13 @@ function getDbPool() {
   return dbPool;
 }
 
-// Pool สำหรับ hosoffice (ฐานข้อมูลบุคลากร HR และ fingle_scan)
+// Pool สำหรับ hosoffice (Scoped via AsyncLocalStorage, no global mutation)
 let hosofficePool = null;
 function getHosofficePool() {
-  if (dependenciesHosPool) return dependenciesHosPool;
+  const store = routerContextStorage.getStore();
+  if (store && store.hosofficePool) {
+    return store.hosofficePool;
+  }
   if (!hosofficePool) {
     const hosHost = process.env.HOSOFFICE_HOST || activeDbConfig.host;
     const hosPort = parseInt(process.env.HOSOFFICE_PORT || activeDbConfig.port, 10);
@@ -841,9 +855,30 @@ async function autoCreateDatabaseIfNotExist(dbName = activeDbConfig.database) {
 }
 
 // --------------------------------------------------------------------------
-// 2. ฟังก์ชันตรวจสอบและสร้างตารางเริ่มต้นอัตโนมัติ (Auto-Migration)
+// 2. ฟังก์ชันตรวจสอบและสร้างตารางเริ่มต้นอัตโนมัติ (Schema Migration)
 // --------------------------------------------------------------------------
-async function ensureTablesExist() {
+let tablesInitialized = false;
+
+async function ensureTablesExist(force = false) {
+  const currentConfig = getActiveConfig();
+  const isMigrationPermitted = 
+    process.env.ALLOW_SCHEMA_MIGRATION === 'true' ||
+    currentConfig.allowSchemaMigration === true ||
+    force === true;
+
+  if (!isMigrationPermitted) {
+    return {
+      success: true,
+      skipped: true,
+      tablesReady: tablesInitialized,
+      message: 'Schema migration skipped: Requires explicit permission (ALLOW_SCHEMA_MIGRATION=true or allowSchemaMigration: true in dependencies.config)'
+    };
+  }
+
+  if (tablesInitialized && !force) {
+    return { success: true, alreadyInitialized: true };
+  }
+
   await autoCreateDatabaseIfNotExist(activeDbConfig.database);
   const pool = getDbPool();
   try {
@@ -1337,9 +1372,8 @@ async function ensureTablesExist() {
 
     // ไม่ทำการลบหรือแทรกข้อมูลสแกนอัตโนมัติ เพื่อรักษาประวัติการสแกนจริงทั้งหมด (ข้อ 4)
 
-    // ไม่ทำการ Insert ข้อมูลสแกนอัตโนมัติ เพื่อให้ฐานข้อมูลเป็นไปตามสถานะจริงของผู้ใช้ (หากผู้ใช้ลบ จะต้องว่างเปล่า 0 รายการ)
-
-    return { success: true };
+    tablesInitialized = true;
+    return { success: true, migrated: true };
   } catch (err) {
     console.error('⚠️ ensureTablesExist Error:', err.message);
     return { success: false, error: err.message };
@@ -5449,10 +5483,54 @@ if (require.main === module) {
 
 
 function createSamAttRouter(dependencies = {}) {
-  if (dependencies.dbPool) dependenciesDbPool = dependencies.dbPool;
-  if (dependencies.hosofficePool) dependenciesHosPool = dependencies.hosofficePool;
-  if (dependencies.config) Object.assign(config, dependencies.config);
-  return samRouter;
+  const routerInstance = express.Router();
+
+  // Scoped context specific to this router instance (zero global mutable state)
+  const instanceContext = {
+    dbPool: dependencies.dbPool || null,
+    hosofficePool: dependencies.hosofficePool || null,
+    config: dependencies.config ? { ...dependencies.config } : {},
+    logger: dependencies.logger || null
+  };
+
+  // Scope context per request using AsyncLocalStorage
+  routerInstance.use((req, res, next) => {
+    req.samAttContext = instanceContext;
+    routerContextStorage.run(instanceContext, () => {
+      next();
+    });
+  });
+
+  // Sam_Att Route Normalization Middleware
+  routerInstance.use((req, res, next) => {
+    while (req.url.startsWith('/api/Sam_Att/') || req.url.startsWith('/api/sam_att/')) {
+      req.url = req.url.replace(/^\/api\/[sS]am_[aA]tt\//, '/');
+    }
+    if (req.url.startsWith('/api/')) {
+      req.url = req.url.slice(4);
+    }
+    if (req.url.startsWith('/Sam_Att/')) {
+      req.url = req.url.slice('/Sam_Att'.length);
+    }
+    if (!req.url.startsWith('/')) {
+      req.url = '/' + req.url;
+    }
+    if (req.url === '' || req.url === '/' || req.url === '/Sam_Att' || req.url === '/api') {
+      req.url = '/health';
+    }
+    next();
+  });
+
+  routerInstance.use(authenticateToken);
+  routerInstance.use(enforceDenyByDefault);
+
+  // Mount core Sam_Att route handlers
+  routerInstance.use(samRouter);
+
+  routerInstance.instanceContext = instanceContext;
+  routerInstance.getDependencies = () => ({ ...instanceContext });
+
+  return routerInstance;
 }
 
 // Mount Sam_Att Router on standalone app (for Central Gateway / Backward-compatibility)
@@ -5464,4 +5542,6 @@ module.exports = app;
 module.exports.createSamAttRouter = createSamAttRouter;
 module.exports.app = app;
 module.exports.samRouter = samRouter;
+module.exports.ensureTablesExist = ensureTablesExist;
+module.exports.routerContextStorage = routerContextStorage;
 

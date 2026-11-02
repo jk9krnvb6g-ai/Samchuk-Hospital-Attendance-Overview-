@@ -128,12 +128,22 @@ async function runMockGatewayTests() {
 
   gateway.use('/api/Sam_Att', samAttRouter);
 
-  // 3. เริ่มต้น Test Server บน Localhost พอร์ตชั่วคราว (3095)
-  const TEST_PORT = 3095;
+  // 3. เริ่มต้น Test Server บน Localhost พอร์ตสุ่ม (0) เพื่อความเสถียร
   const server = http.createServer(gateway);
-
-  await new Promise((resolve) => server.listen(TEST_PORT, '127.0.0.1', resolve));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const TEST_PORT = server.address().port;
   console.log(`🚀 Mock Gateway พร้อมให้บริการสำหรับการทดสอบที่: http://127.0.0.1:${TEST_PORT}\n`);
+
+  // Spying on Outbound Traffic to Ports 3003 (Procurement) and 3004 (Cash_Cheque)
+  let trafficTo3003Count = 0;
+  let trafficTo3004Count = 0;
+  const originalHttpRequest = http.request;
+  http.request = function(options, cb) {
+    const port = options && (options.port || (options.headers && options.headers.host && options.headers.host.split(':')[1]));
+    if (String(port) === '3003') trafficTo3003Count++;
+    if (String(port) === '3004') trafficTo3004Count++;
+    return originalHttpRequest.apply(this, arguments);
+  };
 
   const endpointsToTest = [
     { name: '1. Gateway Root Health Check', method: 'GET', path: '/api/Sam_Att/health', expectedStatus: 200 },
@@ -189,10 +199,84 @@ async function runMockGatewayTests() {
     console.log('');
   }
 
+  // 4. Test Isolation: Verify ZERO traffic to 3003 and 3004 during Sam_Att operations
+  console.log('🔒 ทดสอบการแยกส่วน (Isolation): ตรวจสอบการไม่รั่วไหลไปยังพอร์ต 3003 หรือ 3004');
+  if (trafficTo3003Count === 0 && trafficTo3004Count === 0) {
+    console.log(`  ✅ [PASS] Zero Traffic to Port 3003 (Procurement: ${trafficTo3003Count}) and Port 3004 (Cash_Cheque: ${trafficTo3004Count})`);
+    passed++;
+  } else {
+    console.error(`  ❌ [FAIL] Detected leakage to internal services: 3003=${trafficTo3003Count}, 3004=${trafficTo3004Count}`);
+    failed++;
+  }
+
+  // 5. Test Router Scoped Dependency Injection (Instance Isolation)
+  console.log('\n🧩 ทดสอบ Scoped Dependency Injection: Router A และ Router B ต้องแยก Pool อิสระจากกัน');
+  let poolAQueries = 0;
+  let poolBQueries = 0;
+  const poolA = { query: async () => { poolAQueries++; return [MOCK_SHIFTS]; } };
+  const poolB = { query: async () => { poolBQueries++; return [MOCK_SHIFTS]; } };
+
+  const routerA = createSamAttRouter({ dbPool: poolA });
+  const routerB = createSamAttRouter({ dbPool: poolB });
+
+  const testApp = express();
+  testApp.use('/instanceA', routerA);
+  testApp.use('/instanceB', routerB);
+
+  const testServer = http.createServer(testApp);
+  await new Promise(r => testServer.listen(0, '127.0.0.1', r));
+  const testPort = testServer.address().port;
+
+  await fetch(`http://127.0.0.1:${testPort}/instanceA/shifts`);
+  await fetch(`http://127.0.0.1:${testPort}/instanceB/shifts`);
+  testServer.close();
+
+  if (poolAQueries === 1 && poolBQueries === 1) {
+    console.log('  ✅ [PASS] Scoped DI Isolation Confirmed (Pool A = 1, Pool B = 1, ไม่มีตัวแปร Global เขียนทับ)');
+    passed++;
+  } else {
+    console.error(`  ❌ [FAIL] Scoped DI Failure: Pool A=${poolAQueries}, Pool B=${poolBQueries}`);
+    failed++;
+  }
+
+  // 6. Test Explicit Schema Migration Permission Check
+  console.log('\n🛡️ ทดสอบความปลอดภัย Schema Migration: ป้องกันการ Migrate ตารางโดยไม่ได้รับอนุญาต');
+  const { ensureTablesExist } = require('./modules/sam_att/index.cjs');
+  delete process.env.ALLOW_SCHEMA_MIGRATION;
+  const unauthMigrate = await ensureTablesExist();
+  if (unauthMigrate.skipped === true) {
+    console.log('  ✅ [PASS] ensureTablesExist() ข้ามการ DDL สำเร็จเมื่อไม่ได้รับอนุญาต (Zero Auto-DDL on Import)');
+    passed++;
+  } else {
+    console.error('  ❌ [FAIL] ensureTablesExist() executed DDL without explicit permission');
+    failed++;
+  }
+
+  // 7. Direct Test of real src/services/apiClient.ts against Central Gateway
+  console.log('\n🌐 ทดสอบการทำงานร่วมกับ src/services/apiClient.ts ของจริง (Direct TS Test)');
+  try {
+    const { apiClient } = await import('../src/services/apiClient.ts');
+    const directHealth = await apiClient.request(`http://127.0.0.1:${TEST_PORT}/api/Sam_Att/health`);
+    const directShifts = await apiClient.request(`http://127.0.0.1:${TEST_PORT}/api/Sam_Att/shifts`);
+    if (directHealth && directHealth.status === 'ONLINE' && directShifts && Array.isArray(directShifts.data)) {
+      console.log(`  ✅ [PASS] apiClient.ts เชื่อมต่อ Gateway ได้สมบูรณ์ (Health: ${directHealth.status}, Shifts: ${directShifts.data.length})`);
+      passed++;
+    } else {
+      console.error('  ❌ [FAIL] apiClient.ts direct test failed to validate response payload');
+      failed++;
+    }
+  } catch (apiErr) {
+    console.error('  ❌ [FAIL] apiClient.ts import/call error:', apiErr.message);
+    failed++;
+  }
+
+  // Restore http.request
+  http.request = originalHttpRequest;
   server.close();
 
-  console.log('================================================================');
-  console.log(`📊 สรุปผลการทดสอบ Gateway: ผ่าน ${passed} / ${endpointsToTest.length} หัวข้อ (${failed === 0 ? 'สมบูรณ์ 100%' : 'พบข้อผิดพลาด'})`);
+  const totalTests = endpointsToTest.length + 4;
+  console.log('\n================================================================');
+  console.log(`📊 สรุปผลการทดสอบ Gateway: ผ่าน ${passed} / ${totalTests} หัวข้อ (${failed === 0 ? 'สมบูรณ์ 100%' : 'พบข้อผิดพลาด'})`);
   console.log('================================================================\n');
 
   if (failed > 0) {

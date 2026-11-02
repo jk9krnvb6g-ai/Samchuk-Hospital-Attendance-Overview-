@@ -209,8 +209,13 @@ async function runPhase2CVerification() {
     next();
   });
 
-  const { samRouter } = require('./modules/sam_att/index.cjs');
-  gatewayApp.use('/api/Sam_Att', samRouter);
+  const { createSamAttRouter } = require('./modules/sam_att/index.cjs');
+  const samAttRouterInstance = createSamAttRouter({
+    dbPool: mockDbPool,
+    hosofficePool: mockHosPool,
+    config: { AttendanceDb: 'samchuk_attendance_mock', HosOfficeDb: 'hosoffice_mock' }
+  });
+  gatewayApp.use('/api/Sam_Att', samAttRouterInstance);
 
   // Catch-all 404 for Gateway
   gatewayApp.use((req, res) => {
@@ -275,45 +280,46 @@ async function runPhase2CVerification() {
   }
 
   // ---------------------------------------------------------------------------
-  // REQUIREMENT 6: Frontend API Client Simulation (/Sam_Att/api/* without duplication)
+  // REQUIREMENT 6: Real Frontend apiClient Service Integration (src/services/apiClient.ts)
   // ---------------------------------------------------------------------------
   try {
-    // Simulate apiClient URL formatting rules
-    function simulateApiClientUrl(origin, pathname, endpoint) {
-      const hasSamAtt = pathname.toLowerCase().includes('/sam_att');
-      const baseUrl = hasSamAtt ? `${origin}/Sam_Att` : origin;
-      
-      let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-      if (baseUrl.endsWith('/Sam_Att') && cleanEndpoint.startsWith('/Sam_Att/')) {
-        cleanEndpoint = cleanEndpoint.slice('/Sam_Att'.length);
-      }
-      return `${baseUrl}${cleanEndpoint}`;
-    }
+    const { apiClient, resolveDefaultApiUrl } = await import('../src/services/apiClient.ts');
+    
+    // 1. Verify resolveDefaultApiUrl
+    const resolvedUrl = resolveDefaultApiUrl();
+    const isUrlValid = typeof resolvedUrl === 'string' && resolvedUrl.length > 0;
 
-    const testOrigin = 'https://10.2.0.13:3001';
-    const testPathname = '/Sam_Att/';
+    // 2. Test real apiClient.request against live In-Process Test Harness
+    const healthResult = await apiClient.request(`http://127.0.0.1:${assignedPort}/api/Sam_Att/health`);
+    const healthOk = healthResult && healthResult.status === 'ONLINE';
 
-    const test1 = simulateApiClientUrl(testOrigin, testPathname, 'api/shifts');
-    const test2 = simulateApiClientUrl(testOrigin, testPathname, '/api/shifts');
-    const test3 = simulateApiClientUrl(testOrigin, testPathname, '/Sam_Att/api/shifts');
-    const test4 = simulateApiClientUrl(testOrigin, testPathname, 'shifts');
+    // 3. Test real apiClient.request for shifts
+    const shiftsResult = await apiClient.request(`http://127.0.0.1:${assignedPort}/api/Sam_Att/shifts`);
+    const shiftsOk = shiftsResult && shiftsResult.success === true && Array.isArray(shiftsResult.data);
 
-    const expectedStandardUrl = 'https://10.2.0.13:3001/Sam_Att/api/shifts';
-    const noDuplicates = 
-      test1 === expectedStandardUrl &&
-      test2 === expectedStandardUrl &&
-      test3 === expectedStandardUrl &&
-      !test3.includes('/Sam_Att/Sam_Att');
+    // 4. Test real auth header formatting and session token handling
+    apiClient.setAuthToken('mock_test_token_123');
+    const authHeaders = apiClient.getAuthHeaders();
+    const hasBearer = authHeaders['Authorization'] === 'Bearer mock_test_token_123';
+    apiClient.setAuthToken(null); // clean up
 
-    recordResult(6, 'Frontend API Client URL Resolution & De-duplication', noDuplicates, {
-      input1_api_shifts: test1,
-      input2_slash_api_shifts: test2,
-      input3_duplicate_prefix: test3,
-      hasDuplicateSamAtt: test3.includes('/Sam_Att/Sam_Att'),
-      resolvedCleanly: noDuplicates
+    // 5. Test 404 response handling in real apiClient
+    const notFoundResult = await apiClient.request(`http://127.0.0.1:${assignedPort}/api/Sam_Att/unknown-api-endpoint`);
+    const notFoundHandled = notFoundResult && notFoundResult.success === false && notFoundResult.status === 404;
+
+    const allClientTestsPass = isUrlValid && healthOk && shiftsOk && hasBearer && notFoundHandled;
+
+    recordResult(6, 'Direct Test of src/services/apiClient.ts (No Mock URLs)', allClientTestsPass, {
+      realApiClientImported: true,
+      resolvedDefaultApiUrl: resolvedUrl,
+      healthEndpointViaApiClient: healthResult?.status || 'FAILED',
+      shiftsEndpointViaApiClient: shiftsResult?.data ? `${shiftsResult.data.length} shifts` : 'FAILED',
+      bearerAuthHeaderGenerated: hasBearer,
+      client404Handling: notFoundResult?.error || notFoundResult?.status,
+      testedAgainstRealTSModule: true
     });
   } catch (err) {
-    recordResult(6, 'Frontend API Client URL Resolution', false, { error: err.message });
+    recordResult(6, 'Direct Test of src/services/apiClient.ts', false, { error: err.message });
   }
 
   // ---------------------------------------------------------------------------

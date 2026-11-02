@@ -11,9 +11,10 @@
  * 4. รักษา API Contract เดิมทั้งหมด 100%
  */
 
-const { createSamAttRouter, samRouter } = require('../../server.cjs');
+const { createSamAttRouter, samRouter, ensureTablesExist } = require('../../server.cjs');
 
 module.exports = {
   createSamAttRouter,
-  samRouter
+  samRouter,
+  ensureTablesExist
 };
