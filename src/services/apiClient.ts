@@ -125,6 +125,12 @@ class ApiClientService {
     if (this.baseUrl.endsWith('/Sam_Att') && cleanEndpoint.startsWith('/Sam_Att/')) {
       cleanEndpoint = cleanEndpoint.slice('/Sam_Att'.length);
     }
+    while (cleanEndpoint.startsWith('/api/api/')) {
+      cleanEndpoint = cleanEndpoint.replace(/^\/api\/api\//, '/api/');
+    }
+    if (!cleanEndpoint.startsWith('/api/') && !cleanEndpoint.startsWith('http')) {
+      cleanEndpoint = '/api/' + cleanEndpoint.replace(/^\/+/, '');
+    }
     const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${cleanEndpoint}`;
     const headers = this.getAuthHeaders((options.headers as Record<string, string>) || {});
 
@@ -140,15 +146,23 @@ class ApiClientService {
       const contentType = res.headers.get('content-type') || '';
       const text = await res.text();
 
-      // ตรวจสอบว่าเป็น HTML Error Page หรือไม่
+      // ตรวจสอบว่าเป็น HTML Error Page หรือไม่ (ป้องกัน SyntaxError: Unexpected token '<')
       if (contentType.includes('text/html') || text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
         let msg = `เซิร์ฟเวอร์ส่งกลับหน้า HTML (HTTP ${res.status})`;
-        if (res.status === 405) {
+        if (res.status === 401) {
+          msg = `เซิร์ฟเวอร์แจ้ง HTTP 401 (Unauthorized): กรุณาเข้าสู่ระบบก่อนใช้งาน`;
+        } else if (res.status === 403) {
+          msg = `เซิร์ฟเวอร์แจ้ง HTTP 403 (Forbidden): ปฏิเสธการเข้าถึง ไม่มีสิทธิ์ใช้งานฟังก์ชันนี้`;
+        } else if (res.status === 404) {
+          msg = `เซิร์ฟเวอร์แจ้ง HTTP 404 (Not Found) บนเส้นทาง ${cleanEndpoint}: กรุณาตรวจสอบการตั้งค่า URL Rewrite และ Gateway Route`;
+        } else if (res.status === 405) {
           msg = `เซิร์ฟเวอร์แจ้ง HTTP 405 (Method Not Allowed) บนเส้นทาง ${cleanEndpoint}: กรุณาตรวจสอบการตั้งค่า URL Rewrite และ HTTP Verbs บน IIS`;
         } else if (res.status === 406) {
           msg = `เซิร์ฟเวอร์แจ้ง HTTP 406 (Not Acceptable): ปลายทางไม่สามารถส่งผลลัพธ์แบบ JSON ได้`;
+        } else if (res.status === 500) {
+          msg = `เซิร์ฟเวอร์แจ้ง HTTP 500 (Internal Server Error): Backend มีข้อผิดพลาดภายใน`;
         } else if (res.status === 502 || res.status === 503) {
-          msg = `เซิร์ฟเวอร์แจ้ง HTTP ${res.status}: ไม่สามารถเชื่อมต่อ Shared Backend API พอร์ต 3002 ได้ (กรุณาตรวจสอบว่า Backend รันอยู่หรือไม่)`;
+          msg = `เซิร์ฟเวอร์แจ้ง HTTP ${res.status}: ไม่สามารถเชื่อมต่อ Shared Backend API Gateway ได้ (กรุณาตรวจสอบว่า Backend รันอยู่หรือไม่)`;
         }
         return {
           success: false,
@@ -186,12 +200,20 @@ class ApiClientService {
       return {
         success: false,
         error: 'NETWORK_ERROR',
-        message: `ไม่สามารถเชื่อมต่อ Shared Backend API พอร์ต 3002 (${errorMsg})`
+        message: `ไม่สามารถเชื่อมต่อ Shared Backend API Gateway (${errorMsg})`
       };
     }
   }
 
-  public async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+  public async fetchWithAuth(endpointOrUrl: string, options: RequestInit = {}): Promise<Response> {
+    let cleanEndpoint = endpointOrUrl.startsWith('/') ? endpointOrUrl : `/${endpointOrUrl}`;
+    if (this.baseUrl.endsWith('/Sam_Att') && cleanEndpoint.startsWith('/Sam_Att/')) {
+      cleanEndpoint = cleanEndpoint.slice('/Sam_Att'.length);
+    }
+    while (cleanEndpoint.startsWith('/api/api/')) {
+      cleanEndpoint = cleanEndpoint.replace(/^\/api\/api\//, '/api/');
+    }
+    const url = endpointOrUrl.startsWith('http') ? endpointOrUrl : `${this.baseUrl}${cleanEndpoint}`;
     const customHeaders: Record<string, string> = (options.headers as Record<string, string>) || {};
     const mergedHeaders = this.getAuthHeaders(customHeaders);
     return fetch(url, { ...options, headers: mergedHeaders });
@@ -245,35 +267,34 @@ class ApiClientService {
   }
 
   /**
-   * ตรวจสอบสถานะการเชื่อมต่อ Shared Backend API พอร์ต 3002
+   * ตรวจสอบสถานะการเชื่อมต่อ Shared Backend API Gateway
    */
   public async checkHealth(): Promise<{ online: boolean; latencyMs: number; data?: ApiHealthResponse; error?: string }> {
     const start = performance.now();
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(`${this.baseUrl}/api/health`, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal
+      const res = await this.request<ApiHealthResponse>('/api/health', {
+        method: 'GET'
       });
-      clearTimeout(timeoutId);
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && !contentType.includes('text/html')) {
-        const data: ApiHealthResponse = await res.json();
-        const elapsed = Math.round(performance.now() - start);
+      const elapsed = Math.round(performance.now() - start);
+      if (res.success && res.data) {
         this.lastPingMs = elapsed;
         this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
         this.isOnline = true;
         this.notify();
-        return { online: true, latencyMs: elapsed, data };
+        return { online: true, latencyMs: elapsed, data: res.data };
       }
-      const elapsed = Math.round(performance.now() - start);
+      if (res.status === 'ONLINE' || (res as any).service) {
+        this.lastPingMs = elapsed;
+        this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
+        this.isOnline = true;
+        this.notify();
+        return { online: true, latencyMs: elapsed, data: res as any };
+      }
       this.isOnline = false;
       this.lastPingMs = elapsed;
       this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
       this.notify();
-      return { online: false, latencyMs: elapsed, error: `Backend HTTP ${res.status}` };
+      return { online: false, latencyMs: elapsed, error: res.message || `Backend HTTP ${res.status}` };
     } catch (err: unknown) {
       const elapsed = Math.round(performance.now() - start);
       this.isOnline = false;
@@ -285,185 +306,78 @@ class ApiClientService {
   }
 
   /**
-   * ส่ง Batch ไปยัง API พอร์ต 3002 (POST /api/push/batch)
+   * ส่ง Batch ไปยัง API (POST /api/push/batch)
    */
   public async pushBatch(payload: ApiPushBatchPayload): Promise<ApiPushBatchResponse> {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-      const res = await fetch(`${this.customBaseUrl}/api/push/batch`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`API Error (${res.status}): ${errorText || res.statusText}`);
-      }
-
-      const data: ApiPushBatchResponse = await res.json();
-      return data;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการเชื่อมต่อ API :3002';
-      throw new Error(msg);
-    }
+    const res = await this.request<ApiPushBatchResponse>('/api/push/batch', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    return res as ApiPushBatchResponse;
   }
 
   /**
-   * สั่งเครื่องสแกนดึงข้อมูลทันทีผ่านพอร์ต 3002
+   * สั่งเครื่องสแกนดึงข้อมูลทันทีผ่าน Gateway
    */
   public async testScannerSocket(ip: string, port: number = 5005) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/scanners/test-socket?ip=${encodeURIComponent(ip)}&port=${port}`);
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        reachable: false,
-        ip,
-        port,
-        error: err instanceof Error ? err.message : 'Connection failed'
-      };
-    }
+    return this.request(`/api/scanners/test-socket?ip=${encodeURIComponent(ip)}&port=${port}`, {
+      method: 'GET'
+    });
   }
 
   /**
    * ทดสอบเชื่อมต่อเครื่องสแกนผ่าน POST /api/scanners/test-connection
    */
   public async testScannerConnection(req: { machineNo: number; ipAddress: string; port?: number; license?: number }) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/scanners/test-connection`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          machineNo: req.machineNo,
-          ipAddress: req.ipAddress,
-          port: req.port || 5005,
-          license: req.license || 1261,
-          timeoutMs: 3000
-        })
-      });
-
-      const rawText = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        return {
-          success: false,
-          ipAddress: req.ipAddress,
-          port: req.port || 5005,
-          message: `Backend พอร์ต 3002 ตอบกลับ Status ${res.status} (ยังไม่ได้ลงทะเบียน Route /api/scanners/test-connection ใน Backend Service)`
-        };
-      }
-
-      if (!res.ok) {
-        return {
-          success: false,
-          ipAddress: req.ipAddress,
-          port: req.port || 5005,
-          message: data?.message || `Backend ส่งรหัสผิดพลาด (${res.status})`
-        };
-      }
-
-      return data;
-    } catch (err: unknown) {
-      return {
-        success: false,
+    return this.request('/api/scanners/test-connection', {
+      method: 'POST',
+      body: JSON.stringify({
+        machineNo: req.machineNo,
         ipAddress: req.ipAddress,
         port: req.port || 5005,
-        message: (err instanceof Error && err.message !== 'Failed to fetch')
-          ? err.message
-          : `ไม่สามารถติดต่อ Backend API ที่ ${this.customBaseUrl} ได้ (กรุณาตรวจสอบว่า Service พอร์ต 3002 เปิดรันอยู่หรือไม่)`
-      };
-    }
+        license: req.license || 1261,
+        timeoutMs: 3000
+      })
+    });
   }
 
   /**
    * ทดสอบทุกเครื่องพร้อมกันผ่าน POST /api/scanners/test-all
    */
   public async testAllScanners(scanners: Array<{ machineNo: number; ipAddress: string; port?: number; license?: number }>) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/scanners/test-all`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(scanners)
-      });
-
-      const rawText = await res.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        return {
-          success: false,
-          message: `Backend พอร์ต 3002 ตอบกลับ Status ${res.status} (ยังไม่มี Route /api/scanners/test-all)`
-        };
-      }
-
-      return data;
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: (err instanceof Error && err.message !== 'Failed to fetch')
-          ? err.message
-          : `ไม่สามารถติดต่อ Backend API ที่ ${this.customBaseUrl} ได้`
-      };
-    }
+    return this.request('/api/scanners/test-all', {
+      method: 'POST',
+      body: JSON.stringify(scanners)
+    });
   }
 
   /**
    * สั่งให้ Backend ดึงข้อมูลสแกนจริงจากเครื่องสแกนผ่าน Reader CLI (N1, N2, N5)
    */
   public async syncFromScanners(machineNo?: number, options?: { auto?: boolean; days?: number; preview?: boolean }) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/scanners/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          machineNo,
-          auto: machineNo ? false : (options?.auto !== false),
-          days: options?.days || 3,
-          preview: options?.preview || false
-        })
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: err instanceof Error ? err.message : 'Sync failed'
-      };
-    }
+    return this.request('/api/scanners/sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        machineNo,
+        auto: machineNo ? false : (options?.auto !== false),
+        days: options?.days || 3,
+        preview: options?.preview || false
+      })
+    });
   }
 
   /**
    * ดึงสถานะการซิงค์ล่าสุดของแต่ละเครื่อง (N4)
    */
   public async getScannerSyncLog() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/scanners/sync-log`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed to fetch sync log' };
-    }
+    return this.request('/api/scanners/sync-log', { method: 'GET' });
   }
 
   /**
    * ดึงประวัติการซิงค์ย้อนหลัง (N4)
    */
   public async getScannerSyncLogs(limit: number = 30) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/scanners/sync-logs?limit=${limit}`);
-      return await res.json();
-    } catch (err: unknown) {
-      return { success: false, message: err instanceof Error ? err.message : 'Failed to fetch sync logs' };
-    }
+    return this.request(`/api/scanners/sync-logs?limit=${limit}`, { method: 'GET' });
   }
 
   /**
@@ -477,39 +391,21 @@ class ApiClientService {
     year?: string;
     mode?: string;
   }) {
-    try {
-      const payload = typeof params === 'string' ? { date: params } : (params || {});
-      const res = await fetch(`${this.customBaseUrl}/api/attendance/recalculate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: err instanceof Error ? err.message : 'Recalculate failed'
-      };
-    }
+    const payload = typeof params === 'string' ? { date: params } : (params || {});
+    return this.request('/api/attendance/recalculate', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
   }
 
   /**
    * สั่งให้ Backend สร้างและบันทึกประวัติการสแกนนิ้วประจำเดือน (ปกติ/สาย/ออกก่อน) สำหรับบุคลากรทุกคน
    */
   public async seedMonthAttendance(month: string = '2026-10', days: number = 14) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/attendance/seed-month`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ month, days })
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: this.getFriendlyFetchError(err, 'Backend API (Seed Month)')
-      };
-    }
+    return this.request('/api/attendance/seed-month', {
+      method: 'POST',
+      body: JSON.stringify({ month, days })
+    });
   }
 
   /**
@@ -524,20 +420,11 @@ class ApiClientService {
     strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
     preview?: boolean;
   } = 5000) {
-    try {
-      const payload = typeof options === 'number' ? { limit: options } : options;
-      const res = await fetch(`${this.customBaseUrl}/api/scans/import-from-hosoffice`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: this.getFriendlyFetchError(err, 'Backend API (Hosoffice Import)')
-      };
-    }
+    const payload = typeof options === 'number' ? { limit: options } : options;
+    return this.request('/api/scans/import-from-hosoffice', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
   }
 
   /**
@@ -556,88 +443,57 @@ class ApiClientService {
     strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE';
     preview?: boolean;
   }) {
-    try {
-      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/scanners/sync-custom`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const text = await res.text();
-      try {
-        return JSON.parse(text);
-      } catch {
-        return {
-          success: false,
-          message: `เซิร์ฟเวอร์ส่งผลลัพธ์ไม่ถูกต้อง (HTTP ${res.status}): ${text.slice(0, 150)}`
-        };
-      }
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: this.getFriendlyFetchError(err, 'Backend API (Custom Scanner Sync)')
-      };
-    }
+    return this.request('/api/scanners/sync-custom', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
   }
 
   /**
    * ซิงค์ข้อมูลจาก hosoffice.fingle_scan เข้าสู่ attendance_raw_scan ใน samchuk_attendance โดยตรง
    */
   public async syncHosofficeToRawScan(payload?: { dates?: string[]; dateFrom?: string; dateTo?: string; strategy?: 'SKIP_DUPLICATES' | 'OVERWRITE' }) {
-    try {
-      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/scans/sync-to-raw`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {})
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: this.getFriendlyFetchError(err, 'Backend API (Sync to Raw)')
-      };
-    }
+    return this.request('/api/scans/sync-to-raw', {
+      method: 'POST',
+      body: JSON.stringify(payload || {})
+    });
   }
 
   /**
    * ข้อมูลสรุปภาพรวมฐานข้อมูลทั้งหมดในระบบ (Dual Database Overview)
    */
   public async getDatabaseOverview() {
-    try {
-      const res = await this.fetchWithAuth(`${this.customBaseUrl}/api/db/overview`);
-      return await res.json();
-    } catch {
-      return {
-        success: true,
-        totalDatabases: 2,
-        databases: [
-          {
-            id: 1,
-            name: 'samchuk_attendance',
-            role: 'ฐานข้อมูลระบบลงเวลาและตารางเวร (Dedicated Attendance DB)',
-            description: 'จัดเก็บสแกนดิบ, ตารางกะ, และผลการคำนวณเวลาเข้า-ออก แยกอิสระเพื่อความเร็วและปลอดภัย'
-          },
-          {
-            id: 2,
-            name: 'hosoffice',
-            role: 'ฐานข้อมูลระบบโรงพยาบาล HOSxP / HosOffice (HR Master DB)',
-            description: 'จัดเก็บข้อมูลบุคลากรทั้งโรงพยาบาล, กลุ่มงาน, ตำแหน่ง, และตารางสแกนเดิม fingle_scan'
-          }
-        ]
-      };
+    const res = await this.request('/api/db/overview', { method: 'GET' });
+    if (res && res.success && res.databases) {
+      return res;
     }
+    return {
+      success: true,
+      totalDatabases: 2,
+      databases: [
+        {
+          id: 1,
+          name: 'samchuk_attendance',
+          role: 'ฐานข้อมูลระบบลงเวลาและตารางเวร (Dedicated Attendance DB)',
+          description: 'จัดเก็บสแกนดิบ, ตารางกะ, และผลการคำนวณเวลาเข้า-ออก แยกอิสระเพื่อความเร็วและปลอดภัย'
+        },
+        {
+          id: 2,
+          name: 'hosoffice',
+          role: 'ฐานข้อมูลระบบโรงพยาบาล HOSxP / HosOffice (HR Master DB)',
+          description: 'จัดเก็บข้อมูลบุคลากรทั้งโรงพยาบาล, กลุ่มงาน, ตำแหน่ง, และตารางสแกนเดิม fingle_scan'
+        }
+      ]
+    };
   }
 
   private getFriendlyFetchError(err: unknown, serviceName: string = 'Backend API'): string {
     const rawMsg = err instanceof Error ? err.message : 'Failed';
-    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
     if (rawMsg.includes("Unexpected token '<'") || rawMsg.includes("<!DOCTYPE")) {
-      return `ไม่สามารถติดต่อ ${serviceName} ได้ เนื่องจากเซิร์ฟเวอร์ส่งกลับเป็นหน้าเว็บ Error HTML แทนข้อมูล JSON (เกิดจาก CORS Denied หรือ Backend มีข้อผิดพลาด) -> กรุณาอัปเดตไฟล์ backend/server.cjs เป็นเวอร์ชันล่าสุดบน Server`;
+      return `ไม่สามารถติดต่อ ${serviceName} ได้ เนื่องจากเซิร์ฟเวอร์ส่งกลับเป็นหน้าเว็บ Error HTML แทนข้อมูล JSON -> กรุณาตรวจสอบการตั้งค่า URL Rewrite บน IIS และสถานะของ Backend Gateway`;
     }
     if (rawMsg.toLowerCase().includes('failed to fetch') || rawMsg.toLowerCase().includes('networkerror')) {
-      if (isHttps) {
-        return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (เกิดจากบราวเซอร์บล็อก Mixed Content เพราะเข้าเว็บด้วย HTTPS) -> กรุณาเปลี่ยน URL หน้าเว็บเป็น http://10.2.0.13:3001/Sam_Att/ (ใช้ http:// แทน https://)`;
-      }
-      return `ไม่สามารถติดต่อ ${serviceName} พอร์ต 3002 ได้ (${rawMsg}) -> กรุณาตรวจสอบว่าได้รัน Backend Gateway พอร์ต 3002 บนเซิร์ฟเวอร์แล้วหรือไม่ และ Windows Firewall เปิดพอร์ต 3002 หรือยัง`;
+      return `ไม่สามารถติดต่อ ${serviceName} ได้ (${rawMsg}) -> กรุณาตรวจสอบว่า Shared Backend API Gateway กำลังให้บริการอยู่หรือไม่`;
     }
     return `ไม่สามารถติดต่อ ${serviceName} ได้ (${rawMsg})`;
   }
@@ -646,100 +502,49 @@ class ApiClientService {
    * ทดสอบการเชื่อมต่อฐานข้อมูล MySQL samchuk_attendance ผ่าน Backend API
    */
   public async testDatabaseConnection() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/db/test`);
-      const data = await res.json();
-      return data;
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: this.getFriendlyFetchError(err, 'Backend API (samchuk_attendance)')
-      };
-    }
+    return this.request('/api/db/test', { method: 'GET' });
   }
 
   /**
    * ทดสอบการเชื่อมต่อฐานข้อมูล hosoffice ผ่าน Backend API
    */
   public async testHosofficeDatabase() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/db/test-hosoffice`);
-      const data = await res.json();
-      return data;
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: this.getFriendlyFetchError(err, 'Backend API (hosoffice)')
-      };
-    }
+    return this.request('/api/db/test-hosoffice', { method: 'GET' });
   }
 
   /**
    * ทดสอบการเชื่อมต่อทั้ง 2 ฐานข้อมูลพร้อมกัน (Dual DB Test)
    */
   public async testBothDatabases() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/db/test-both`);
-      const data = await res.json();
-      return data;
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: this.getFriendlyFetchError(err, 'Backend API')
-      };
-    }
+    return this.request('/api/db/test-both', { method: 'GET' });
   }
 
   /**
    * สแกนทดสอบบัญชีผู้ใช้ MySQL ทั่วไปอัตโนมัติ (Credentials Diagnostic)
    */
   public async quickProbeAuth(host?: string, port?: number) {
-    try {
-      const q = new URLSearchParams();
-      if (host) q.append('host', host);
-      if (port) q.append('port', port.toString());
-      const res = await fetch(`${this.customBaseUrl}/api/db/probe-auth?${q.toString()}`);
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: `ไม่สามารถติดต่อ Backend API เพื่อสแกนบัญชีผู้ใช้ได้ (${err instanceof Error ? err.message : 'Failed'})`
-      };
-    }
+    const q = new URLSearchParams();
+    if (host) q.append('host', host);
+    if (port) q.append('port', port.toString());
+    const query = q.toString() ? `?${q.toString()}` : '';
+    return this.request(`/api/db/probe-auth${query}`, { method: 'GET' });
   }
 
   /**
    * ปรับแต่งการตั้งค่าการเชื่อมต่อ MySQL บนเซิร์ฟเวอร์ Backend และบันทึก
    */
   public async configureDatabase(payload: { host: string; port?: number; user?: string; password?: string; database?: string; hosofficeDb?: string }) {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/db/configure`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: `ส่งการตั้งค่าไปยัง Backend ไม่สำเร็จ (${err instanceof Error ? err.message : 'Failed'})`
-      };
-    }
+    return this.request('/api/db/configure', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
   }
 
   /**
    * สั่งให้ Backend สร้างโครงสร้างตาราง samchuk_attendance ลงใน MySQL อัตโนมัติ
    */
   public async initDatabaseTables() {
-    try {
-      const res = await fetch(`${this.customBaseUrl}/api/db/init`, { method: 'POST' });
-      return await res.json();
-    } catch (err: unknown) {
-      return {
-        success: false,
-        message: `สั่งสร้างตารางไม่สำเร็จ: ${err instanceof Error ? err.message : 'Failed'}`
-      };
-    }
+    return this.request('/api/db/init', { method: 'POST' });
   }
 
   /**

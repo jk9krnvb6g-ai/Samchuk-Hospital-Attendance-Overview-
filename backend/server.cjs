@@ -176,16 +176,21 @@ function createSession(user) {
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : null;
   
-  if (token && activeSessions.has(token)) {
-    const session = activeSessions.get(token);
-    if (Date.now() > session.expiresAt) {
-      activeSessions.delete(token);
-      return res.status(401).json({ success: false, error: 'TOKEN_EXPIRED', message: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่' });
+  if (token) {
+    if (activeSessions.has(token)) {
+      const session = activeSessions.get(token);
+      if (Date.now() > session.expiresAt) {
+        activeSessions.delete(token);
+        return res.status(401).json({ success: false, error: 'TOKEN_EXPIRED', message: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่' });
+      }
+      req.user = session;
+      return next();
+    } else {
+      // มีการส่ง Token แต่ไม่ถูกต้องหรือไม่มีในระบบ (Invalid Token)
+      return res.status(401).json({ success: false, error: 'INVALID_TOKEN', message: 'Token ไม่ถูกต้องหรือเซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่' });
     }
-    req.user = session;
-    return next();
   }
 
   // P0.3: ยกเลิก x-admin-key login bypass ใน authenticateToken โดยเด็ดขาด
@@ -195,22 +200,47 @@ function authenticateToken(req, res, next) {
 
 app.use(authenticateToken);
 
-// P0.2: Deny-by-default Authentication Enforcer สำหรับทุก /api/*
+// ฟังก์ชันสกัดเส้นทาง API มาตรฐาน (Canonical Path) เพื่อป้องกันปัญหา URL Normalization Bypass
+function extractCanonicalApiPath(req) {
+  const raw = (req.originalUrl || req.url || req.path || '').split('?')[0];
+  let p = raw;
+  while (p.startsWith('/api/Sam_Att/') || p.startsWith('/api/sam_att/')) {
+    p = p.replace(/^\/api\/[sS]am_[aA]tt\//, '/');
+  }
+  if (p.startsWith('/Sam_Att/')) {
+    p = p.slice('/Sam_Att'.length);
+  }
+  while (p.startsWith('/api/')) {
+    p = p.slice(4);
+  }
+  if (!p.startsWith('/')) {
+    p = '/' + p;
+  }
+  if (p === '' || p === '/' || p === '/Sam_Att' || p === '/api') {
+    return '/health';
+  }
+  return p;
+}
+
+// P0.2: Deny-by-default Authentication Enforcer สำหรับทุก Protected API Routes
 function enforceDenyByDefault(req, res, next) {
-  // ไม่บังคับกับ Non-API หรือ Root Gateway Proxy
-  if (!req.path.startsWith('/api')) {
+  const canonicalPath = extractCanonicalApiPath(req);
+
+  // Whitelist สาธารณะเฉพาะกิจ (Public Endpoints): Login, Health, Status, Scanners Ping
+  const publicPaths = [
+    '/health',
+    '/status',
+    '/auth/login',
+    '/scanners/ping'
+  ];
+
+  if (publicPaths.some(p => canonicalPath === p || canonicalPath.startsWith(p + '/'))) {
     return next();
   }
 
-  // Whitelist สาธารณะเฉพาะกิจ (P0.2)
-  const publicPaths = [
-    '/api/auth/login',
-    '/api/health',
-    '/api/status',
-    '/api/scanners/ping'
-  ];
-
-  if (publicPaths.some(p => req.path === p || req.path.startsWith(p + '/'))) {
+  // ยกเว้นคำขอไฟล์ Static บน Standalone Express App (ที่ไม่ใช่คำขอ API ของ Sam_Att)
+  const isStandaloneStatic = !req.baseUrl && !req.originalUrl?.includes('/api') && !req.originalUrl?.toLowerCase().includes('sam_att') && (req.path === '/' || req.path === '/index.html' || req.path.startsWith('/assets/'));
+  if (isStandaloneStatic) {
     return next();
   }
 
@@ -220,16 +250,14 @@ function enforceDenyByDefault(req, res, next) {
     serviceToken && 
     process.env.SCANNER_SERVICE_TOKEN && 
     serviceToken === process.env.SCANNER_SERVICE_TOKEN &&
-    (req.path === '/api/raw-scans' || req.path === '/api/raw-scans/batch') &&
+    (canonicalPath === '/raw-scans' || canonicalPath === '/raw-scans/batch') &&
     req.method === 'POST'
   ) {
     req.user = { userId: 0, username: 'scanner_service', fullname: 'Scanner Ingestion Service', role: 'SERVICE' };
     return next();
   }
 
-  // สำหรับการใช้งานภายในโรงพยาบาล (Intranet / Localhost / Gateway 3002)
-  // หากไม่มี Bearer Token ส่งมา แต่คำขอมาจากเครือข่ายภายในโรงพยาบาลที่ผ่าน CORS แล้ว
-  // กำหนดสิทธิ์ Admin ภายในโรงพยาบาลอัตโนมัติ เพื่อให้หน้าเว็บเดิมใช้งานได้ทันที (เว้นแต่ตั้งค่า REQUIRE_STRICT_AUTH=true ใน .env)
+  // ตรวจสอบสิทธิ์สำหรับ Protected API Routes ทั้งหมด:
   if (!req.user) {
     if (process.env.REQUIRE_STRICT_AUTH === 'true') {
       return res.status(401).json({
@@ -239,6 +267,8 @@ function enforceDenyByDefault(req, res, next) {
       });
     }
 
+    // สำหรับการใช้งานภายในโรงพยาบาล (Intranet / Localhost Legacy Fallback)
+    // เฉพาะกรณีที่ยังไม่ได้เปิดใช้งาน REQUIRE_STRICT_AUTH=true ในไฟล์ .env
     req.user = {
       userId: 1,
       username: 'admin',
@@ -262,7 +292,7 @@ samRouter.use((req, res, next) => {
   while (req.url.startsWith('/api/Sam_Att/') || req.url.startsWith('/api/sam_att/')) {
     req.url = req.url.replace(/^\/api\/[sS]am_[aA]tt\//, '/');
   }
-  if (req.url.startsWith('/api/')) {
+  while (req.url.startsWith('/api/')) {
     req.url = req.url.slice(4);
   }
   if (req.url.startsWith('/Sam_Att/')) {
@@ -5506,7 +5536,7 @@ function createSamAttRouter(dependencies = {}) {
     while (req.url.startsWith('/api/Sam_Att/') || req.url.startsWith('/api/sam_att/')) {
       req.url = req.url.replace(/^\/api\/[sS]am_[aA]tt\//, '/');
     }
-    if (req.url.startsWith('/api/')) {
+    while (req.url.startsWith('/api/')) {
       req.url = req.url.slice(4);
     }
     if (req.url.startsWith('/Sam_Att/')) {
