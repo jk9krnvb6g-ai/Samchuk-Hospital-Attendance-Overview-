@@ -1,0 +1,49 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { execFile } = require('node:child_process');
+const source = fs.readFileSync(path.join(__dirname, '../server.cjs'), 'utf8');
+const begin = source.indexOf('function executeScannerReaderCli');
+const end = source.indexOf('\nfunction ', begin + 1);
+function reader(script) {
+  let seen;
+  const ctx = vm.createContext({ console: { log(){}, warn(){}, error(){} }, fs: { existsSync: () => true }, path, process,
+    getScannerReaderExePath: () => process.execPath,
+    execFile: (_exe, args, options, callback) => { seen = { args, options }; return execFile(process.execPath, ['-e', script], options, callback); }
+  });
+  vm.runInContext(source.slice(begin, end), ctx);
+  return { run: args => ctx.executeScannerReaderCli(args), seen: () => seen };
+}
+test('real child process: 20,000 pretty JSON scans survive stdout parsing', async () => {
+  const h = reader(`const scan={machineNo:1,enrollNumber:'12',scanDateTime:'2026-11-03 08:15:00',verifyMode:268435456,inOutMode:1,workCode:null}; console.log('diagnostic'); console.log(JSON.stringify({success:true,machines:[{machineNo:1,ip:'192.0.2.1',success:true}],scans:Array(20000).fill(scan)},null,2));`);
+  const result = await h.run({ days: 400, machine: 3, preview: true });
+  assert.equal(result.success, true); assert.equal(result.scans.length, 20000); assert.equal(result.scans[0].workCode, null);
+  assert.equal(result.scans[0].verifyMode, 268435456); assert.equal(result.scans[0].scanDateTime, '2026-11-03 08:15:00');
+  assert.ok(h.seen().args.includes('--days')); assert.ok(h.seen().args.includes('400')); assert.ok(h.seen().args.includes('--preview'));
+  assert.ok(!h.seen().args.includes('--date-from')); assert.ok(!h.seen().args.includes('--date-to'));
+});
+test('real child process: stdout above 25 MiB fails explicitly without partial scans', async () => {
+  const h = reader(`process.stdout.write(JSON.stringify({success:true,machines:[],scans:[],padding:'x'.repeat(26*1024*1024)}));`);
+  const result = await h.run(); assert.equal(result.success, false); assert.match(result.error, /maxBuffer/i);
+  assert.equal(result.scans, undefined); assert.equal(h.seen().options.maxBuffer, 25 * 1024 * 1024);
+});
+test('raw GET reports DB failure as HTTP 503 instead of successful empty refresh', async () => {
+  let handler;
+  const a = source.indexOf("samRouter.get(samRoute('/api/raw-scans'),");
+  const b = source.indexOf("samRouter.post(samRoute('/api/raw-scans'),", a);
+  const ctx = vm.createContext({ console: { warn(){} }, samRoute: x => x, samRouter: { get: (_path, fn) => handler = fn }, getDbPool: () => ({ query: async () => { throw new Error('fixture DB unavailable'); } }) });
+  vm.runInContext(source.slice(a,b), ctx);
+  const res = { code: 200, status(n) { this.code = n; return this; }, json(body) { this.body = body; } };
+  await handler({ query: {} }, res); assert.equal(res.code, 503); assert.equal(res.body.success, false); assert.equal(res.body.data, undefined);
+});
+test('raw GET reads local timestamp text and preserves SDK values', async () => {
+  let handler, sql;
+  const a = source.indexOf("samRouter.get(samRoute('/api/raw-scans'),");
+  const b = source.indexOf("samRouter.post(samRoute('/api/raw-scans'),", a);
+  const ctx = vm.createContext({ console, samRoute: x => x, samRouter: { get: (_path, fn) => handler = fn }, getDbPool: () => ({ query: async query => { sql = query; return [[{ id: 1, scan_date_time: '2026-11-03 00:01:02', verify_mode: 1073741824, in_out_mode: 1, hr_mapped: 0 }]]; } }) });
+  vm.runInContext(source.slice(a,b), ctx);
+  const res = { json(body) { this.body = body; } }; await handler({ query: {} }, res);
+  assert.match(sql, /DATE_FORMAT/); assert.equal(res.body.data[0].scanDateTime, '2026-11-03 00:01:02'); assert.equal(res.body.data[0].verifyMode, 1073741824);
+});

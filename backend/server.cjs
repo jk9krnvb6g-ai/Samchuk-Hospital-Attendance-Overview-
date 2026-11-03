@@ -2263,7 +2263,7 @@ samRouter.get(samRoute('/api/raw-scans'), async (req, res) => {
   try {
     const pool = getDbPool();
     const limit = parseInt(req.query.limit, 10) || 200;
-    const [rows] = await pool.query('SELECT * FROM attendance_raw_scan ORDER BY scan_date_time DESC LIMIT ?', [limit]);
+    const [rows] = await pool.query("SELECT *, DATE_FORMAT(scan_date_time, '%Y-%m-%d %H:%i:%s') AS scan_date_time FROM attendance_raw_scan ORDER BY scan_date_time DESC LIMIT ?", [limit]);
     
     // Map to client format
     const mapped = rows.map(r => ({
@@ -2296,7 +2296,7 @@ samRouter.get(samRoute('/api/raw-scans'), async (req, res) => {
     res.json({ success: true, total: mapped.length, data: mapped });
   } catch (err) {
     console.warn('[RawScans] DB Query warning:', err.message);
-    res.json({ success: true, total: 0, data: [], dbConnected: false, warning: err.message });
+    res.status(503).json({ success: false, dbConnected: false, message: 'โหลด Raw Scan จากฐานข้อมูลไม่สำเร็จ', warning: err.message });
   }
 });
 
@@ -4429,6 +4429,9 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
       cliResult.unmapped = persisted.unmapped;
       cliResult.affectedDates = persisted.affectedDates;
       cliResult.machines = scannerDbMachineSummaries(cliResult.machines, persisted);
+      cliResult.message = preview
+        ? `ตรวจสอบ Raw Scan: พบ ${persisted.total} รายการ ยังไม่บันทึกข้อมูล`
+        : `บันทึก Raw Scan สำเร็จ: เพิ่ม ${persisted.inserted}, ปรับปรุง ${persisted.updated}, ซ้ำ ${persisted.skipped}`;
     }
 
     // ข้อ 13: ตรวจผลสำเร็จของการคำนวณแต่ละวัน และแยกสถานะ SUCCESS, PARTIAL, FAILED ชัดเจน

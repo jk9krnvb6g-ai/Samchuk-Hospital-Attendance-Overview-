@@ -25,6 +25,14 @@ import {
 import { apiClient } from './apiClient';
 import { cacheService } from './cacheService';
 
+export function scannerSyncMessage(result: any): string {
+  const message = result?.message || 'ดึงข้อมูลไม่สำเร็จ';
+  if (result?.preview || (result?.totalInserted === undefined && !result?.rawScan)) return message;
+  const counts = `เพิ่ม ${result.totalInserted ?? result.rawScan?.inserted ?? 0}, ปรับปรุง ${result.totalUpdated ?? result.rawScan?.updated ?? 0}, ซ้ำ ${result.totalSkipped ?? result.duplicateCount ?? result.rawScan?.skipped ?? 0}`;
+  const failures = result.failedDates?.map((d: any) => `${d.date}: ${d.error}`).join('; ');
+  return `${message} (${counts})${failures ? ` — ${failures}` : ''}`;
+}
+
 const STORAGE_KEY = 'samchuk_attendance_v2_state';
 
 export interface StoreState {
@@ -35,6 +43,7 @@ export interface StoreState {
   personnel: HrPerson[];
   personnelTypes: PersonnelTypeConfig[];
   rawScans: RawScan[];
+  rawScansError?: string;
   hosofficeScans: HosFingleScan[];
   pushBatches: PushBatch[];
   syncLogs: SyncLog[];
@@ -364,8 +373,13 @@ class AttendanceStore {
     try {
       backendSyncResult = await apiClient.syncFromScanners(machineNo, options);
     } catch (e) {
-      console.warn('Backend scanner sync request warning:', e);
+      throw new Error(e instanceof Error ? e.message : 'Scanner sync failed');
     }
+    if (!backendSyncResult?.success) {
+      if (!options?.preview && (backendSyncResult?.rawScan?.inserted > 0 || backendSyncResult?.rawScan?.updated > 0)) await this.loadFromMySqlDb({ calculateMissingAttendance: false });
+      throw new Error(scannerSyncMessage(backendSyncResult));
+    }
+    if (options?.preview) return { totalRead: backendSyncResult.totalRead || 0, totalNew: 0, duplicates: 0, processedCount: 0, message: backendSyncResult.message };
 
     const grandTotalRead = backendSyncResult?.totalRead || 0;
     const grandTotalNew = backendSyncResult?.totalNew || 0;
@@ -414,7 +428,7 @@ class AttendanceStore {
     }
 
     // 3. โหลดข้อมูลสดจาก MySQL เพื่ออัปเดตหน้าจอให้ตรงกับฐานข้อมูลจริง 100%
-    await this.loadFromMySqlDb();
+    await this.loadFromMySqlDb({ calculateMissingAttendance: false });
 
     this.saveState();
     return {
@@ -1510,13 +1524,16 @@ class AttendanceStore {
         const mapped = Array.from(rawMap.values()).sort(
           (a, b) => (b.scanDateTime || '').localeCompare(a.scanDateTime || '')
         );
+        this.state.rawScansError = undefined;
         this.state.rawScans = mapped;
         cacheService.set(cacheKey, mapped, 60000); // 1 นาที
         this.notify();
         return mapped;
       }
+      throw new Error(scansRes.message || scansRes.warning || 'โหลด Raw Scan ไม่สำเร็จ');
     } catch (e) {
-      console.warn('[attendanceStore] loadRawScans failed:', e);
+      this.state.rawScansError = e instanceof Error ? e.message : 'โหลด Raw Scan ไม่สำเร็จ';
+      this.notify();
     }
     return this.state.rawScans;
   }
@@ -1621,7 +1638,7 @@ class AttendanceStore {
    * ดึงข้อมูลสดจากฐานข้อมูล MySQL (10.2.0.201) เข้าสู่ Store โดยตรง
    * ปรับปรุงให้ใช้ Granular Loaders และล้างแคชเพื่อให้ได้ข้อมูลสดใหม่ 100%
    */
-  public async loadFromMySqlDb(): Promise<{ success: boolean; shiftsCount: number; scansCount: number; message: string }> {
+  public async loadFromMySqlDb(options: { calculateMissingAttendance?: boolean } = {}): Promise<{ success: boolean; shiftsCount: number; scansCount: number; message: string }> {
     try {
       cacheService.invalidateAll();
       await Promise.allSettled([
@@ -1634,7 +1651,7 @@ class AttendanceStore {
       ]);
 
       const todayStr = formatDate(new Date());
-      if (this.state.rawScans.length > 0 && (!this.state.cachedDailyResults?.[todayStr] || this.state.cachedDailyResults[todayStr].length === 0)) {
+      if (options.calculateMissingAttendance !== false && this.state.rawScans.length > 0 && (!this.state.cachedDailyResults?.[todayStr] || this.state.cachedDailyResults[todayStr].length === 0)) {
         const calced = this.calculateAttendance(todayStr);
         if (!this.state.cachedDailyResults) this.state.cachedDailyResults = {};
         this.state.cachedDailyResults[todayStr] = calced;
@@ -2277,15 +2294,15 @@ class AttendanceStore {
   }): Promise<{ success: boolean; message: string; details?: any }> {
     try {
       const apiRes = await apiClient.syncScannersCustom(payload);
+      if (!payload.preview && (apiRes?.success || apiRes?.totalInserted > 0 || apiRes?.totalUpdated > 0)) {
+        await this.loadFromMySqlDb({ calculateMissingAttendance: false });
+      }
       if (apiRes?.success) {
-        if (!payload.preview) {
-          await this.loadFromMySqlDb();
-        }
-        return { success: true, message: apiRes.message || 'ดึงข้อมูลสำเร็จ', details: apiRes };
+        return { success: true, message: scannerSyncMessage(apiRes), details: apiRes };
       }
       return { 
         success: false, 
-        message: apiRes?.message || 'ดึงข้อมูลไม่สำเร็จ', 
+        message: scannerSyncMessage(apiRes),
         details: apiRes 
       };
     } catch (err: any) {

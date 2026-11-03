@@ -14,7 +14,10 @@
     "serve:3000": "vite preview --port=3000 --host=0.0.0.0",
     "serve:8080": "vite preview --port=8080 --host=0.0.0.0",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:scanner": "node --test backend/scanner-sync.test.cjs backend/tests/scanner-reader-contract.test.cjs",
+    "test:scanner:frontend": "node --import tsx --test src/tests/scanner-sync.test.ts",
+    "test:scanner:mysql": "node --test backend/tests/scanner-mysql.integration.test.cjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

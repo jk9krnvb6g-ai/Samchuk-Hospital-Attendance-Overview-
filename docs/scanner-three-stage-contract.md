@@ -98,3 +98,14 @@ recalculate unchanged dates).
 
 No production EXE/data/service, database schema, shared listener/port,
 Procurement route, HOSOffice staging, push workflow or main branch was changed.
+
+
+## Integration/build follow-up
+
+The frontend-build limitation above is superseded by
+[scanner-integration-testing.md](scanner-integration-testing.md): the actual
+production build and TypeScript check now pass. There are 27 passing backend
+scanner tests and 8 passing frontend scanner tests. The real-MySQL suite has ten
+prepared cases and remains unexecuted without an isolated MySQL instance (the
+disabled suite reports SKIP). See that runbook for guarded local-only commands,
+frontend fixes, EXE transport limits and Windows Server staging acceptance.

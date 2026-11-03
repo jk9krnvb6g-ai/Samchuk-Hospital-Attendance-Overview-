@@ -217,6 +217,7 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      {state.rawScansError && <div role="alert" className="p-3 bg-red-50 text-red-800 rounded-lg">{state.rawScansError} — ข้อมูลที่แสดงอาจยังไม่อัปเดต กรุณา Refresh อีกครั้ง</div>}
       {/* Page Title & Stats */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
