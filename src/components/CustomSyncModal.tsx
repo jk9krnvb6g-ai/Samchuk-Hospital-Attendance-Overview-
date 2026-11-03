@@ -714,9 +714,9 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                         strategy
                       });
                       if (syncRes.success) {
-                        setResultMsg({ type: 'success', text: syncRes.message, isZeroResult: syncRes.inserted === 0 });
+                        setResultMsg({ type: 'success', text: syncRes.message || 'ซิงค์สำเร็จ', isZeroResult: syncRes.inserted === 0 });
                         await attendanceStore.loadFromMySqlDb();
-                        if (onSyncComplete) onSyncComplete(syncRes.message);
+                        if (onSyncComplete) onSyncComplete(syncRes.message || 'ซิงค์สำเร็จ');
                       } else {
                         setResultMsg({ type: 'error', text: syncRes.message || 'ซิงค์ไม่สำเร็จ' });
                       }

@@ -2281,7 +2281,7 @@ class AttendanceStore {
         if (!payload.preview) {
           await this.loadFromMySqlDb();
         }
-        return { success: true, message: apiRes.message, details: apiRes };
+        return { success: true, message: apiRes.message || 'ดึงข้อมูลสำเร็จ', details: apiRes };
       }
       return { 
         success: false, 
@@ -2311,7 +2311,7 @@ class AttendanceStore {
         if (!params?.preview) {
           await this.loadFromMySqlDb();
         }
-        return { success: true, message: res.message, details: res };
+        return { success: true, message: res.message || 'นำเข้าสำเร็จ', details: res };
       }
       return { success: false, message: res.message || 'นำเข้าไม่สำเร็จ' };
     } catch (err: any) {

@@ -283,7 +283,7 @@ class ApiClientService {
         this.notify();
         return { online: true, latencyMs: elapsed, data: res.data };
       }
-      if (res.status === 'ONLINE' || (res as any).service) {
+      if ((res as any).status === 'ONLINE' || (res.data as any)?.status === 'ONLINE' || (res as any).service) {
         this.lastPingMs = elapsed;
         this.lastCheckTime = new Date().toLocaleTimeString('th-TH');
         this.isOnline = true;
