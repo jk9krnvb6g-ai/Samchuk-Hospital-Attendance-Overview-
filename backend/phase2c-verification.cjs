@@ -141,10 +141,14 @@ async function runPhase2CVerification() {
       injectedPoolQueries.push({ sql: String(sql).slice(0, 60), params });
       const sqlLower = String(sql).toLowerCase();
       if (sqlLower.includes('attendance_user')) {
+        const crypto = require('crypto');
+        const salt = 'mock_salt_123';
+        const password_hash = crypto.pbkdf2Sync('Admin@123', salt, 10000, 64, 'sha512').toString('hex');
         return [[{
           id: 1,
           username: 'admin',
-          password_hash: 'mock_hash',
+          password_hash,
+          salt,
           fullname: 'ผู้ดูแลระบบ รพ.สามชุก',
           role: 'ADMIN',
           status: 'ACTIVE'
@@ -248,21 +252,26 @@ async function runPhase2CVerification() {
     return { status: res.status, data, headers: res.headers };
   }
 
+  // Log in as ADMIN to obtain authentic Bearer session token
+  const loginResp = await makeRequest('POST', '/api/Sam_Att/auth/login', { username: 'admin', password: 'Admin@123' });
+  const authToken = loginResp.data?.token || '';
+
   // ---------------------------------------------------------------------------
   // REQUIREMENT 2: URL Prefix Mount & req.url, req.baseUrl, req.originalUrl Test
   // ---------------------------------------------------------------------------
   try {
     const prefixTests = [
-      { path: '/api/Sam_Att/health', expectedStatus: 200 },
-      { path: '/api/Sam_Att', expectedStatus: 200 },
-      { path: '/api/Sam_Att/', expectedStatus: 200 },
-      { path: '/api/Sam_Att/shifts', expectedStatus: 200 },
-      { path: '/api/Sam_Att/api/shifts', expectedStatus: 200 }
+      { path: '/api/Sam_Att/health', expectedStatus: 200, auth: false },
+      { path: '/api/Sam_Att', expectedStatus: 200, auth: false },
+      { path: '/api/Sam_Att/', expectedStatus: 200, auth: false },
+      { path: '/api/Sam_Att/shifts', expectedStatus: 200, auth: true },
+      { path: '/api/Sam_Att/api/shifts', expectedStatus: 200, auth: true }
     ];
 
     let allPrefixesPass = true;
     for (const pt of prefixTests) {
-      const resp = await makeRequest('GET', pt.path);
+      const headers = pt.auth && authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+      const resp = await makeRequest('GET', pt.path, null, headers);
       if (resp.status !== pt.expectedStatus) {
         allPrefixesPass = false;
         console.error(`      Prefix test failed on ${pt.path}: got ${resp.status}`);
@@ -293,7 +302,8 @@ async function runPhase2CVerification() {
     const healthResult = await apiClient.request(`http://127.0.0.1:${assignedPort}/api/Sam_Att/health`);
     const healthOk = healthResult && healthResult.status === 'ONLINE';
 
-    // 3. Test real apiClient.request for shifts
+    // 3. Test real apiClient.request for shifts with Bearer auth token
+    apiClient.setAuthToken(authToken);
     const shiftsResult = await apiClient.request(`http://127.0.0.1:${assignedPort}/api/Sam_Att/shifts`);
     const shiftsOk = shiftsResult && shiftsResult.success === true && Array.isArray(shiftsResult.data);
 
@@ -301,7 +311,7 @@ async function runPhase2CVerification() {
     apiClient.setAuthToken('mock_test_token_123');
     const authHeaders = apiClient.getAuthHeaders();
     const hasBearer = authHeaders['Authorization'] === 'Bearer mock_test_token_123';
-    apiClient.setAuthToken(null); // clean up
+    apiClient.setAuthToken(authToken); // restore valid token
 
     // 5. Test 404 response handling in real apiClient
     const notFoundResult = await apiClient.request(`http://127.0.0.1:${assignedPort}/api/Sam_Att/unknown-api-endpoint`);
@@ -327,6 +337,7 @@ async function runPhase2CVerification() {
   // ---------------------------------------------------------------------------
   try {
     const statusTests = [];
+    const authHeader = authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
 
     // 1. HTTP 200 - Health
     const res200 = await makeRequest('GET', '/api/Sam_Att/health');
@@ -358,17 +369,17 @@ async function runPhase2CVerification() {
     const res403 = await makeRequest('POST', '/api/Sam_Att/auth/login', { username: 'suspended_user', password: 'pwd' });
     statusTests.push({ code: 403, pass: res403.status === 403, desc: 'Account suspended access denied' });
 
-    // 5. HTTP 404 - Non-existent route
-    const res404 = await makeRequest('GET', '/api/Sam_Att/non-existent-gateway-route-12345');
+    // 5. HTTP 404 - Non-existent route (authenticated so passes enforceDenyByDefault)
+    const res404 = await makeRequest('GET', '/api/Sam_Att/non-existent-gateway-route-12345', null, authHeader);
     statusTests.push({ code: 404, pass: res404.status === 404, desc: 'Unknown route 404 handler' });
 
-    // 6. HTTP 500 - Database Error simulation on /api/db/test
+    // 6. HTTP 500 - Database Error simulation on /api/db/test (authenticated)
     mockDbPool.query = async () => {
       const err = new Error('SIMULATED_DB_FATAL_ERROR');
       err.code = 'ECONNREFUSED';
       throw err;
     };
-    const res500 = await makeRequest('GET', '/api/Sam_Att/db/test');
+    const res500 = await makeRequest('GET', '/api/Sam_Att/db/test', null, authHeader);
     mockDbPool.query = origQuery; // restore
     statusTests.push({ code: 500, pass: res500.status === 500, desc: 'Database connection failure handling' });
 

@@ -96,6 +96,23 @@ function createMockPool() {
         ]];
       }
 
+      // Attendance User Simulation for Login
+      if (sqlLower.includes('from attendance_user')) {
+        const crypto = require('crypto');
+        const salt = 'mock_salt_123';
+        const password_hash = crypto.pbkdf2Sync('Admin@123', salt, 10000, 64, 'sha512').toString('hex');
+        return [[{
+          id: 1,
+          username: 'admin',
+          password_hash,
+          salt,
+          fullname: 'ผู้ดูแลระบบ รพ.สามชุก',
+          role: 'ADMIN',
+          department: 'ศูนย์เทคโนโลยีสารสนเทศ (IT)',
+          status: 'ACTIVE'
+        }]];
+      }
+
       // Default safe response [rows, fields]
       return [[], { affectedRows: 1, insertId: 999 }];
     },
@@ -134,6 +151,16 @@ async function runMockGatewayTests() {
   const TEST_PORT = server.address().port;
   console.log(`🚀 Mock Gateway พร้อมให้บริการสำหรับการทดสอบที่: http://127.0.0.1:${TEST_PORT}\n`);
 
+  // Log in as ADMIN to obtain authentic Bearer session token
+  const loginRes = await fetch(`http://127.0.0.1:${TEST_PORT}/api/Sam_Att/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Admin@123' })
+  });
+  const loginData = await loginRes.json().catch(() => null);
+  const authToken = loginData?.token || '';
+  console.log(`🔑 ได้รับ Bearer Token จาก Gateway Login: ${authToken ? authToken.slice(0, 16) + '...' : 'None'}`);
+
   // Spying on Outbound Traffic to Ports 3003 (Procurement) and 3004 (Cash_Cheque)
   let trafficTo3003Count = 0;
   let trafficTo3004Count = 0;
@@ -146,15 +173,15 @@ async function runMockGatewayTests() {
   };
 
   const endpointsToTest = [
-    { name: '1. Gateway Root Health Check', method: 'GET', path: '/api/Sam_Att/health', expectedStatus: 200 },
-    { name: '2. Gateway Direct Root', method: 'GET', path: '/api/Sam_Att', expectedStatus: 200 },
-    { name: '3. Shifts Directory', method: 'GET', path: '/api/Sam_Att/shifts', expectedStatus: 200 },
-    { name: '4. Personnel Types', method: 'GET', path: '/api/Sam_Att/personnel-types', expectedStatus: 200 },
-    { name: '5. Personnel Directory', method: 'GET', path: '/api/Sam_Att/personnel', expectedStatus: 200 },
-    { name: '6. HOSOffice Personnel Sync', method: 'POST', path: '/api/Sam_Att/personnel/sync-from-hosoffice', body: {}, expectedStatus: 200 },
-    { name: '7. Attendance Daily Query', method: 'GET', path: '/api/Sam_Att/attendance?date=2026-10-29', expectedStatus: 200 },
-    { name: '8. Raw Scans Query', method: 'GET', path: '/api/Sam_Att/raw-scans?limit=100', expectedStatus: 200 },
-    { name: '9. IIS Reverse Proxy Subpath (/api/Sam_Att/api/shifts)', method: 'GET', path: '/api/Sam_Att/api/shifts', expectedStatus: 200 }
+    { name: '1. Gateway Root Health Check', method: 'GET', path: '/api/Sam_Att/health', expectedStatus: 200, requiresAuth: false },
+    { name: '2. Gateway Direct Root', method: 'GET', path: '/api/Sam_Att', expectedStatus: 200, requiresAuth: false },
+    { name: '3. Shifts Directory', method: 'GET', path: '/api/Sam_Att/shifts', expectedStatus: 200, requiresAuth: true },
+    { name: '4. Personnel Types', method: 'GET', path: '/api/Sam_Att/personnel-types', expectedStatus: 200, requiresAuth: true },
+    { name: '5. Personnel Directory', method: 'GET', path: '/api/Sam_Att/personnel', expectedStatus: 200, requiresAuth: true },
+    { name: '6. HOSOffice Personnel Sync', method: 'POST', path: '/api/Sam_Att/personnel/sync-from-hosoffice', body: {}, expectedStatus: 200, requiresAuth: true },
+    { name: '7. Attendance Daily Query', method: 'GET', path: '/api/Sam_Att/attendance?date=2026-10-29', expectedStatus: 200, requiresAuth: true },
+    { name: '8. Raw Scans Query', method: 'GET', path: '/api/Sam_Att/raw-scans?limit=100', expectedStatus: 200, requiresAuth: true },
+    { name: '9. IIS Reverse Proxy Subpath (/api/Sam_Att/api/shifts)', method: 'GET', path: '/api/Sam_Att/api/shifts', expectedStatus: 200, requiresAuth: true }
   ];
 
   let passed = 0;
@@ -163,12 +190,16 @@ async function runMockGatewayTests() {
   for (const tc of endpointsToTest) {
     try {
       const url = `http://127.0.0.1:${TEST_PORT}${tc.path}`;
+      const headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      };
+      if (tc.requiresAuth && authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
       const options = {
         method: tc.method,
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        }
+        headers
       };
       if (tc.body) {
         options.body = JSON.stringify(tc.body);
@@ -227,8 +258,12 @@ async function runMockGatewayTests() {
   await new Promise(r => testServer.listen(0, '127.0.0.1', r));
   const testPort = testServer.address().port;
 
-  await fetch(`http://127.0.0.1:${testPort}/instanceA/shifts`);
-  await fetch(`http://127.0.0.1:${testPort}/instanceB/shifts`);
+  await fetch(`http://127.0.0.1:${testPort}/instanceA/shifts`, {
+    headers: { 'Authorization': `Bearer ${authToken}` }
+  });
+  await fetch(`http://127.0.0.1:${testPort}/instanceB/shifts`, {
+    headers: { 'Authorization': `Bearer ${authToken}` }
+  });
   testServer.close();
 
   if (poolAQueries === 1 && poolBQueries === 1) {
@@ -256,6 +291,7 @@ async function runMockGatewayTests() {
   console.log('\n🌐 ทดสอบการทำงานร่วมกับ src/services/apiClient.ts ของจริง (Direct TS Test)');
   try {
     const { apiClient } = await import('../src/services/apiClient.ts');
+    apiClient.setAuthToken(authToken);
     const directHealth = await apiClient.request(`http://127.0.0.1:${TEST_PORT}/api/Sam_Att/health`);
     const directShifts = await apiClient.request(`http://127.0.0.1:${TEST_PORT}/api/Sam_Att/shifts`);
     if (directHealth && directHealth.status === 'ONLINE' && directShifts && Array.isArray(directShifts.data)) {

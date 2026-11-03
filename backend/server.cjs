@@ -257,25 +257,13 @@ function enforceDenyByDefault(req, res, next) {
     return next();
   }
 
-  // ตรวจสอบสิทธิ์สำหรับ Protected API Routes ทั้งหมด:
+  // ตรวจสอบสิทธิ์สำหรับ Protected API Routes ทั้งหมด (Fail-Closed: บังคับ Authentication ทุกกรณี)
   if (!req.user) {
-    if (process.env.REQUIRE_STRICT_AUTH === 'true') {
-      return res.status(401).json({
-        success: false,
-        error: 'UNAUTHORIZED',
-        message: 'กรุณาเข้าสู่ระบบก่อนใช้งาน (Authentication Required)'
-      });
-    }
-
-    // สำหรับการใช้งานภายในโรงพยาบาล (Intranet / Localhost Legacy Fallback)
-    // เฉพาะกรณีที่ยังไม่ได้เปิดใช้งาน REQUIRE_STRICT_AUTH=true ในไฟล์ .env
-    req.user = {
-      userId: 1,
-      username: 'admin',
-      fullname: 'ผู้ดูแลระบบ รพ.สามชุก (Intranet Admin)',
-      role: 'ADMIN',
-      department: 'ศูนย์เทคโนโลยีสารสนเทศ (IT)'
-    };
+    return res.status(401).json({
+      success: false,
+      error: 'UNAUTHORIZED',
+      message: 'กรุณาเข้าสู่ระบบก่อนใช้งาน (Authentication Required)'
+    });
   }
 
   next();
@@ -380,9 +368,13 @@ samRouter.post(samRoute('/api/auth/login'), async (req, res) => {
       });
     }
 
-    // ตรวจสอบรหัสผ่านด้วย PBKDF2 + Salt จากฐานข้อมูล
+    // ตรวจสอบรหัสผ่านด้วย PBKDF2 + Salt จากฐานข้อมูล (10,000 rounds, 64-byte SHA-512, Timing-Safe)
     const hash = crypto.pbkdf2Sync(password, user.salt, 10000, 64, 'sha512').toString('hex');
-    if (hash !== user.password_hash) {
+    const hashBuf = Buffer.from(hash, 'hex');
+    const userHashBuf = Buffer.from(user.password_hash || '', 'hex');
+    const isPasswordValid = hashBuf.length === userHashBuf.length && crypto.timingSafeEqual(hashBuf, userHashBuf);
+
+    if (!isPasswordValid) {
       const newFailed = (user.failed_attempts || 0) + 1;
       let lockedUntil = null;
       if (newFailed >= 5) {
@@ -5415,58 +5407,15 @@ app.use('/api/sam_att', (req, res, next) => {
 // --------------------------------------------------------------------------
 // 5. เริ่มต้นเซิร์ฟเวอร์
 // --------------------------------------------------------------------------
-// ฟังก์ชัน Auto-Fallback และวินิจฉัยเมื่อเชื่อมต่อ 10.2.0.201 แล้วเกิด ETIMEDOUT
+// ฟังก์ชันวินิจฉัยเมื่อไม่สามารถเชื่อมต่อ MySQL ตามที่กำหนดไว้ (ไม่มีการเปลี่ยน Host หรือทดลองรหัสผ่านอัตโนมัติ)
 async function tryFallbackToLocalhost() {
-  console.log('🔍 กำลังตรวจสอบว่ามี MySQL รันอยู่บนเครื่องนี้ (localhost / 127.0.0.1:3306) หรือไม่...');
-  const probeLocal = await testScannerTcpSocket('127.0.0.1', 3306, 1500);
-  if (probeLocal.success) {
-    console.log('💡 ตรวจพบว่าพอร์ต 3306 กำลังเปิดทำงานอยู่บนเครื่องนี้ (localhost / 127.0.0.1)!');
-    const candidates = [
-      { user: 'root', password: '' },
-      { user: 'sa', password: 'sa' },
-      { user: 'root', password: 'sa' },
-      { user: 'attendance_app', password: '' },
-      { user: activeDbConfig.user, password: activeDbConfig.password }
-    ];
-    for (const c of candidates) {
-      try {
-        const testConn = await mysql.createConnection({
-          host: '127.0.0.1',
-          port: 3306,
-          user: c.user,
-          password: c.password,
-          connectTimeout: 2000
-        });
-        const [dbs] = await testConn.query('SHOW DATABASES');
-        const dbNames = dbs.map(d => Object.values(d)[0]);
-        await testConn.end();
-        if (dbNames.includes('samchuk_attendance')) {
-          console.log('=========================================================================');
-          console.log(`🎉 [ค้นพบอัตโนมัติ] พบฐานข้อมูล samchuk_attendance บน localhost:3306!`);
-          console.log(`   (ตรงกับภาพใน Navicat! User: '${c.user}', พบทั้งหมด ${dbNames.length} ฐานข้อมูล)`);
-          console.log(`🔄 กำลังสลับ Host ไปยัง 127.0.0.1 อัตโนมัติเพื่อให้ระบบทำงานได้ทันที...`);
-          console.log('=========================================================================');
-          activeDbConfig.host = '127.0.0.1';
-          activeDbConfig.user = c.user;
-          activeDbConfig.password = c.password;
-          resetDbPool(activeDbConfig);
-          await ensureTablesExist();
-          console.log(`✅ เชื่อมต่อและใช้งาน samchuk_attendance บน 127.0.0.1 สำเร็จเรียบร้อย!`);
-          return;
-        }
-      } catch {}
-    }
-  }
-
   console.log('=========================================================================');
-  console.log('📌 คำแนะนำแก้ไข "Error: connect ETIMEDOUT" กับ MySQL 10.2.0.201:');
-  console.log('1. ในภาพ Navicat ของท่านที่เห็นฐานข้อมูล samchuk_attendance:');
-  console.log('   - ดูว่าใน Navicat ช่อง Host ระบุเป็นอะไร (เช่น localhost หรือ IP เครื่องอื่น)');
-  console.log('   - หากเป็น localhost ให้เปิดหน้าเว็บ https://10.2.0.13:3001/Sam_Att/ -> เมนู "ระบบและบันทึก"');
-  console.log('     แล้วคลิกเลือก Preset "localhost (root / ว่าง)" หรือระบุในไฟล์ .env');
-  console.log('2. หากฐานข้อมูล samchuk_attendance อยู่บนเซิร์ฟเวอร์ 10.2.0.201 จริง:');
-  console.log('   - ข้อผิดพลาด ETIMEDOUT เกิดจาก Windows Firewall บนเครื่อง 10.2.0.201 บล็อกพอร์ต 3306');
-  console.log('   - กรุณาเปิด Windows Defender Firewall บน 10.2.0.201 -> Inbound Rule -> อนุญาต Port 3306 TCP');
+  console.log('📌 คำแนะนำการเชื่อมต่อฐานข้อมูล MySQL (Production Diagnostic):');
+  console.log(`   Host เป้าหมาย: ${activeDbConfig.host}:${activeDbConfig.port} (Database: ${activeDbConfig.database}, User: ${activeDbConfig.user})`);
+  console.log('   หากเกิดข้อผิดพลาด ETIMEDOUT หรือ Connection Error:');
+  console.log('   1. ตรวจสอบว่า Windows Defender Firewall บนเครื่อง MySQL อนุญาต Inbound TCP Port 3306');
+  console.log('   2. ตรวจสอบการตั้งค่า DB_HOST, DB_USER, DB_PASSWORD ในไฟล์ .env หรือ Gateway Config');
+  console.log('   3. ระบบจะไม่สลับ Host หรือทดลองใช้ Credentials อัตโนมัติในสภาพแวดล้อม Production เพื่อความปลอดภัย');
   console.log('=========================================================================');
 }
 

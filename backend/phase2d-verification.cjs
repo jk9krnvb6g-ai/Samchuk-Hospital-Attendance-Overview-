@@ -595,6 +595,51 @@ async function runPhase2DVerification() {
   }
 
   // ---------------------------------------------------------------------------
+  // TEST 16: Fail-Closed Auth (REQUIRE_STRICT_AUTH undefined or false must return 401)
+  // ---------------------------------------------------------------------------
+  try {
+    const originalStrictEnv = process.env.REQUIRE_STRICT_AUTH;
+    const gatewayApp = express();
+    const routerInstance = createSamAttRouter({ dbPool: mockDbPool });
+    gatewayApp.use('/api/Sam_Att', routerInstance);
+
+    // Case A: REQUIRE_STRICT_AUTH is undefined
+    delete process.env.REQUIRE_STRICT_AUTH;
+    const resUndefined = await makeMockRequest(gatewayApp, {
+      path: '/api/Sam_Att/shifts',
+      method: 'GET'
+    });
+
+    // Case B: REQUIRE_STRICT_AUTH is 'false'
+    process.env.REQUIRE_STRICT_AUTH = 'false';
+    const resFalse = await makeMockRequest(gatewayApp, {
+      path: '/api/Sam_Att/shifts',
+      method: 'GET'
+    });
+
+    // Restore environment
+    if (originalStrictEnv !== undefined) {
+      process.env.REQUIRE_STRICT_AUTH = originalStrictEnv;
+    } else {
+      delete process.env.REQUIRE_STRICT_AUTH;
+    }
+
+    const passedCaseA = resUndefined.statusCode === 401 && resUndefined.body?.error === 'UNAUTHORIZED';
+    const passedCaseB = resFalse.statusCode === 401 && resFalse.body?.error === 'UNAUTHORIZED';
+    const passed = passedCaseA && passedCaseB;
+
+    recordResult(16, 'Fail-Closed Auth (Undefined & false REQUIRE_STRICT_AUTH return HTTP 401)', passed, {
+      undefinedEnvStatus: resUndefined.statusCode,
+      undefinedEnvError: resUndefined.body?.error,
+      falseEnvStatus: resFalse.statusCode,
+      falseEnvError: resFalse.body?.error,
+      failClosedConfirmed: passed
+    });
+  } catch (err) {
+    recordResult(16, 'Fail-Closed Auth Verification', false, { error: err.message });
+  }
+
+  // ---------------------------------------------------------------------------
   // Final Score & Summary
   // ---------------------------------------------------------------------------
   const totalTests = testResults.length;
@@ -609,7 +654,7 @@ async function runPhase2DVerification() {
     console.error('❌ Some regression tests failed.');
     process.exit(1);
   } else {
-    console.log('🎉 ALL 15 REGRESSION TESTS PASSED CLEANLY WITH ZERO SIDE-EFFECTS!');
+    console.log('🎉 ALL 16 REGRESSION TESTS PASSED CLEANLY WITH ZERO SIDE-EFFECTS!');
     process.exit(0);
   }
 }
