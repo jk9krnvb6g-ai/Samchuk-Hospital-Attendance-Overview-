@@ -886,6 +886,7 @@ async function ensureTablesExist(force = false) {
   const isMigrationPermitted = 
     process.env.ALLOW_SCHEMA_MIGRATION === 'true' ||
     currentConfig.allowSchemaMigration === true ||
+    currentConfig.allowMigration === true ||
     force === true;
 
   if (!isMigrationPermitted) {
@@ -893,7 +894,7 @@ async function ensureTablesExist(force = false) {
       success: true,
       skipped: true,
       tablesReady: tablesInitialized,
-      message: 'Schema migration skipped: Requires explicit permission (ALLOW_SCHEMA_MIGRATION=true or allowSchemaMigration: true in dependencies.config)'
+      message: 'Schema migration skipped: Requires explicit permission (ALLOW_SCHEMA_MIGRATION=true or allowSchemaMigration/allowMigration: true in dependencies.config)'
     };
   }
 
@@ -5494,30 +5495,7 @@ function createSamAttRouter(dependencies = {}) {
     });
   });
 
-  // Sam_Att Route Normalization Middleware
-  routerInstance.use((req, res, next) => {
-    while (req.url.startsWith('/api/Sam_Att/') || req.url.startsWith('/api/sam_att/')) {
-      req.url = req.url.replace(/^\/api\/[sS]am_[aA]tt\//, '/');
-    }
-    while (req.url.startsWith('/api/')) {
-      req.url = req.url.slice(4);
-    }
-    if (req.url.startsWith('/Sam_Att/')) {
-      req.url = req.url.slice('/Sam_Att'.length);
-    }
-    if (!req.url.startsWith('/')) {
-      req.url = '/' + req.url;
-    }
-    if (req.url === '' || req.url === '/' || req.url === '/Sam_Att' || req.url === '/api') {
-      req.url = '/health';
-    }
-    next();
-  });
-
-  routerInstance.use(authenticateToken);
-  routerInstance.use(enforceDenyByDefault);
-
-  // Mount core Sam_Att route handlers
+  // Mount core Sam_Att route handlers (samRouter already manages normalization, authenticateToken, and enforceDenyByDefault)
   routerInstance.use(samRouter);
 
   routerInstance.instanceContext = instanceContext;
