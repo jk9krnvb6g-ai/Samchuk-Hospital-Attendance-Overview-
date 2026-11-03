@@ -3482,6 +3482,91 @@ function toBangkokDateTimeStr(val) {
   return bkk.replace(', ', ' ');
 }
 
+
+/**
+ * Persist records returned by ScannerSyncCli directly to the attendance database.
+ * No HOSOffice staging or deletion. All timestamps are Bangkok wall-clock strings.
+ */
+async function persistScannerCliScans(cliResult, options = {}) {
+  if (!cliResult || !Array.isArray(cliResult.scans)) {
+    throw new Error('SCANNER_SCANS_MISSING: EXE did not return scans[]');
+  }
+  const allowedDates = options.dates ? new Set(options.dates) : null;
+  const allowedMachines = options.machineNos && options.machineNos !== 'ALL'
+    ? new Set((Array.isArray(options.machineNos) ? options.machineNos : [options.machineNos]).map(Number))
+    : null;
+  const machineIps = new Map((cliResult.machines || []).map(m => [Number(m.machineNo), m.ip || m.deviceIp]));
+  const pool = getDbPool();
+  const [people] = await pool.query(`
+    SELECT person_id AS id, fingle_id, hr_fullname, hr_position_name,
+           hr_level_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name,
+           hr_person_type_id, hr_department_id, hr_department_sub_id
+    FROM attendance_personnel WHERE status = 'ACTIVE' OR status IS NULL
+  `);
+  const peopleByFinger = new Map();
+  for (const p of people || []) {
+    if (p.fingle_id !== null && p.fingle_id !== undefined) peopleByFinger.set(Number(p.fingle_id), p);
+  }
+  const filtered = [];
+  for (const scan of cliResult.scans) {
+    const machineNo = Number(scan.machineNo);
+    if (!Number.isSafeInteger(machineNo) || machineNo <= 0) throw new Error('Invalid scanner machineNo');
+    if (allowedMachines && !allowedMachines.has(machineNo)) continue;
+    const rawDate = scan.scanDateTime;
+    if (typeof rawDate !== 'string' || !/^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$/.test(rawDate)) {
+      throw new Error('Invalid scanner scanDateTime; expected YYYY-MM-DD HH:mm:ss');
+    }
+    if (allowedDates && !allowedDates.has(rawDate.substring(0, 10))) continue;
+    const fid = Number(scan.enrollNumber);
+    if (!Number.isSafeInteger(fid) || fid <= 0) throw new Error('Invalid scanner enrollNumber');
+    const ip = scan.deviceIp || machineIps.get(machineNo);
+    if (!ip) throw new Error(`Missing device IP for machine ${machineNo}`);
+    filtered.push({ scan, machineNo, fid, ip, rawDate });
+  }
+  if (options.preview) return { inserted: 0, updated: 0, skipped: 0, total: filtered.length, affectedDates: [...new Set(filtered.map(x => x.rawDate.slice(0, 10)))].sort() };
+  let inserted = 0, updated = 0, skipped = 0;
+  const affectedDates = new Set();
+  for (const { scan, machineNo, fid, ip, rawDate } of filtered) {
+    const person = peopleByFinger.get(fid);
+    const values = [
+      machineNo, ip, fid, rawDate,
+      scan.verifyMode == null ? null : Number(scan.verifyMode),
+      scan.inOutMode == null ? null : Number(scan.inOutMode),
+      person?.id ?? null,
+      person?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
+      person?.hr_position_name || '',
+      person?.hr_level_name || '',
+      person?.hr_dep_name || '',
+      person?.hr_dep_sub_name || '',
+      person?.hr_person_type_name || '',
+      person?.hr_person_type_id ?? null,
+      person?.hr_department_id ?? null,
+      person?.hr_department_sub_id ?? null,
+      person ? 1 : 0
+    ];
+    const overwrite = options.strategy === 'OVERWRITE';
+    const sql = `
+      INSERT ${overwrite ? '' : 'IGNORE'} INTO attendance_raw_scan
+      (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode,
+       person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name,
+       hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id,
+       hr_department_sub_id, hr_mapped, push_status, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'DEVICE')
+      ${overwrite ? `ON DUPLICATE KEY UPDATE verify_mode=VALUES(verify_mode),
+        in_out_mode=VALUES(in_out_mode), hr_mapped=VALUES(hr_mapped),
+        person_id=VALUES(person_id), hr_fullname=VALUES(hr_fullname),
+        hr_position_name=VALUES(hr_position_name), hr_leavel_name=VALUES(hr_leavel_name),
+        hr_dep_name=VALUES(hr_dep_name), hr_dep_sub_name=VALUES(hr_dep_sub_name)` : ''}
+    `;
+    const [result] = await pool.query(sql, values);
+    if (result.affectedRows === 1) inserted++;
+    else if (overwrite && result.affectedRows > 1) updated++;
+    else skipped++;
+    affectedDates.add(rawDate.substring(0, 10));
+  }
+  return { inserted, updated, skipped, total: filtered.length, affectedDates: [...affectedDates].sort() };
+}
+
 // ============================================================================
 // ฟังก์ชันซิงค์ประวัติสแกนจาก hosoffice.fingle_scan เข้าสู่ samchuk_attendance.attendance_raw_scan
 // ทำให้ตาราง attendance_raw_scan ใน MySQL ได้รับข้อมูลสแกนจริงเสมอ
@@ -4265,40 +4350,29 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
       console.warn('[scanner_sync_log] Warning: Could not write sync log:', logErr.message);
     }
 
-    // ซิงค์เข้าสู่ samchuk_attendance.attendance_raw_scan ทันทีเมื่อบันทึกจริง (!preview)
-    let stagingInserted = 0;
-    if (!preview && cliResult.success && cliResult.affectedDates && cliResult.affectedDates.length > 0) {
+    // EXE scans[] is the only scanner source; never read/delete HOSOffice here.
+    let persisted = null;
+    if (cliResult.success) {
       try {
-        const syncStagingRes = await syncHosofficeToAttendanceRawScan({
-          dates: cliResult.affectedDates,
-          days: days || 3,
-          strategy: 'SKIP_DUPLICATES'
-        });
-        stagingInserted = syncStagingRes.inserted || 0;
-        console.log(`[Staging Sync] บันทึก ${stagingInserted} รายการเข้าสู่ samchuk_attendance.attendance_raw_scan`);
-      } catch (stgErr) {
-        console.warn('[Staging Sync Warning] Could not sync to attendance_raw_scan:', stgErr.message);
+        persisted = await persistScannerCliScans(cliResult, { preview });
+      } catch (persistError) {
+        console.error('[Scanner Raw Scan] Save failed:', persistError.message);
+        return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', message: persistError.message });
       }
-
-      // นโยบายไม่เขียนลง hosoffice อัตโนมัติ: ล้างข้อมูลชั่วคราว SCAN_SYNC ออกจาก hosoffice.fingle_scan ทันที
-      try {
-        const poolHos = getHosofficePool();
-        const [delHos] = await poolHos.query(`DELETE FROM fingle_scan WHERE CREATE_BY = 'SCAN_SYNC'`);
-        if (delHos && delHos.affectedRows > 0) {
-          console.log(`[Cleanup HosOffice] เคลียร์ข้อมูลดิบชั่วคราว ${delHos.affectedRows} รายการออกจาก hosoffice.fingle_scan เรียบร้อย`);
-        }
-      } catch (cleanErr) {
-        console.warn('[Cleanup HosOffice Notice] ไม่สามารถเคลียร์ SCAN_SYNC ใน hosoffice:', cleanErr.message);
-      }
+    }
+    cliResult.rawScan = persisted;
+    if (persisted && !preview) {
+      cliResult.totalNew = persisted.inserted;
+      cliResult.duplicates = persisted.skipped;
     }
 
     // ข้อ 13: ตรวจผลสำเร็จของการคำนวณแต่ละวัน และแยกสถานะ SUCCESS, PARTIAL, FAILED ชัดเจน
-    if (cliResult.success && cliResult.affectedDates && Array.isArray(cliResult.affectedDates) && cliResult.affectedDates.length > 0) {
+    if (!preview && cliResult.success && persisted && persisted.affectedDates.length > 0) {
       const calcSummaries = [];
       const successDates = [];
       const failedDates = [];
 
-      for (const d of cliResult.affectedDates) {
+      for (const d of persisted.affectedDates) {
         try {
           const cRes = await calculateDailyAttendanceForDate(d);
           if (cRes && cRes.success) {
@@ -4570,43 +4644,24 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
         console.warn('Record custom sync log error:', logErr.message);
       }
 
-      // ซิงค์เฉพาะ targetDates เข้าสู่ samchuk_attendance.attendance_raw_scan (กรองเฉพาะวันที่เลือกอย่างเข้มงวด)
-      let stagingInserted = 0;
-      let stagingUpdated = 0;
-      let stagingSkipped = 0;
-      let stagingTotal = 0;
-
-      if (!preview && cliResult.success) {
-        try {
-          const syncStagingRes = await syncHosofficeToAttendanceRawScan({
-            dates: targetDates, // กรองเฉพาะ targetDates ที่เลือกเท่านั้น!
-            strategy: strategy || 'SKIP_DUPLICATES'
-          });
-          stagingInserted = syncStagingRes.inserted || 0;
-          stagingUpdated = syncStagingRes.updated || 0;
-          stagingSkipped = syncStagingRes.skipped || 0;
-          stagingTotal = syncStagingRes.total || (stagingInserted + stagingSkipped);
-          console.log(`[Staging Sync] บันทึกเฉพาะข้อมูลของ ${targetLabel} ลงใน samchuk_attendance.attendance_raw_scan สำเร็จ: +${stagingInserted} รายการใหม่ (ซ้ำเดิม ${stagingSkipped} รายการ, รวมในวันที่เลือก ${stagingTotal} รายการ)`);
-        } catch (stgErr) {
-          console.warn('[Staging Sync Warning] Could not sync to attendance_raw_scan:', stgErr.message);
-        }
-
-        // นโยบายไม่เขียนลง hosoffice อัตโนมัติ: ล้างข้อมูลชั่วคราว SCAN_SYNC ออกจาก hosoffice.fingle_scan ทันที
-        // เพื่อให้ hosoffice.fingle_scan สะอาด และคงไว้ให้ ADMIN เป็นคนกดส่ง (SCAN_PUSH) ผ่านเมนู "ส่งข้อมูลเข้า HOSOffice" เท่านั้น
-        try {
-          const poolHos = getHosofficePool();
-          const [delHos] = await poolHos.query(`DELETE FROM fingle_scan WHERE CREATE_BY = 'SCAN_SYNC'`);
-          if (delHos && delHos.affectedRows > 0) {
-            console.log(`[Cleanup HosOffice] เคลียร์ข้อมูลดิบชั่วคราว ${delHos.affectedRows} รายการออกจาก hosoffice.fingle_scan เรียบร้อย (คงไว้เฉพาะที่ ADMIN ส่งเอง)`);
-          }
-        } catch (cleanErr) {
-          console.warn('[Cleanup HosOffice Notice] ไม่สามารถเคลียร์ SCAN_SYNC ใน hosoffice:', cleanErr.message);
-        }
+      if (!cliResult.success) {
+        return res.status(502).json({ success: false, message: cliResult.message || 'Scanner EXE failed', machines: cliResult.machines || [] });
       }
+      let saved;
+      try {
+        saved = await persistScannerCliScans(cliResult, { dates: targetDates, machineNos, strategy, preview });
+      } catch (persistError) {
+        console.error('[Custom Scanner Raw Scan] Save failed:', persistError.message);
+        return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', message: persistError.message });
+      }
+      const stagingInserted = saved.inserted;
+      const stagingUpdated = saved.updated;
+      const stagingSkipped = saved.skipped;
+      const stagingTotal = saved.total;
 
       // คำนวณผลรายวันอัตโนมัติเฉพาะ targetDates หากบันทึกจริง (N3)
-      if (!preview && recalculate && targetDates.length > 0) {
-        for (const affDate of targetDates) {
+      if (!preview && cliResult.success && recalculate && saved && saved.affectedDates.length > 0) {
+        for (const affDate of saved.affectedDates) {
           try {
             await calculateDailyAttendanceForDate(affDate);
             console.log(`[Auto-Calculate] คำนวณสรุปเวลาทำงานของวันที่ ${affDate} สำเร็จ`);
@@ -4616,7 +4671,7 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
         }
       }
 
-      const totalTargetFound = stagingTotal || (stagingInserted + stagingSkipped);
+      const totalTargetFound = stagingTotal;
       const responseMsg = preview
         ? `ตรวจสอบเครื่องสแกน (${targetLabel}): พบข้อมูลสแกนตรงตามเงื่อนไขที่เลือก ${totalTargetFound} รายการ (ระบบจะบันทึกเฉพาะวันที่เลือกนี้เท่านั้น)`
         : `ดึงข้อมูลสแกนสำเร็จ: ดึงและบันทึกข้อมูล${targetLabel} เข้าสู่ samchuk_attendance.attendance_raw_scan เรียบร้อยแล้ว (เพิ่มใหม่ +${stagingInserted} รายการ, ข้อมูลเดิมในระบบ ${stagingSkipped} รายการ) และคำนวณผลสรุปเวลาทำงานของ${targetLabel}เรียบร้อยแล้ว`;
