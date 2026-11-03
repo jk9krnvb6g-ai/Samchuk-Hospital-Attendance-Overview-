@@ -923,33 +923,47 @@ async function ensureTablesExist(force = false) {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
-    // Seed ผู้ใช้เริ่มต้นหากตารางว่าง (ใช้ Salt + PBKDF2 Hash เท่านั้น ไม่มี Hardcoded Password ในโค้ด)
+    // Seed ผู้ใช้เริ่มต้นหากตารางว่าง (บังคับรับรหัสผ่านจาก Environment Variable เท่านั้น ไม่มี Hardcoded Password สำรอง)
     try {
       const [uCount] = await pool.query('SELECT COUNT(*) as count FROM attendance_user');
       if (uCount[0].count === 0) {
-        const adminPass = process.env.ADMIN_INITIAL_PASSWORD || 'SamchukAdmin@2026';
-        const adminSalt = crypto.randomBytes(16).toString('hex');
-        const adminHash = crypto.pbkdf2Sync(adminPass, adminSalt, 10000, 64, 'sha512').toString('hex');
+        const usersToSeed = [];
 
-        const hrPass = process.env.HR_INITIAL_PASSWORD || 'SamchukHR@2026';
-        const hrSalt = crypto.randomBytes(16).toString('hex');
-        const hrHash = crypto.pbkdf2Sync(hrPass, hrSalt, 10000, 64, 'sha512').toString('hex');
+        if (process.env.ADMIN_INITIAL_PASSWORD && process.env.ADMIN_INITIAL_PASSWORD.trim()) {
+          const adminPass = process.env.ADMIN_INITIAL_PASSWORD.trim();
+          const adminSalt = crypto.randomBytes(16).toString('hex');
+          const adminHash = crypto.pbkdf2Sync(adminPass, adminSalt, 10000, 64, 'sha512').toString('hex');
+          usersToSeed.push(['admin', adminHash, adminSalt, 'ผู้ดูแลระบบสูงสุด (System Admin)', 'ADMIN', 'ศูนย์เทคโนโลยีสารสนเทศ (IT)', 'ACTIVE']);
+        }
 
-        const supPass = process.env.SUPERVISOR_INITIAL_PASSWORD || 'SamchukSup@2026';
-        const supSalt = crypto.randomBytes(16).toString('hex');
-        const supHash = crypto.pbkdf2Sync(supPass, supSalt, 10000, 64, 'sha512').toString('hex');
+        if (process.env.HR_INITIAL_PASSWORD && process.env.HR_INITIAL_PASSWORD.trim()) {
+          const hrPass = process.env.HR_INITIAL_PASSWORD.trim();
+          const hrSalt = crypto.randomBytes(16).toString('hex');
+          const hrHash = crypto.pbkdf2Sync(hrPass, hrSalt, 10000, 64, 'sha512').toString('hex');
+          usersToSeed.push(['hr', hrHash, hrSalt, 'เจ้าหน้าที่กลุ่มงานทรัพยากรบุคคล', 'HR', 'กลุ่มงานทรัพยากรบุคคล (HR)', 'ACTIVE']);
+        }
 
-        await pool.query(`
-          INSERT INTO attendance_user (username, password_hash, salt, fullname, role, department, status, created_at)
-          VALUES 
-          ('admin', ?, ?, 'ผู้ดูแลระบบสูงสุด (System Admin)', 'ADMIN', 'ศูนย์เทคโนโลยีสารสนเทศ (IT)', 'ACTIVE', NOW()),
-          ('hr', ?, ?, 'เจ้าหน้าที่กลุ่มงานทรัพยากรบุคคล', 'HR', 'กลุ่มงานทรัพยากรบุคคล (HR)', 'ACTIVE', NOW()),
-          ('supervisor', ?, ?, 'หัวหน้ากลุ่มงาน/ตึก', 'SUPERVISOR', 'กลุ่มงานการพยาบาล', 'ACTIVE', NOW())
-        `, [adminHash, adminSalt, hrHash, hrSalt, supHash, supSalt]);
-        console.log('✅ [Auto-Migration] สร้างบัญชีเริ่มต้น (admin, hr, supervisor) สำเร็จด้วย Salt & PBKDF2 Hash');
+        if (process.env.SUPERVISOR_INITIAL_PASSWORD && process.env.SUPERVISOR_INITIAL_PASSWORD.trim()) {
+          const supPass = process.env.SUPERVISOR_INITIAL_PASSWORD.trim();
+          const supSalt = crypto.randomBytes(16).toString('hex');
+          const supHash = crypto.pbkdf2Sync(supPass, supSalt, 10000, 64, 'sha512').toString('hex');
+          usersToSeed.push(['supervisor', supHash, supSalt, 'หัวหน้ากลุ่มงาน/ตึก', 'SUPERVISOR', 'กลุ่มงานการพยาบาล', 'ACTIVE']);
+        }
+
+        if (usersToSeed.length > 0) {
+          for (const u of usersToSeed) {
+            await pool.query(`
+              INSERT INTO attendance_user (username, password_hash, salt, fullname, role, department, status, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+            `, u);
+          }
+          console.log(`✅ [Schema Initialization] สร้างบัญชีเริ่มต้น (${usersToSeed.map(u => u[0]).join(', ')}) จาก Environment Variables สำเร็จ`);
+        } else {
+          console.log('ℹ️ [Schema Initialization] ตาราง attendance_user ว่างเปล่าและไม่มีการระบุ ADMIN_INITIAL_PASSWORD ใน Environment Variables — ข้ามการสร้างบัญชีเริ่มต้น (Zero Hardcoded Password Policy)');
+        }
       }
     } catch (seedErr) {
-      console.warn('[Auto-Migration] Seed attendance_user warning:', seedErr.message);
+      console.warn('[Auto-Migration] Seed attendance_user notice:', seedErr.message);
     }
 
     // 2.1 ตารางกะ attendance_shift
