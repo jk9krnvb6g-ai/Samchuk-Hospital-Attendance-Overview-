@@ -42,7 +42,7 @@ function harness(options = {}) {
     ensureTablesExist: async () => calls.push('DDL'), samRoute: x => x,
     samRouter: { post: (path, fn) => routes[path] = fn },
     executeScannerReaderCli: async args => { exeCalls.push(args); return options.cli ? options.cli(args) : payload(); },
-    calculateDailyAttendanceForDate: async d => { calls.push('calculate:' + d); if (options.calcThrow) throw new Error('calc throw'); return { success: !options.calcFail }; }
+    calculateDailyAttendanceForDate: async d => { calls.push('calculate:' + d); if (options.calcThrow) throw new Error('calc throw'); return { success: !options.calcFail && !options.calcFailureDates?.includes(d) }; }
   });
   vm.runInContext(helpers + normalRoute + customRoute, ctx);
   async function request(path, body) {
@@ -168,4 +168,58 @@ test('invalid calendar range and empty machine selection fail safely', async () 
   assert.equal((await h.request('/api/scanners/sync-custom', { mode: 'DATE', date: '2026-02-30' })).code, 400);
   assert.equal((await h.request('/api/scanners/sync-custom', { mode: 'TODAY', machineNos: [] })).body.success, false);
   assert.equal(h.exeCalls.length, 0);
+});
+
+for (const firstPath of ['/api/scanners/sync', '/api/scanners/sync-custom']) {
+  test(firstPath + ' holds shared mutex until reader completes; overlapping requests get 409', async () => {
+    let release;
+    const pending = new Promise(resolve => release = resolve);
+    const h = harness({ cli: () => pending });
+    const first = h.request(firstPath, { preview: true, mode: 'TODAY' });
+    await Promise.resolve(); await Promise.resolve();
+    for (const route of ['/api/scanners/sync', '/api/scanners/sync-custom']) {
+      const overlap = await h.request(route, { mode: 'TODAY' });
+      assert.equal(overlap.code, 409); assert.equal(overlap.body.success, false);
+    }
+    assert.equal(h.exeCalls.length, 1); release(payload()); await first;
+    assert.equal(h.ctx.syncRunning, false);
+  });
+  test(firstPath + ' rejects machine-level failure despite aggregate success, without writes', async () => {
+    const h = harness({ cli: () => { const c = payload(); c.machines[1].success = false; return c; } });
+    const result = await h.request(firstPath, { mode: 'TODAY' });
+    assert.equal(result.body.success, false); assert.equal(result.code, 502); assert.equal(h.rows.size, 0);
+    assert.ok(!h.calls.includes('connection')); assert.ok(!h.calls.some(c => c.startsWith('calculate:')));
+  });
+  test(firstPath + ' partial calculation returns failure and accurate committed counts', async () => {
+    const h = harness({ calcFailureDates: ['2026-11-03'], cli: () => { const c = payload(); c.scans.push({ ...c.scans[0], scanDateTime: '2026-11-02 08:00:00' }); return c; } });
+    const result = await h.request(firstPath, { mode: 'RANGE', dateFrom: '2026-11-02', dateTo: '2026-11-03' });
+    assert.equal(result.code, 502); assert.equal(result.body.success, false); assert.equal(result.body.calculationStatus, 'PARTIAL');
+    assert.equal(result.body.rawScan?.inserted ?? result.body.totalInserted, 2); assert.equal(h.rows.size, 2);
+    assert.equal(result.body.calculatedDates.length, 1); assert.equal(result.body.failedDates.length, 1);
+    assert.ok(h.calls.indexOf('commit') < h.calls.indexOf('calculate:2026-11-02'));
+  });
+}
+test('custom reads do not partially persist an earlier successful machine when a later machine fails', async () => {
+  const h = harness({ cli: ({ machine }) => machine === 3 ? { success: false, machines: [{ machineNo: 3, success: false }] } : payload() });
+  const result = await h.request('/api/scanners/sync-custom', { machineNos: [1,3], mode: 'TODAY' });
+  assert.equal(result.body.success, false); assert.equal(h.exeCalls.length, 2); assert.equal(h.rows.size, 0);
+  assert.ok(!h.calls.includes('connection'));
+});
+test('custom DATE/MONTH/YEAR/RANGE generate exact local calendar sets including leap day', async () => {
+  const cases = [
+    [{ mode: 'DATE', date: '2026-11-03' }, '2026-11-03', '2026-11-03', 1],
+    [{ mode: 'MONTH', month: '2024-02' }, '2024-02-01', '2024-02-29', 29],
+    [{ mode: 'YEAR', year: '2024' }, '2024-01-01', '2024-12-31', 366],
+    [{ mode: 'RANGE', dateFrom: '2026-10-31', dateTo: '2026-11-02' }, '2026-10-31', '2026-11-02', 3]
+  ];
+  for (const [body, first, last, count] of cases) {
+    const h = harness(), result = await h.request('/api/scanners/sync-custom', { ...body, preview: true });
+    assert.equal(result.code, 200); assert.equal(result.body.targetDates[0], first); assert.equal(result.body.targetDates.at(-1), last); assert.equal(result.body.targetDates.length, count);
+  }
+});
+test('malformed scanner windows cannot normalize into another date or default to today', async () => {
+  for (const body of [{ mode: 'RANGE', dateFrom: '2026-02-30', dateTo: '2026-03-03' }, { mode: 'YEAR', year: '2026garbage' }, { mode: 'MONTH', month: '2026-13' }, { mode: 'DATE' }, { mode: 'unknown' }]) {
+    const h = harness(), result = await h.request('/api/scanners/sync-custom', { ...body, preview: true });
+    assert.equal(result.code, 400); assert.equal(h.exeCalls.length, 0); assert.equal(h.calls.length, 0);
+  }
 });

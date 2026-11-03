@@ -109,3 +109,14 @@ scanner tests and 8 passing frontend scanner tests. The real-MySQL suite has ten
 prepared cases and remains unexecuted without an isolated MySQL instance (the
 disabled suite reports SKIP). See that runbook for guarded local-only commands,
 frontend fixes, EXE transport limits and Windows Server staging acceptance.
+
+
+## Final development evidence
+
+Latest results supersede earlier counts: 39 backend and 10 frontend tests pass;
+frontend build, TypeScript and backend syntax checks pass. The ten real-MySQL
+cases are still prepared but unexecuted without an isolated instance. Scanner
+Custom now rejects malformed date selections before invoking the reader. Shared
+mutex, failed-device, partial-calculation, timeout/exit, startup-no-sync and
+calendar-window coverage is recorded in the final readiness report. No EXE,
+production data/schema, gateway or other hospital application was changed.

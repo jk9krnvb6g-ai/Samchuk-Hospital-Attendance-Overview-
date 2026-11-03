@@ -7,11 +7,11 @@ const { execFile } = require('node:child_process');
 const source = fs.readFileSync(path.join(__dirname, '../server.cjs'), 'utf8');
 const begin = source.indexOf('function executeScannerReaderCli');
 const end = source.indexOf('\nfunction ', begin + 1);
-function reader(script) {
+function reader(script, testTimeout) {
   let seen;
   const ctx = vm.createContext({ console: { log(){}, warn(){}, error(){} }, fs: { existsSync: () => true }, path, process,
     getScannerReaderExePath: () => process.execPath,
-    execFile: (_exe, args, options, callback) => { seen = { args, options }; return execFile(process.execPath, ['-e', script], options, callback); }
+    execFile: (_exe, args, options, callback) => { seen = { args, options }; return execFile(process.execPath, ['-e', script], testTimeout ? { ...options, timeout: testTimeout } : options, callback); }
   });
   vm.runInContext(source.slice(begin, end), ctx);
   return { run: args => ctx.executeScannerReaderCli(args), seen: () => seen };
@@ -46,4 +46,22 @@ test('raw GET reads local timestamp text and preserves SDK values', async () => 
   vm.runInContext(source.slice(a,b), ctx);
   const res = { json(body) { this.body = body; } }; await handler({ query: {} }, res);
   assert.match(sql, /DATE_FORMAT/); assert.equal(res.body.data[0].scanDateTime, '2026-11-03 00:01:02'); assert.equal(res.body.data[0].verifyMode, 1073741824);
+});
+
+test('real child nonzero exit rejects even a success JSON payload', async () => {
+  const h = reader(`console.log(JSON.stringify({success:true,machines:[],scans:[]})); process.exitCode=7;`);
+  const result = await h.run(); assert.equal(result.success, false); assert.equal(result.exitCode, 7); assert.equal(result.scans, undefined);
+});
+test('real child timeout fails closed; production timeout remains 180 seconds', async () => {
+  const h = reader(`setInterval(()=>{},1000);`, 100);
+  const result = await h.run(); assert.equal(result.success, false); assert.notEqual(result.exitCode, 0); assert.equal(result.scans, undefined); assert.equal(h.seen().options.timeout, 180000);
+});
+test('MySQL integration preflight refuses remote hosts and production-default port before connection', async () => {
+  const { promisify } = require('node:util');
+  for (const [host, port, expected] of [['example.invalid','3307', /Only numeric loopback/], ['127.0.0.1','3306', /dedicated non-production test port/]]) {
+    await assert.rejects(promisify(execFile)(process.execPath, ['--test', path.join(__dirname, 'scanner-mysql.integration.test.cjs')], {
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'NODE_TEST_CONTEXT')), SCANNER_TEST_MYSQL_ENABLE: 'ISOLATED_LOCAL_TEST_ONLY', SCANNER_TEST_MYSQL_HOST: host, SCANNER_TEST_MYSQL_PORT: port, SCANNER_TEST_MYSQL_USER: 'sam_att_test_runner' },
+      timeout: 5000, windowsHide: true
+    }), error => { assert.match(error.stdout + error.stderr, expected); return true; });
+  }
 });

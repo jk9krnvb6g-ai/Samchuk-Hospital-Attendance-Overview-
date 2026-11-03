@@ -4588,6 +4588,16 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       preview = false
     } = req.body || {};
 
+    // Reject malformed scanner windows instead of normalizing or falling back to today.
+    if (syncSource === 'SCANNERS') {
+      const validDay = value => typeof value === 'string' && validScannerDateTime(value + ' 00:00:00');
+      const validWindow = mode === 'TODAY' || (mode === 'DATE' && validDay(date)) ||
+        (mode === 'RANGE' && validDay(dateFrom) && validDay(dateTo) && dateFrom <= dateTo) ||
+        (mode === 'MONTH' && typeof month === 'string' && /^\d{4}-\d{2}$/.test(month) && validDay(month + '-01')) ||
+        (mode === 'YEAR' && /^\d{4}$/.test(String(year)) && validDay(String(year) + '-01-01'));
+      if (!validWindow) return res.status(400).json({ success: false, message: 'Invalid scanner date selection' });
+    }
+
     // 1. คำนวณชุดวันที่เป้าหมาย (targetDates) ตามเงื่อนไขที่เลือก 100%
     const targetDatesSet = new Set();
     const today = new Date();

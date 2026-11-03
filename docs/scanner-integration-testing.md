@@ -9,8 +9,8 @@ Continues `d93f5d94b9693412b7700a52b4c02656c66e6663` on the existing development
 | Frontend production build (`npm run build`) | PASS; Vite 8.3.5, 1,684 modules. Existing >500 kB chunk warning remains. |
 | TypeScript (`npm run lint`) | PASS |
 | Backend syntax (`node --check backend/server.cjs`) | PASS |
-| Backend scanner tests (`npm run test:scanner`) | 27/27 PASS (23 existing + 4 contract/raw-GET tests) |
-| Frontend scanner tests (`npm run test:scanner:frontend`) | 8/8 PASS |
+| Backend scanner tests (`npm run test:scanner`) | 39/39 PASS (32 persistence/route cases + 7 contract/raw-GET/guard cases) |
+| Frontend scanner tests (`npm run test:scanner:frontend`) | 10/10 PASS |
 | MySQL (`npm run test:scanner:mysql`) | NOT RUN against MySQL; disabled suite reports SKIP, not PASS |
 
 npm was bootstrapped into the task's scratch directory; `npm ci` installed the
@@ -137,3 +137,34 @@ Cash_Cheque. Verify the actual attendance algorithm's persisted results in the
 staging DB. Capture exact deployed reader argument/retention evidence before
 claiming full historical-window support. No production deploy/restart/merge is
 part of this work.
+
+
+## Final coverage and read-only morning inspection
+
+The final development round also verifies both shared-mutex paths (409 while a
+reader is pending), aggregate-success/machine-failure rejection, zero partial
+persistence when a later selected machine fails, committed-count consistency
+on PARTIAL calculation, leap-year DATE/MONTH/YEAR/RANGE boundaries, nonzero child
+exit and real child timeout. Invalid scanner windows now return HTTP 400 before
+invoking the reader instead of normalizing dates or falling back to today.
+A browser-like store startup fixture issues data reads and zero scanner-sync
+requests. MySQL preflight guard tests reject remote hosts and port 3306 before
+opening a connection; this is not a substitute for real-MySQL test execution.
+
+Read-only morning inspection on the chosen development/staging checkout:
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\scanner-readonly-check.ps1 `
+  -RepositoryPath 'C:\Path\To\Sam_Att-Staging' `
+  -ReaderPath 'C:\Path\To\ReadOnlyCopy\ScannerSyncCli.exe'
+```
+
+The script reads Git branch/commit/file-status names with optional Git locks
+disabled, tool availability, existing local listeners on 3001/3002 and the reader
+file's metadata/SHA256. It does not run the reader/backend/npm, invoke HTTP/SQL,
+read configuration/secrets/personnel, start a listener or restart a service.
+A differing reader hash only identifies a differing file; it does not prove
+argument compatibility. Do not invoke a production reader for argument discovery.
+
+See [the final Thai readiness report](scanner-final-readiness-report.md) for
+blockers, actual results, staging acceptance and production gates.
