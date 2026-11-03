@@ -3388,18 +3388,23 @@ function executeScannerReaderCli(params = {}) {
         }
 
         let parsedJson = null;
-        const lines = stdoutStr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        for (let i = lines.length - 1; i >= 0; i--) {
-          const line = lines[i];
-          if (line.startsWith('{') && line.endsWith('}')) {
+        // Accept compact or pretty JSON, optionally preceded by diagnostic lines.
+        const payload = stdoutStr.replace(/^\uFEFF/, '').trim();
+        // Bound parsing attempts: a large truncated scan array must not cause
+        // one JSON.parse per nested record. CLI JSON begins at a line boundary.
+        const starts = [...payload.matchAll(/^\{/gm)].slice(-8).map(match => match.index);
+        for (const start of starts.reverse()) {
+          const candidate = payload.slice(start);
+          for (const text of [candidate, candidate.split(/\r?\n/, 1)[0]]) {
             try {
-              const obj = JSON.parse(line);
-              if (obj && typeof obj === 'object' && ('success' in obj || 'totalRead' in obj)) {
+              const obj = JSON.parse(text);
+              if (obj && typeof obj === 'object' && !Array.isArray(obj) && 'success' in obj) {
                 parsedJson = obj;
                 break;
               }
             } catch {}
           }
+          if (parsedJson) break;
         }
 
         const finalExitCode = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
@@ -3440,7 +3445,7 @@ function executeScannerReaderCli(params = {}) {
         }
 
         const actualExitCode = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
-        const isSuccess = actualExitCode === 0 && parsedJson.success !== false;
+        const isSuccess = actualExitCode === 0 && parsedJson.success === true;
         resolve({
           ...parsedJson,
           success: isSuccess,
@@ -3483,14 +3488,57 @@ function toBangkokDateTimeStr(val) {
 }
 
 
+function scannerDbMachineSummaries(machines, saved) {
+  return [...new Map((machines || []).map(m => [Number(m.machineNo), m])).values()].map(m => ({
+    ...m, newCount: 0, duplicates: 0, updated: 0, unmapped: 0,
+    ...(saved.machineCounts?.[Number(m.machineNo)] || {})
+  }));
+}
+
+function scannerMachineSelection(value) {
+  if (value == null || value === 'ALL') return [undefined];
+  const selected = [...new Set((Array.isArray(value) ? value : [value]).map(Number))];
+  if (!selected.length || selected.some(n => !Number.isSafeInteger(n) || n <= 0)) throw new Error('Invalid machine selection');
+  return selected;
+}
+
+function scannerRecentDates(days) {
+  if (!Number.isInteger(days) || days < 1 || days > 3660) throw new Error('Invalid scanner days');
+  const today = toBangkokDateTimeStr(new Date()).slice(0, 10);
+  return Array.from({ length: days }, (_, i) => {
+    const date = new Date(today + 'T00:00:00Z');
+    date.setUTCDate(date.getUTCDate() - i);
+    return date.toISOString().slice(0, 10);
+  });
+}
+
+async function recordScannerSync(cli, saved, days, machine = null, mode = 'MANUAL') {
+  try {
+    await getDbPool().query(`INSERT INTO scanner_sync_log
+      (sync_mode, machine_no, days, total_read, total_new, duplicates, unmapped, affected_dates, machines_summary, exit_code, error_message, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [mode, machine === 'ALL' ? null : machine, days, cli.totalRead || 0, saved.inserted,
+       saved.skipped, saved.unmapped || 0, JSON.stringify(saved.affectedDates), JSON.stringify(cli.machines || []),
+       cli.success === false || cli.failedDates?.length ? 1 : 0, cli.error || (cli.failedDates?.length ? JSON.stringify(cli.failedDates) : null), cli.durationMs || 0]);
+  } catch (error) { console.warn('[scanner_sync_log]', error.message); }
+}
+
+function validScannerDateTime(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) return false;
+  const parsed = new Date(value.replace(' ', 'T') + 'Z');
+  return value.slice(0, 4) >= '1000' && Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 19).replace('T', ' ') === value;
+}
+
 /**
  * Persist records returned by ScannerSyncCli directly to the attendance database.
  * No HOSOffice staging or deletion. All timestamps are Bangkok wall-clock strings.
  */
 async function persistScannerCliScans(cliResult, options = {}) {
-  if (!cliResult || !Array.isArray(cliResult.scans)) {
+  if (!cliResult || cliResult.success !== true || !Array.isArray(cliResult.scans) || !Array.isArray(cliResult.machines) || cliResult.machines.some(m => m.success === false)) {
     throw new Error('SCANNER_SCANS_MISSING: EXE did not return scans[]');
   }
+  if (options.strategy && !['SKIP_DUPLICATES', 'OVERWRITE'].includes(options.strategy)) throw new Error('Invalid scanner strategy');
+  scannerMachineSelection(options.machineNos);
   const allowedDates = options.dates ? new Set(options.dates) : null;
   const allowedMachines = options.machineNos && options.machineNos !== 'ALL'
     ? new Set((Array.isArray(options.machineNos) ? options.machineNos : [options.machineNos]).map(Number))
@@ -3505,66 +3553,100 @@ async function persistScannerCliScans(cliResult, options = {}) {
   `);
   const peopleByFinger = new Map();
   for (const p of people || []) {
-    if (p.fingle_id !== null && p.fingle_id !== undefined) peopleByFinger.set(Number(p.fingle_id), p);
+    if (p.fingle_id !== null && p.fingle_id !== undefined) {
+      const fid = Number(p.fingle_id);
+      if (!Number.isSafeInteger(fid) || fid <= 0) continue;
+      peopleByFinger.set(fid, peopleByFinger.has(fid) ? null : p);
+    }
   }
   const filtered = [];
   for (const scan of cliResult.scans) {
+    if (!scan || ['machineNo', 'enrollNumber', 'scanDateTime', 'verifyMode', 'inOutMode', 'workCode'].some(key => !Object.hasOwn(scan, key))) throw new Error('Incomplete scanner record');
     const machineNo = Number(scan.machineNo);
     if (!Number.isSafeInteger(machineNo) || machineNo <= 0) throw new Error('Invalid scanner machineNo');
     if (allowedMachines && !allowedMachines.has(machineNo)) continue;
     const rawDate = scan.scanDateTime;
-    if (typeof rawDate !== 'string' || !/^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$/.test(rawDate)) {
+    if (typeof rawDate !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(rawDate)) {
       throw new Error('Invalid scanner scanDateTime; expected YYYY-MM-DD HH:mm:ss');
     }
+    if (!validScannerDateTime(rawDate)) throw new Error('Invalid scanner calendar date/time');
     if (allowedDates && !allowedDates.has(rawDate.substring(0, 10))) continue;
     const fid = Number(scan.enrollNumber);
     if (!Number.isSafeInteger(fid) || fid <= 0) throw new Error('Invalid scanner enrollNumber');
+    if (fid > 2147483647 || machineNo > 2147483647) throw new Error('Scanner identifier exceeds database INT');
+    if (peopleByFinger.has(fid) && peopleByFinger.get(fid) === null) throw new Error(`Ambiguous personnel fingle_id ${fid}`);
     const ip = scan.deviceIp || machineIps.get(machineNo);
-    if (!ip) throw new Error(`Missing device IP for machine ${machineNo}`);
+    if (typeof ip !== 'string' || !ip || ip.length > 45) throw new Error(`Invalid device IP for machine ${machineNo}`);
+    for (const field of ['verifyMode', 'inOutMode']) {
+      if (scan[field] != null && (!Number.isInteger(scan[field]) || scan[field] < -2147483648 || scan[field] > 2147483647)) throw new Error(`Invalid scanner ${field}`);
+    }
     filtered.push({ scan, machineNo, fid, ip, rawDate });
   }
-  if (options.preview) return { inserted: 0, updated: 0, skipped: 0, total: filtered.length, affectedDates: [...new Set(filtered.map(x => x.rawDate.slice(0, 10)))].sort() };
-  let inserted = 0, updated = 0, skipped = 0;
+  if (options.preview) return { inserted: 0, updated: 0, skipped: 0, unmapped: 0, machineCounts: {}, total: filtered.length, affectedDates: [...new Set(filtered.map(x => x.rawDate.slice(0, 10)))].sort() };
+  let inserted = 0, updated = 0, skipped = 0, unmapped = 0;
   const affectedDates = new Set();
-  for (const { scan, machineNo, fid, ip, rawDate } of filtered) {
-    const person = peopleByFinger.get(fid);
-    const values = [
-      machineNo, ip, fid, rawDate,
-      scan.verifyMode == null ? null : Number(scan.verifyMode),
-      scan.inOutMode == null ? null : Number(scan.inOutMode),
-      person?.id ?? null,
-      person?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
-      person?.hr_position_name || '',
-      person?.hr_level_name || '',
-      person?.hr_dep_name || '',
-      person?.hr_dep_sub_name || '',
-      person?.hr_person_type_name || '',
-      person?.hr_person_type_id ?? null,
-      person?.hr_department_id ?? null,
-      person?.hr_department_sub_id ?? null,
-      person ? 1 : 0
-    ];
-    const overwrite = options.strategy === 'OVERWRITE';
-    const sql = `
-      INSERT ${overwrite ? '' : 'IGNORE'} INTO attendance_raw_scan
-      (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode,
-       person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name,
-       hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id,
-       hr_department_sub_id, hr_mapped, push_status, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'DEVICE')
-      ${overwrite ? `ON DUPLICATE KEY UPDATE verify_mode=VALUES(verify_mode),
-        in_out_mode=VALUES(in_out_mode), hr_mapped=VALUES(hr_mapped),
-        person_id=VALUES(person_id), hr_fullname=VALUES(hr_fullname),
-        hr_position_name=VALUES(hr_position_name), hr_leavel_name=VALUES(hr_leavel_name),
-        hr_dep_name=VALUES(hr_dep_name), hr_dep_sub_name=VALUES(hr_dep_sub_name)` : ''}
-    `;
-    const [result] = await pool.query(sql, values);
-    if (result.affectedRows === 1) inserted++;
-    else if (overwrite && result.affectedRows > 1) updated++;
-    else skipped++;
-    affectedDates.add(rawDate.substring(0, 10));
+  const machineCounts = {};
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    for (const { scan, machineNo, fid, ip, rawDate } of filtered) {
+      const counts = machineCounts[machineNo] ||= { newCount: 0, duplicates: 0, updated: 0, unmapped: 0 };
+      const person = peopleByFinger.get(fid);
+      if (!person) counts.unmapped++;
+      const values = [
+        machineNo, ip, fid, rawDate,
+        scan.verifyMode == null ? null : Number(scan.verifyMode),
+        scan.inOutMode == null ? null : Number(scan.inOutMode),
+        person?.id ?? null,
+        person?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
+        person?.hr_position_name || '',
+        person?.hr_level_name || '',
+        person?.hr_dep_name || '',
+        person?.hr_dep_sub_name || '',
+        person?.hr_person_type_name || '',
+        person?.hr_person_type_id ?? null,
+        person?.hr_department_id ?? null,
+        person?.hr_department_sub_id ?? null,
+        person ? 1 : 0
+      ];
+      if (!person) unmapped++;
+      const overwrite = options.strategy === 'OVERWRITE';
+      // Plain INSERT propagates truncation/constraint errors instead of INSERT IGNORE.
+      // Duplicate detection comes from the existing unique (fingle_id, scan_date_time).
+      try {
+        await connection.query(`INSERT INTO attendance_raw_scan
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode,
+           person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name,
+           hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id,
+           hr_department_sub_id, hr_mapped, push_status, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'DEVICE')`, values);
+        inserted++; counts.newCount++;
+        affectedDates.add(rawDate.slice(0, 10));
+      } catch (error) {
+        if (error.code !== 'ER_DUP_ENTRY') throw error;
+        const [existing] = await connection.query(
+          'SELECT id FROM attendance_raw_scan WHERE fingle_id = ? AND scan_date_time = ? FOR UPDATE', [fid, rawDate]);
+        if (existing.length !== 1) throw error;
+        if (overwrite) {
+          // Never reset push status, source, machine provenance or push audit fields.
+          await connection.query(`UPDATE attendance_raw_scan SET
+            verify_mode=?, in_out_mode=?, person_id=?, hr_fullname=?, hr_position_name=?,
+            hr_leavel_name=?, hr_dep_name=?, hr_dep_sub_name=?, hr_person_type_name=?,
+            hr_person_type_id=?, hr_department_id=?, hr_department_sub_id=?, hr_mapped=? WHERE id=?`,
+            [...values.slice(4), existing[0].id]);
+          updated++; counts.updated++;
+          affectedDates.add(rawDate.slice(0, 10));
+        } else { skipped++; counts.duplicates++; }
+      }
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
-  return { inserted, updated, skipped, total: filtered.length, affectedDates: [...affectedDates].sort() };
+  return { inserted, updated, skipped, unmapped, machineCounts, total: filtered.length, affectedDates: [...affectedDates].sort() };
 }
 
 // ============================================================================
@@ -4311,14 +4393,16 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
     });
   }
 
+  if (req.body?.preview !== undefined && typeof req.body.preview !== 'boolean') return res.status(400).json({ success: false, message: 'preview must be boolean' });
   syncRunning = true;
   const startTime = Date.now();
 
   try {
-    await ensureTablesExist();
-    const pool = getDbPool();
+    if (req.body?.preview !== true) await ensureTablesExist();
     const { auto = true, days = 3, machineNo, machine, preview = false } = req.body || {};
 
+    const dates = scannerRecentDates(days);
+    if (scannerMachineSelection(machine ?? machineNo).length !== 1) return res.status(400).json({ success: false, message: 'Use sync-custom for multiple machines' });
     const cliResult = await executeScannerReaderCli({
       auto,
       days,
@@ -4326,44 +4410,25 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
       preview
     });
 
-    // N4, R10: บันทึกผลลัพธ์ลงตาราง scanner_sync_log
-    try {
-      await pool.query(`
-        INSERT INTO scanner_sync_log 
-        (sync_mode, machine_no, days, total_read, total_new, duplicates, unmapped, affected_dates, machines_summary, exit_code, error_message, duration_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [
-        auto ? 'AUTO' : 'MANUAL',
-        machine || machineNo || null,
-        days || 3,
-        cliResult.totalRead || 0,
-        cliResult.totalNew || 0,
-        cliResult.duplicates || 0,
-        cliResult.unmapped || 0,
-        cliResult.affectedDates ? JSON.stringify(cliResult.affectedDates) : null,
-        cliResult.machines ? JSON.stringify(cliResult.machines) : null,
-        cliResult.exitCode || 0,
-        cliResult.error || null,
-        cliResult.durationMs || (Date.now() - startTime)
-      ]);
-    } catch (logErr) {
-      console.warn('[scanner_sync_log] Warning: Could not write sync log:', logErr.message);
-    }
-
     // EXE scans[] is the only scanner source; never read/delete HOSOffice here.
     let persisted = null;
     if (cliResult.success) {
       try {
-        persisted = await persistScannerCliScans(cliResult, { preview });
+        persisted = await persistScannerCliScans(cliResult, { preview, machineNos: machine ?? machineNo, dates });
       } catch (persistError) {
         console.error('[Scanner Raw Scan] Save failed:', persistError.message);
         return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', message: persistError.message });
       }
     }
+    if (!cliResult.success) return res.status(502).json(cliResult);
     cliResult.rawScan = persisted;
-    if (persisted && !preview) {
+    cliResult.readerSummary = { totalNew: cliResult.totalNew, duplicates: cliResult.duplicates, unmapped: cliResult.unmapped };
+    if (persisted) {
       cliResult.totalNew = persisted.inserted;
       cliResult.duplicates = persisted.skipped;
+      cliResult.unmapped = persisted.unmapped;
+      cliResult.affectedDates = persisted.affectedDates;
+      cliResult.machines = scannerDbMachineSummaries(cliResult.machines, persisted);
     }
 
     // ข้อ 13: ตรวจผลสำเร็จของการคำนวณแต่ละวัน และแยกสถานะ SUCCESS, PARTIAL, FAILED ชัดเจน
@@ -4400,7 +4465,9 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
       cliResult.failedDates = [];
     }
 
-    res.json(cliResult);
+    if (cliResult.failedDates.length) { cliResult.success = false; cliResult.message = 'Raw scans saved; attendance calculation failed'; }
+    if (!preview) await recordScannerSync(cliResult, persisted, days, machine ?? machineNo, auto ? 'AUTO' : 'MANUAL');
+    res.status(cliResult.success ? 200 : 502).json(cliResult);
   } catch (err) {
     res.status(500).json({
       success: false,
@@ -4497,11 +4564,12 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       message: 'กระบวนการซิงค์ข้อมูลจากเครื่องสแกนกำลังทำงานอยู่ กรุณารอสักครู่'
     });
   }
+  if (req.body?.preview !== undefined && typeof req.body.preview !== 'boolean') return res.status(400).json({ success: false, message: 'preview must be boolean' });
   syncRunning = true;
   const startTime = Date.now();
 
   try {
-    await ensureTablesExist();
+    if (req.body?.preview !== true) await ensureTablesExist();
     const poolAtt = getDbPool();
     const { 
       machineNos = 'ALL', 
@@ -4534,7 +4602,7 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       let count = 0;
       while (cur <= end && count < 366) {
         targetDatesSet.add(cur.toISOString().substring(0, 10));
-        cur.setDate(cur.getDate() + 1);
+        cur.setUTCDate(cur.getUTCDate() + 1);
         count++;
       }
     } else if (mode === 'MONTH' && month) {
@@ -4549,16 +4617,20 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       const y = parseInt(year, 10);
       const isLeap = (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
       const totalDays = isLeap ? 366 : 365;
-      const dObj = new Date(y, 0, 1);
+      const dObj = new Date(Date.UTC(y, 0, 1));
       for (let i = 0; i < totalDays; i++) {
         targetDatesSet.add(dObj.toISOString().substring(0, 10));
-        dObj.setDate(dObj.getDate() + 1);
+        dObj.setUTCDate(dObj.getUTCDate() + 1);
       }
     } else {
       targetDatesSet.add(todayStr);
     }
 
     const targetDates = Array.from(targetDatesSet).sort();
+    if (!targetDates.length || targetDates.some(d => !validScannerDateTime(d + ' 00:00:00')) ||
+        (mode === 'RANGE' && (dateFrom > dateTo || targetDates[targetDates.length - 1] !== dateTo))) {
+      return res.status(400).json({ success: false, message: 'Invalid or unsupported date range (maximum 366 days)' });
+    }
 
     // ฟังก์ชันจัดรูปแบบวันที่ภาษาไทย พ.ศ. (dd/MM/yyyy)
     function formatThaiDateDisplay(dateStr) {
@@ -4599,50 +4671,25 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
         const earliestObj = new Date(earliestTargetDate);
         const diffDays = Math.ceil((today.getTime() - earliestObj.getTime()) / (1000 * 60 * 60 * 24));
         // +2 วัน เผื่อความคลาดเคลื่อนของเวลา/กะข้ามคืน
-        daysBack = Math.max(1, Math.min(180, diffDays + 2));
+        daysBack = Math.max(1, diffDays + 2);
       }
 
       console.log(`[ScannerReader] 🎯 เงื่อนไขที่เลือก: ${mode} (${targetLabel}) -> วันที่เป้าหมาย: [${targetDates.join(', ')}]`);
       console.log(`[ScannerReader] 📡 สั่งอ่านบัฟเฟอร์ฮาร์ดแวร์ย้อนหลัง ${daysBack} วัน เพื่อดึงข้อมูลให้ครอบคลุม ${targetLabel}...`);
 
-      let machineParam = undefined;
-      if (machineNos && machineNos !== 'ALL') {
-        const mArr = Array.isArray(machineNos) ? machineNos : [Number(machineNos)];
-        if (mArr.length === 1) {
-          machineParam = mArr[0];
-        }
+      const selectedMachines = scannerMachineSelection(machineNos);
+      const results = [];
+      for (const machineParam of selectedMachines) {
+        results.push(await executeScannerReaderCli({ auto: true, days: daysBack, machine: machineParam, preview }));
+        if (!results[results.length - 1].success) break;
       }
-
-      const cliResult = await executeScannerReaderCli({
-        auto: true,
-        days: daysBack,
-        machine: machineParam,
-        preview: preview
-      });
-
-      // บันทึกลง scanner_sync_log (N4, R10)
-      try {
-        await poolAtt.query(`
-          INSERT INTO scanner_sync_log 
-          (sync_mode, machine_no, days, total_read, total_new, duplicates, unmapped, affected_dates, machines_summary, exit_code, error_message, duration_ms)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-          preview ? 'PREVIEW' : 'CUSTOM',
-          machineParam || null,
-          daysBack,
-          cliResult.totalRead || 0,
-          cliResult.totalNew || 0,
-          cliResult.duplicates || 0,
-          cliResult.unmapped || 0,
-          JSON.stringify(targetDates),
-          cliResult.machines ? JSON.stringify(cliResult.machines) : null,
-          cliResult.exitCode || 0,
-          cliResult.error || null,
-          cliResult.durationMs || (Date.now() - startTime)
-        ]);
-      } catch (logErr) {
-        console.warn('Record custom sync log error:', logErr.message);
-      }
+      const cliResult = {
+        success: results.every(r => r.success === true),
+        message: results.find(r => !r.success)?.message,
+        machines: results.flatMap(r => r.machines || []),
+        scans: results.every(r => Array.isArray(r.scans)) ? results.flatMap(r => r.scans) : undefined,
+        totalRead: results.reduce((n, r) => n + (r.totalRead || 0), 0)
+      };
 
       if (!cliResult.success) {
         return res.status(502).json({ success: false, message: cliResult.message || 'Scanner EXE failed', machines: cliResult.machines || [] });
@@ -4659,25 +4706,28 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       const stagingSkipped = saved.skipped;
       const stagingTotal = saved.total;
 
-      // คำนวณผลรายวันอัตโนมัติเฉพาะ targetDates หากบันทึกจริง (N3)
-      if (!preview && cliResult.success && recalculate && saved && saved.affectedDates.length > 0) {
+      const calculatedDates = [], failedDates = [];
+      if (!preview && recalculate) {
         for (const affDate of saved.affectedDates) {
           try {
-            await calculateDailyAttendanceForDate(affDate);
-            console.log(`[Auto-Calculate] คำนวณสรุปเวลาทำงานของวันที่ ${affDate} สำเร็จ`);
-          } catch (calcErr) {
-            console.error(`Auto calculate for ${affDate} error:`, calcErr.message);
-          }
+            const result = await calculateDailyAttendanceForDate(affDate);
+            if (!result?.success) throw new Error(result?.message || 'Calculation returned false');
+            calculatedDates.push(affDate);
+          } catch (error) { failedDates.push({ date: affDate, error: error.message }); }
         }
       }
+      const calculationStatus = failedDates.length ? (calculatedDates.length ? 'PARTIAL' : 'FAILED')
+        : (calculatedDates.length ? 'SUCCESS' : 'SKIPPED');
+      if (!preview) await recordScannerSync({ ...cliResult, machines: scannerDbMachineSummaries(cliResult.machines, saved), failedDates }, saved, daysBack, selectedMachines.length === 1 ? selectedMachines[0] : null, 'CUSTOM');
 
       const totalTargetFound = stagingTotal;
       const responseMsg = preview
         ? `ตรวจสอบเครื่องสแกน (${targetLabel}): พบข้อมูลสแกนตรงตามเงื่อนไขที่เลือก ${totalTargetFound} รายการ (ระบบจะบันทึกเฉพาะวันที่เลือกนี้เท่านั้น)`
-        : `ดึงข้อมูลสแกนสำเร็จ: ดึงและบันทึกข้อมูล${targetLabel} เข้าสู่ samchuk_attendance.attendance_raw_scan เรียบร้อยแล้ว (เพิ่มใหม่ +${stagingInserted} รายการ, ข้อมูลเดิมในระบบ ${stagingSkipped} รายการ) และคำนวณผลสรุปเวลาทำงานของ${targetLabel}เรียบร้อยแล้ว`;
+        : `บันทึก Raw Scan สำเร็จ: เพิ่ม ${stagingInserted}, ปรับปรุง ${stagingUpdated}, ซ้ำ ${stagingSkipped}; calculation: ${calculationStatus}`;
 
-      return res.json({
-        success: cliResult.success,
+      return res.status(failedDates.length ? 502 : 200).json({
+        success: failedDates.length === 0,
+        calculationStatus, calculatedDates, failedDates, autoCalculated: calculationStatus === 'SUCCESS',
         preview,
         targetLabel,
         targetDates,
@@ -4691,9 +4741,9 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
         totalSkipped: stagingSkipped,
         stagingInserted,
         stagingSkipped,
-        affectedDates: targetDates,
-        machines: cliResult.machines || [],
-        message: responseMsg
+        affectedDates: saved.affectedDates,
+        machines: scannerDbMachineSummaries(cliResult.machines, saved),
+        message: failedDates.length ? 'Raw scans saved; attendance calculation failed' : responseMsg
       });
     }
 

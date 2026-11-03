@@ -1,0 +1,171 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(__dirname + '/server.cjs', 'utf8');
+function section(from, to) { return source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from))); }
+const helpers = section('function scannerDbMachineSummaries', 'async function syncHosofficeToAttendanceRawScan');
+const normalRoute = section("samRouter.post(samRoute('/api/scanners/sync'),", '// 4.12.2');
+const customRoute = section("samRouter.post(samRoute('/api/scanners/sync-custom'),", '// 4.12.3');
+const payload = () => ({ success: true, totalRead: 100, totalNew: 99, duplicates: 90,
+  machines: [1,2,3].map(machineNo => ({ machineNo, ip: '192.0.2.' + machineNo, success: true })),
+  scans: [{ machineNo: 1, enrollNumber: '12', scanDateTime: '2026-11-03 08:00:00', verifyMode: 1073741824, inOutMode: 1, workCode: null }] });
+function harness(options = {}) {
+  const rows = new Map(), calls = [], routes = {}, exeCalls = [];
+  let snapshot;
+  const connection = {
+    async beginTransaction() { calls.push('begin'); snapshot = new Map(rows); },
+    async commit() { calls.push('commit'); },
+    async rollback() { calls.push('rollback'); rows.clear(); for (const [k,v] of snapshot) rows.set(k,v); },
+    release() { calls.push('release'); },
+    async query(sql, values) {
+      calls.push(sql);
+      if (options.dbFail && values[2] === 13) throw new Error('DB write failed');
+      if (sql.startsWith('INSERT')) {
+        const key = `${values[2]}_${values[3]}`;
+        if (rows.has(key)) throw Object.assign(new Error('duplicate'), { code: 'ER_DUP_ENTRY' });
+        rows.set(key, { id: rows.size + 1, values, push: 'PENDING' }); return [{ affectedRows: 1 }];
+      }
+      if (sql.startsWith('SELECT')) return [[...rows.values()].filter(r => r.values[2] === values[0] && r.values[3] === values[1]).map(r => ({ id: r.id }))];
+      if (sql.startsWith('UPDATE')) return [{ affectedRows: 1 }];
+      throw new Error('Unexpected query ' + sql);
+    }
+  };
+  const pool = { async getConnection() { calls.push('connection'); return connection; }, async query(sql) {
+    calls.push(sql);
+    if (sql.includes('FROM attendance_personnel')) return [options.people || [{ id: 99, fingle_id: 12, hr_fullname: 'Mapped' }]];
+    if (sql.includes('scanner_sync_log')) return [{ affectedRows: 1 }];
+    throw new Error('Unexpected pool SQL');
+  }};
+  const ctx = vm.createContext({ console: { log(){}, warn(){}, error(){} }, getDbPool: () => pool,
+    toBangkokDateTimeStr: () => '2026-11-03 10:00:00', syncRunning: false,
+    ensureTablesExist: async () => calls.push('DDL'), samRoute: x => x,
+    samRouter: { post: (path, fn) => routes[path] = fn },
+    executeScannerReaderCli: async args => { exeCalls.push(args); return options.cli ? options.cli(args) : payload(); },
+    calculateDailyAttendanceForDate: async d => { calls.push('calculate:' + d); if (options.calcThrow) throw new Error('calc throw'); return { success: !options.calcFail }; }
+  });
+  vm.runInContext(helpers + normalRoute + customRoute, ctx);
+  async function request(path, body) {
+    const res = { code: 200, status(n) { this.code = n; return this; }, json(value) { this.body = value; return this; } };
+    await routes[path]({ body }, res); return res;
+  }
+  return { ctx, calls, rows, exeCalls, request };
+}
+test('insert preserves local time, SDK integers and fingle_id mapping; duplicate is DB-derived', async () => {
+  const h = harness();
+  const first = await h.ctx.persistScannerCliScans(payload());
+  assert.equal(first.inserted, 1); assert.equal(h.rows.values().next().value.values[3], '2026-11-03 08:00:00');
+  assert.equal(h.rows.values().next().value.values[4], 1073741824); assert.equal(h.rows.values().next().value.values[6], 99);
+  const second = await h.ctx.persistScannerCliScans(payload());
+  assert.equal(second.inserted, 0); assert.equal(second.skipped, 1); assert.equal(second.affectedDates.length, 0);
+});
+test('never maps enrollNumber by person_id', async () => {
+  const h = harness({ people: [{ id: 12, fingle_id: 88 }] });
+  const result = await h.ctx.persistScannerCliScans(payload());
+  assert.equal(result.unmapped, 1); assert.equal(h.rows.values().next().value.values[6], null);
+});
+test('OVERWRITE duplicate preserves Push metadata, counts update independently of FOUND_ROWS', async () => {
+  const h = harness(); await h.ctx.persistScannerCliScans(payload());
+  h.rows.values().next().value.push = 'PUSHED';
+  const result = await h.ctx.persistScannerCliScans(payload(), { strategy: 'OVERWRITE' });
+  assert.equal(result.inserted, 0); assert.equal(result.updated, 1);
+  const update = h.calls.find(c => c.startsWith('UPDATE'));
+  assert.doesNotMatch(update, /push_status|pushed_at|source\s*=/); assert.equal(h.rows.values().next().value.push, 'PUSHED');
+});
+test('any DB write error rolls back entire batch', async () => {
+  const h = harness({ dbFail: true }), cli = payload(); cli.scans.push({ ...cli.scans[0], enrollNumber: 13 });
+  await assert.rejects(h.ctx.persistScannerCliScans(cli), /DB write failed/);
+  assert.equal(h.rows.size, 0); assert.ok(h.calls.includes('rollback')); assert.ok(!h.calls.includes('commit'));
+});
+test('calendar validation, missing scans, failed machines, invalid modes fail before writes', async () => {
+  for (const change of [c => c.scans = undefined, c => c.scans[0].scanDateTime = '2026-02-30 08:00:00', c => c.scans[0].verifyMode = 'bad', c => c.machines[0].success = false]) {
+    const h = harness(), cli = payload(); change(cli);
+    await assert.rejects(h.ctx.persistScannerCliScans(cli)); assert.ok(!h.calls.includes('connection'));
+  }
+});
+test('date and machine filters apply before persistence', async () => {
+  const h = harness(), cli = payload(); cli.scans.push({ ...cli.scans[0], machineNo: 2, enrollNumber: 13 });
+  const result = await h.ctx.persistScannerCliScans(cli, { dates: ['2026-11-03'], machineNos: [2,3] });
+  assert.equal(result.total, 1); assert.equal(h.rows.values().next().value.values[0], 2);
+});
+for (const path of ['/api/scanners/sync', '/api/scanners/sync-custom']) {
+  test(path + ' preview has no DDL, writes, logs or calculation', async () => {
+    const h = harness(); const r = await h.request(path, { preview: true, mode: 'DATE', date: '2026-11-03' });
+    assert.equal(r.code, 200); assert.equal(r.body.success, true);
+    assert.ok(h.calls.every(c => c.includes('FROM attendance_personnel')));
+  });
+  test(path + ' calculation false/throw is failure after committed save', async () => {
+    for (const failure of [{ calcFail: true }, { calcThrow: true }]) {
+      const h = harness(failure); const r = await h.request(path, { mode: 'DATE', date: '2026-11-03' });
+      assert.equal(r.code, 502); assert.equal(r.body.success, false); assert.equal(r.body.calculationStatus, 'FAILED'); assert.ok(h.calls.includes('commit'));
+    }
+  });
+  test(path + ' EXE failure cannot save or calculate', async () => {
+    const h = harness({ cli: () => ({ success: false }) }); const r = await h.request(path, { mode: 'TODAY' });
+    assert.equal(r.code, 502); assert.equal(r.body.success, false); assert.ok(!h.calls.includes('connection'));
+  });
+}
+test('custom selected machines invoked separately; dates outside request discarded; counts ignore CLI totals', async () => {
+  const h = harness({ cli: args => { const c = payload(); c.scans[0].machineNo = args.machine; c.scans[0].enrollNumber = args.machine; return c; } });
+  const r = await h.request('/api/scanners/sync-custom', { machineNos: [1,3], mode: 'DATE', date: '2026-11-03', recalculate: false });
+  assert.deepEqual(h.exeCalls.map(x => x.machine), [1,3]); assert.equal(r.body.newCount, 2); assert.equal(r.body.duplicateCount, 0); assert.equal(r.body.calculationStatus, 'SKIPPED');
+});
+test('YEAR uses UTC calendar independent of host timezone', async () => {
+  const h = harness(); const r = await h.request('/api/scanners/sync-custom', { preview: true, mode: 'YEAR', year: 2026 });
+  assert.equal(r.body.targetDates[0], '2026-01-01'); assert.equal(r.body.targetDates.at(-1), '2026-12-31');
+});
+const reader = section('function executeScannerReaderCli', '// แปลงค่าเวลา');
+function readerContext(stdout, error) {
+  const end = source.indexOf('\nfunction ', source.indexOf('function executeScannerReaderCli') + 1);
+  const code = source.slice(source.indexOf('function executeScannerReaderCli'), end);
+  let execOptions;
+  const ctx = vm.createContext({ console: { log(){}, warn(){}, error(){} }, process: { env: {} },
+    fs: { existsSync: () => true }, path: require('node:path'), getScannerReaderExePath: () => 'fixture.exe',
+    execFile: (p,a,o,cb) => { execOptions = o; cb(error, stdout, ''); }
+  }); vm.runInContext(code, ctx);
+  return { ctx, options: () => execOptions };
+}
+test('reader accepts pretty/compact JSON and diagnostic prefix without truncating scans', async () => {
+  for (const spacing of [undefined, 2]) {
+    const cli = payload(); cli.scans = Array.from({ length: 10000 }, () => cli.scans[0]);
+    const h = readerContext('diagnostics\n' + JSON.stringify(cli, null, spacing));
+    const r = await h.ctx.executeScannerReaderCli(); assert.equal(r.success, true); assert.equal(r.scans.length, 10000);
+    assert.equal(h.options().maxBuffer, 25 * 1024 * 1024);
+  }
+});
+test('reader rejects truncated JSON, missing success and process/maxBuffer error even with valid JSON', async () => {
+  for (const [output,error] of [['{"success":true',null], ['{"totalRead":4}',null], [JSON.stringify(payload()), new Error('maxBuffer exceeded')]]) {
+    const h = readerContext(output,error); const r = await h.ctx.executeScannerReaderCli(); assert.equal(r.success, false);
+  }
+});
+
+for (const path of ['/api/scanners/sync', '/api/scanners/sync-custom']) {
+  test(path + ' rejects missing scans and DB errors without calculation; releases mutex', async () => {
+    for (const options of [{ cli: () => ({ success: true, machines: [] }) }, { dbFail: true, cli: () => { const c = payload(); c.scans[0].enrollNumber = 13; return c; } }]) {
+      const h = harness(options); const r = await h.request(path, { mode: 'TODAY' });
+      assert.equal(r.code, 502); assert.equal(r.body.success, false);
+      assert.ok(!h.calls.some(c => c.startsWith('calculate:'))); assert.equal(h.ctx.syncRunning, false);
+    }
+  });
+  test(path + ' rejects non-boolean preview before mutation', async () => {
+    const h = harness(); const r = await h.request(path, { preview: 'true' });
+    assert.equal(r.code, 400); assert.equal(h.calls.length, 0); assert.equal(h.exeCalls.length, 0);
+  });
+}
+test('unique key spans machines; one fingerprint/time is inserted once', async () => {
+  const h = harness(), c = payload(); c.scans.push({ ...c.scans[0], machineNo: 2 });
+  const result = await h.ctx.persistScannerCliScans(c);
+  assert.equal(result.inserted, 1); assert.equal(result.skipped, 1); assert.equal(result.machineCounts[2].duplicates, 1);
+});
+test('normal sync filters unrequested machines/dates and exposes DB counts', async () => {
+  const h = harness({ cli: () => { const c = payload(); c.scans.push({ ...c.scans[0], scanDateTime: '2026-10-01 08:00:00' }); c.scans.push({ ...c.scans[0], machineNo: 2, enrollNumber: 13 }); return c; } });
+  const r = await h.request('/api/scanners/sync', { machineNo: 1, days: 3 });
+  assert.equal(r.body.totalNew, 1); assert.equal(r.body.duplicates, 0); assert.equal(r.body.machines[0].newCount, 1);
+  assert.equal(h.rows.size, 1);
+});
+test('invalid calendar range and empty machine selection fail safely', async () => {
+  const h = harness();
+  assert.equal((await h.request('/api/scanners/sync-custom', { mode: 'DATE', date: '2026-02-30' })).code, 400);
+  assert.equal((await h.request('/api/scanners/sync-custom', { mode: 'TODAY', machineNos: [] })).body.success, false);
+  assert.equal(h.exeCalls.length, 0);
+});
