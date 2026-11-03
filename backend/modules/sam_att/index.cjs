@@ -13,8 +13,26 @@
 
 const { createSamAttRouter, samRouter, ensureTablesExist } = require('../../server.cjs');
 
-module.exports = {
-  createSamAttRouter,
-  samRouter,
-  ensureTablesExist
-};
+// กำหนด Adapter Metadata และ Function Properties ให้กับ samRouter โดยตรง
+// เพื่อให้รองรับทั้ง app.use('/api/Sam_Att', router) และ require().router และ createSamAttRouter()
+samRouter.id = 'sam-att';
+samRouter.moduleId = 'sam-att';
+samRouter.name = 'Samchuk Attendance System';
+samRouter.prefix = '/api/Sam_Att';
+samRouter.router = samRouter;
+samRouter.samRouter = samRouter;
+samRouter.createSamAttRouter = createSamAttRouter;
+samRouter.ensureTablesExist = ensureTablesExist;
+
+// Universal Export: คืนค่าเป็น Express Router function พร้อมคุณสมบัติครบถ้วน
+module.exports = samRouter;
+module.exports.default = samRouter;
+module.exports.id = 'sam-att';
+module.exports.moduleId = 'sam-att';
+module.exports.name = 'Samchuk Attendance System';
+module.exports.prefix = '/api/Sam_Att';
+module.exports.router = samRouter;
+module.exports.samRouter = samRouter;
+module.exports.createSamAttRouter = createSamAttRouter;
+module.exports.ensureTablesExist = ensureTablesExist;
+

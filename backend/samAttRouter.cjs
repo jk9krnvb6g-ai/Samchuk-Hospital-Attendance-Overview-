@@ -8,9 +8,17 @@
  * app.use('/api/Sam_Att', createSamAttRouter(dependencies));
  */
 
-const { createSamAttRouter, samRouter } = require('./modules/sam_att/index.cjs');
+const { createSamAttRouter, samRouter, ensureTablesExist } = require('./modules/sam_att/index.cjs');
 
-module.exports = {
-  createSamAttRouter,
-  samRouter
-};
+// Universal Export: รองรับทั้งการ import แบบ Express Router โดยตรง, Adapter Object, และ Factory Function
+module.exports = samRouter;
+module.exports.default = samRouter;
+module.exports.id = 'sam-att';
+module.exports.moduleId = 'sam-att';
+module.exports.name = 'Samchuk Attendance System';
+module.exports.prefix = '/api/Sam_Att';
+module.exports.router = samRouter;
+module.exports.samRouter = samRouter;
+module.exports.createSamAttRouter = createSamAttRouter;
+module.exports.ensureTablesExist = ensureTablesExist;
+
