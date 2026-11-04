@@ -9,9 +9,17 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig(() => {
   const basePath = process.env.VITE_BASE_PATH || '/Sam_Att/';
+  const apiBase = process.env.VITE_API_URL || 'SAME_ORIGIN';
+  if (apiBase !== 'SAME_ORIGIN') {
+    const endpoint = new URL(apiBase);
+    if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error('VITE_API_URL must not contain credentials, query or fragment');
+  }
   return {
     base: basePath,
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), {
+      name: 'scanner-build-evidence',
+      generateBundle() { this.emitFile({ type: 'asset', fileName: 'scanner-build.json', source: JSON.stringify({ basePath, apiBase }, null, 2) }); },
+    }],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

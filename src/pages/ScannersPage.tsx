@@ -56,6 +56,8 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
     message: string;
   } | null>(null);
 
+  const [syncingMachineNo, setSyncingMachineNo] = useState<number | null>(null);
+
   // Test All State
   const [isTestingAll, setIsTestingAll] = useState<boolean>(false);
   const [testAllResults, setTestAllResults] = useState<Array<{
@@ -363,8 +365,14 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
   };
 
   // Sync specific scanner
-  const handleSyncSpecific = (machineNo: number) => {
-    attendanceStore.triggerScannerSync(machineNo);
+  const handleSyncSpecific = async (machineNo: number) => {
+    setSyncingMachineNo(machineNo);
+    try {
+      const result = await attendanceStore.triggerScannerSync(machineNo);
+      setTestResult({ machineNo, success: true, message: result.message || `เพิ่ม ${result.totalNew}, ซ้ำ ${result.duplicates}` });
+    } catch (error) {
+      setTestResult({ machineNo, success: false, message: error instanceof Error ? error.message : 'Sync failed' });
+    } finally { setSyncingMachineNo(null); }
   };
 
   // Run full simulation of FK_ConnectNet -> FK_LoadGeneralLogData -> FK_GetGeneralLogData -> FK_DisConnect
@@ -756,14 +764,14 @@ export const ScannersPage: React.FC<ScannersPageProps> = ({
                         </button>
                         <button
                           onClick={() => handleSyncSpecific(scanner.machineNo)}
-                          disabled={!isEnabled}
+                          disabled={!isEnabled || syncingMachineNo !== null || isSyncing}
                           className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-md transition-colors text-center ${
                             !isEnabled
                               ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
                               : 'bg-teal-50 hover:bg-teal-100 text-teal-800 cursor-pointer'
                           }`}
                         >
-                          Sync ดึง Log
+                          {syncingMachineNo === scanner.machineNo ? 'กำลัง Sync...' : 'Sync ดึง Log'}
                         </button>
                       </div>
 

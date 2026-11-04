@@ -38,6 +38,8 @@ const express = require('express');
 const cors = require('cors');
 const net = require('net');
 const mysql = require('mysql2/promise');
+const { assertScannerStorage, inspectScannerStorage } = require('./scanner-storage.cjs');
+const { captureScannerIdentity, stagingEvidence } = require('./scanner-staging.cjs');
 const http = require('http');
 const { execFile } = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
@@ -50,6 +52,8 @@ process.env.TZ = process.env.TZ || 'Asia/Bangkok';
 let syncRunning = false;
 
 const crypto = require('crypto');
+// Capture loaded code identity once: changing a file on disk cannot impersonate a reloaded module.
+const scannerLoadedIdentity = captureScannerIdentity(__dirname);
 
 const app = express();
 const PORT = process.env.API_PORT || 3002;
@@ -2263,7 +2267,7 @@ samRouter.get(samRoute('/api/raw-scans'), async (req, res) => {
   try {
     const pool = getDbPool();
     const limit = parseInt(req.query.limit, 10) || 200;
-    const [rows] = await pool.query('SELECT * FROM attendance_raw_scan ORDER BY scan_date_time DESC LIMIT ?', [limit]);
+    const [rows] = await pool.query("SELECT *, DATE_FORMAT(scan_date_time, '%Y-%m-%d %H:%i:%s') AS scan_date_time FROM attendance_raw_scan ORDER BY scan_date_time DESC LIMIT ?", [limit]);
     
     // Map to client format
     const mapped = rows.map(r => ({
@@ -2296,7 +2300,7 @@ samRouter.get(samRoute('/api/raw-scans'), async (req, res) => {
     res.json({ success: true, total: mapped.length, data: mapped });
   } catch (err) {
     console.warn('[RawScans] DB Query warning:', err.message);
-    res.json({ success: true, total: 0, data: [], dbConnected: false, warning: err.message });
+    res.status(503).json({ success: false, dbConnected: false, message: 'โหลด Raw Scan จากฐานข้อมูลไม่สำเร็จ', warning: err.message });
   }
 });
 
@@ -3226,6 +3230,8 @@ samRouter.get(samRoute('/api/hosoffice/personnel'), async (req, res) => {
 
 // ข้อ 5 & 10: ปิด Endpoint สร้างข้อมูลจำลองและการสั่ง CREATE TABLE ใน HOSOffice
 samRouter.post(samRoute('/api/hosoffice/test-push'), async (req, res) => {
+  if (process.env.SAM_ATT_ENABLE_HOSOFFICE_PUSH !== 'true') return res.status(403).json({ success: false, error: 'HOSOFFICE_PUSH_DISABLED', message: 'ปิด Push ไป HOSOffice ระหว่างทดสอบ Sam_Att' });
+
   return res.status(403).json({
     success: false,
     error: 'ENDPOINT_DISABLED',
@@ -3290,6 +3296,9 @@ samRouter.post(samRoute('/api/scanners/test-all'), async (req, res) => {
 // 4.12 Scanner CLI Reader (ScannerSyncCli.exe) Integration - N1, N2, N4
 // --------------------------------------------------------------------------
 function getScannerReaderExePath() {
+  const current = getActiveConfig();
+  if (typeof current.scannerReaderExePath === 'string' && current.scannerReaderExePath) return path.resolve(current.scannerReaderExePath);
+  if (current.scannerStagingAcceptance === true) return path.join(__dirname, '__staging_reader_not_configured__.exe');
   const envPath = process.env.SCAN_READER_EXE || process.env.SCANNER_CLI_PATH;
   const candidates = [
     envPath,
@@ -3388,18 +3397,23 @@ function executeScannerReaderCli(params = {}) {
         }
 
         let parsedJson = null;
-        const lines = stdoutStr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        for (let i = lines.length - 1; i >= 0; i--) {
-          const line = lines[i];
-          if (line.startsWith('{') && line.endsWith('}')) {
+        // Accept compact or pretty JSON, optionally preceded by diagnostic lines.
+        const payload = stdoutStr.replace(/^\uFEFF/, '').trim();
+        // Bound parsing attempts: a large truncated scan array must not cause
+        // one JSON.parse per nested record. CLI JSON begins at a line boundary.
+        const starts = [...payload.matchAll(/^\{/gm)].slice(-8).map(match => match.index);
+        for (const start of starts.reverse()) {
+          const candidate = payload.slice(start);
+          for (const text of [candidate, candidate.split(/\r?\n/, 1)[0]]) {
             try {
-              const obj = JSON.parse(line);
-              if (obj && typeof obj === 'object' && ('success' in obj || 'totalRead' in obj)) {
+              const obj = JSON.parse(text);
+              if (obj && typeof obj === 'object' && !Array.isArray(obj) && 'success' in obj) {
                 parsedJson = obj;
                 break;
               }
             } catch {}
           }
+          if (parsedJson) break;
         }
 
         const finalExitCode = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
@@ -3440,7 +3454,7 @@ function executeScannerReaderCli(params = {}) {
         }
 
         const actualExitCode = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
-        const isSuccess = actualExitCode === 0 && parsedJson.success !== false;
+        const isSuccess = actualExitCode === 0 && parsedJson.success === true;
         resolve({
           ...parsedJson,
           success: isSuccess,
@@ -3480,6 +3494,171 @@ function toBangkokDateTimeStr(val) {
     hour12: false
   }).format(dt);
   return bkk.replace(', ', ' ');
+}
+
+
+function scannerDbMachineSummaries(machines, saved) {
+  return [...new Map((machines || []).map(m => [Number(m.machineNo), m])).values()].map(m => ({
+    ...m, newCount: 0, duplicates: 0, updated: 0, unmapped: 0,
+    ...(saved.machineCounts?.[Number(m.machineNo)] || {})
+  }));
+}
+
+function scannerMachineSelection(value) {
+  if (value == null || value === 'ALL') return [undefined];
+  const selected = [...new Set((Array.isArray(value) ? value : [value]).map(Number))];
+  if (!selected.length || selected.some(n => !Number.isSafeInteger(n) || n <= 0)) throw new Error('Invalid machine selection');
+  return selected;
+}
+
+function scannerRecentDates(days) {
+  if (!Number.isInteger(days) || days < 1 || days > 3660) throw new Error('Invalid scanner days');
+  const today = toBangkokDateTimeStr(new Date()).slice(0, 10);
+  return Array.from({ length: days }, (_, i) => {
+    const date = new Date(today + 'T00:00:00Z');
+    date.setUTCDate(date.getUTCDate() - i);
+    return date.toISOString().slice(0, 10);
+  });
+}
+
+async function recordScannerSync(cli, saved, days, machine = null, mode = 'MANUAL') {
+  try {
+    await getDbPool().query(`INSERT INTO scanner_sync_log
+      (sync_mode, machine_no, days, total_read, total_new, duplicates, unmapped, affected_dates, machines_summary, exit_code, error_message, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [mode, machine === 'ALL' ? null : machine, days, cli.totalRead || 0, saved.inserted,
+       saved.skipped, saved.unmapped || 0, JSON.stringify(saved.affectedDates), JSON.stringify(cli.machines || []),
+       cli.success === false || cli.failedDates?.length ? 1 : 0, cli.error || (cli.failedDates?.length ? JSON.stringify(cli.failedDates) : null), cli.durationMs || 0]);
+  } catch (error) { console.warn('[scanner_sync_log]', error.message); }
+}
+
+function validScannerDateTime(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) return false;
+  const parsed = new Date(value.replace(' ', 'T') + 'Z');
+  return value.slice(0, 4) >= '1000' && Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 19).replace('T', ' ') === value;
+}
+
+/**
+ * Persist records returned by ScannerSyncCli directly to the attendance database.
+ * No HOSOffice staging or deletion. All timestamps are Bangkok wall-clock strings.
+ */
+async function persistScannerCliScans(cliResult, options = {}) {
+  if (!cliResult || cliResult.success !== true || !Array.isArray(cliResult.scans) || !Array.isArray(cliResult.machines) || cliResult.machines.some(m => m.success === false)) {
+    throw new Error('SCANNER_SCANS_MISSING: EXE did not return scans[]');
+  }
+  if (options.strategy && !['SKIP_DUPLICATES', 'OVERWRITE'].includes(options.strategy)) throw new Error('Invalid scanner strategy');
+  scannerMachineSelection(options.machineNos);
+  const allowedDates = options.dates ? new Set(options.dates) : null;
+  const allowedMachines = options.machineNos && options.machineNos !== 'ALL'
+    ? new Set((Array.isArray(options.machineNos) ? options.machineNos : [options.machineNos]).map(Number))
+    : null;
+  const machineIps = new Map((cliResult.machines || []).map(m => [Number(m.machineNo), m.ip || m.deviceIp]));
+  const pool = getDbPool();
+  const [people] = await pool.query(`
+    SELECT person_id AS id, fingle_id, hr_fullname, hr_position_name,
+           hr_level_name, hr_dep_name, hr_dep_sub_name, hr_person_type_name,
+           hr_person_type_id, hr_department_id, hr_department_sub_id
+    FROM attendance_personnel WHERE status = 'ACTIVE' OR status IS NULL
+  `);
+  const peopleByFinger = new Map();
+  for (const p of people || []) {
+    if (p.fingle_id !== null && p.fingle_id !== undefined) {
+      const fid = Number(p.fingle_id);
+      if (!Number.isSafeInteger(fid) || fid <= 0) continue;
+      peopleByFinger.set(fid, peopleByFinger.has(fid) ? null : p);
+    }
+  }
+  const filtered = [];
+  for (const scan of cliResult.scans) {
+    if (!scan || ['machineNo', 'enrollNumber', 'scanDateTime', 'verifyMode', 'inOutMode', 'workCode'].some(key => !Object.hasOwn(scan, key))) throw new Error('Incomplete scanner record');
+    const machineNo = Number(scan.machineNo);
+    if (!Number.isSafeInteger(machineNo) || machineNo <= 0) throw new Error('Invalid scanner machineNo');
+    if (allowedMachines && !allowedMachines.has(machineNo)) continue;
+    const rawDate = scan.scanDateTime;
+    if (typeof rawDate !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(rawDate)) {
+      throw new Error('Invalid scanner scanDateTime; expected YYYY-MM-DD HH:mm:ss');
+    }
+    if (!validScannerDateTime(rawDate)) throw new Error('Invalid scanner calendar date/time');
+    if (allowedDates && !allowedDates.has(rawDate.substring(0, 10))) continue;
+    const fid = Number(scan.enrollNumber);
+    if (!Number.isSafeInteger(fid) || fid <= 0) throw new Error('Invalid scanner enrollNumber');
+    if (fid > 2147483647 || machineNo > 2147483647) throw new Error('Scanner identifier exceeds database INT');
+    if (peopleByFinger.has(fid) && peopleByFinger.get(fid) === null) throw new Error(`Ambiguous personnel fingle_id ${fid}`);
+    const ip = scan.deviceIp || machineIps.get(machineNo);
+    if (typeof ip !== 'string' || !ip || ip.length > 45) throw new Error(`Invalid device IP for machine ${machineNo}`);
+    for (const field of ['verifyMode', 'inOutMode']) {
+      if (scan[field] != null && (!Number.isInteger(scan[field]) || scan[field] < -2147483648 || scan[field] > 2147483647)) throw new Error(`Invalid scanner ${field}`);
+    }
+    filtered.push({ scan, machineNo, fid, ip, rawDate });
+  }
+  if (options.preview) return { inserted: 0, updated: 0, skipped: 0, unmapped: 0, machineCounts: {}, unmappedCandidates: filtered.filter(x => !peopleByFinger.get(x.fid)).length, total: filtered.length, affectedDates: [...new Set(filtered.map(x => x.rawDate.slice(0, 10)))].sort() };
+  let inserted = 0, updated = 0, skipped = 0, unmapped = 0, pendingMappingCount = 0;
+  const affectedDates = new Set();
+  const machineCounts = {};
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    for (const { scan, machineNo, fid, ip, rawDate } of filtered) {
+      const counts = machineCounts[machineNo] ||= { newCount: 0, duplicates: 0, updated: 0, unmapped: 0 };
+      const person = peopleByFinger.get(fid);
+      const values = [
+        machineNo, ip, fid, rawDate,
+        scan.verifyMode == null ? null : Number(scan.verifyMode),
+        scan.inOutMode == null ? null : Number(scan.inOutMode),
+        person?.id ?? null,
+        person?.hr_fullname || `เจ้าหน้าที่ ${fid}`,
+        person?.hr_position_name || '',
+        person?.hr_level_name || '',
+        person?.hr_dep_name || '',
+        person?.hr_dep_sub_name || '',
+        person?.hr_person_type_name || '',
+        person?.hr_person_type_id ?? null,
+        person?.hr_department_id ?? null,
+        person?.hr_department_sub_id ?? null,
+        person ? 1 : 0
+      ];
+      const overwrite = options.strategy === 'OVERWRITE';
+      // Plain INSERT propagates truncation/constraint errors instead of INSERT IGNORE.
+      // Duplicate detection comes from the existing unique (fingle_id, scan_date_time).
+      try {
+        await connection.query(`INSERT INTO attendance_raw_scan
+          (machine_no, device_ip, fingle_id, scan_date_time, verify_mode, in_out_mode,
+           person_id, hr_fullname, hr_position_name, hr_leavel_name, hr_dep_name,
+           hr_dep_sub_name, hr_person_type_name, hr_person_type_id, hr_department_id,
+           hr_department_sub_id, hr_mapped, push_status, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'DEVICE')`, values);
+        inserted++; counts.newCount++;
+        if (!person) { unmapped++; counts.unmapped++; }
+        affectedDates.add(rawDate.slice(0, 10));
+      } catch (error) {
+        if (error.code !== 'ER_DUP_ENTRY') throw error;
+        const [existing] = await connection.query(
+          'SELECT id, hr_mapped FROM attendance_raw_scan WHERE fingle_id = ? AND scan_date_time = ? FOR UPDATE', [fid, rawDate]);
+        if (existing.length !== 1) throw error;
+        if (overwrite) {
+          // Never reset push status, source, machine provenance or push audit fields.
+          if (person) await connection.query(`UPDATE attendance_raw_scan SET
+            verify_mode=?, in_out_mode=?, person_id=?, hr_fullname=?, hr_position_name=?,
+            hr_leavel_name=?, hr_dep_name=?, hr_dep_sub_name=?, hr_person_type_name=?,
+            hr_person_type_id=?, hr_department_id=?, hr_department_sub_id=?, hr_mapped=? WHERE id=?`,
+            [...values.slice(4), existing[0].id]);
+          else await connection.query('UPDATE attendance_raw_scan SET verify_mode=?, in_out_mode=? WHERE id=?', [values[4], values[5], existing[0].id]);
+          updated++; counts.updated++;
+          if (!person && !existing[0].hr_mapped) { unmapped++; counts.unmapped++; }
+          affectedDates.add(rawDate.slice(0, 10));
+        } else { skipped++; counts.duplicates++; }
+      }
+    }
+    const [[pending]] = await connection.query('SELECT COUNT(*) AS pending FROM attendance_raw_scan WHERE hr_mapped=0');
+    pendingMappingCount = Number(pending.pending);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  return { inserted, updated, skipped, unmapped, pendingMappingCount, machineCounts, total: filtered.length, affectedDates: [...affectedDates].sort() };
 }
 
 // ============================================================================
@@ -3645,6 +3824,8 @@ async function calculateDailyAttendanceForDate(workDate) {
     console.error('[Calc Error - Personnel]', err.message);
     return { success: false, error: err.message, code: err.code, step: 'QUERY_PERSONNEL' };
   }
+
+  if (!personnelRows.length) return { success: true, skipped: true, reason: 'WAITING_FOR_MAPPING', workDate, message: 'รอข้อมูลบุคลากร: เก็บ Raw Scan แล้ว ยังไม่คำนวณ Attendance' };
 
   const personnelByPersonId = new Map();
   const personnelByFingleId = new Map();
@@ -4216,6 +4397,25 @@ async function calculateDailyAttendanceForDate(workDate) {
 }
 
 // 4.12.1 N1: แทนที่ /api/scanners/sync ด้วยการเรียก Standalone Reader ผ่าน execFile
+// Protected read-only evidence for an explicitly enabled staging router only.
+samRouter.get(samRoute('/api/scanners/staging-status'), requireRole(['ADMIN','HR']), async (req,res) => {
+  const current = getActiveConfig();
+  if (current.scannerStagingAcceptance !== true) return res.status(404).json({success:false,error:'STAGING_NOT_ENABLED'});
+  const context = routerContextStorage.getStore();
+  if (!context?.dbPool) return res.status(503).json({success:false,error:'SCOPED_POOL_REQUIRED'});
+  try {
+    const storage = await inspectScannerStorage(context.dbPool);
+    const evidence = stagingEvidence({sourceRoot:path.resolve(__dirname,'..'),identity:scannerLoadedIdentity,
+      stagingInstance:current.scannerStagingInstance,poolScoped:true,
+      pushEnabled:process.env.SAM_ATT_ENABLE_HOSOFFICE_PUSH==='true',
+      migrationEnabled:process.env.ALLOW_SCHEMA_MIGRATION==='true'||process.env.AUTO_MIGRATE_ON_STARTUP==='true'||current.allowSchemaMigration===true||current.allowMigration===true},storage);
+    const reader = getScannerReaderExePath();
+    evidence.readerSha256 = fs.existsSync(reader) ? crypto.createHash('sha256').update(fs.readFileSync(reader)).digest('hex') : null;
+    evidence.safeToSync = evidence.safeToSync && evidence.readerSha256 !== null;
+    return res.json(evidence);
+  } catch(error) { return res.status(503).json({success:false,error:error.code||'STAGING_INSPECTION_FAILED',message:'Staging evidence is unavailable'}); }
+});
+
 samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
   // N2: ตรวจสอบสถานะการทำงานเพื่อป้องกันรันซ้อน (Sync Mutex Lock)
   if (syncRunning) {
@@ -4226,14 +4426,16 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
     });
   }
 
+  if (req.body?.preview !== undefined && typeof req.body.preview !== 'boolean') return res.status(400).json({ success: false, message: 'preview must be boolean' });
   syncRunning = true;
   const startTime = Date.now();
 
   try {
-    await ensureTablesExist();
-    const pool = getDbPool();
+    await assertScannerStorage(getDbPool());
     const { auto = true, days = 3, machineNo, machine, preview = false } = req.body || {};
 
+    const dates = scannerRecentDates(days);
+    if (scannerMachineSelection(machine ?? machineNo).length !== 1) return res.status(400).json({ success: false, message: 'Use sync-custom for multiple machines' });
     const cliResult = await executeScannerReaderCli({
       auto,
       days,
@@ -4241,71 +4443,52 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
       preview
     });
 
-    // N4, R10: บันทึกผลลัพธ์ลงตาราง scanner_sync_log
-    try {
-      await pool.query(`
-        INSERT INTO scanner_sync_log 
-        (sync_mode, machine_no, days, total_read, total_new, duplicates, unmapped, affected_dates, machines_summary, exit_code, error_message, duration_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [
-        auto ? 'AUTO' : 'MANUAL',
-        machine || machineNo || null,
-        days || 3,
-        cliResult.totalRead || 0,
-        cliResult.totalNew || 0,
-        cliResult.duplicates || 0,
-        cliResult.unmapped || 0,
-        cliResult.affectedDates ? JSON.stringify(cliResult.affectedDates) : null,
-        cliResult.machines ? JSON.stringify(cliResult.machines) : null,
-        cliResult.exitCode || 0,
-        cliResult.error || null,
-        cliResult.durationMs || (Date.now() - startTime)
-      ]);
-    } catch (logErr) {
-      console.warn('[scanner_sync_log] Warning: Could not write sync log:', logErr.message);
+    // EXE scans[] is the only scanner source; never read/delete HOSOffice here.
+    let persisted = null;
+    if (cliResult.success) {
+      try {
+        persisted = await persistScannerCliScans(cliResult, { preview, machineNos: machine ?? machineNo, dates });
+      } catch (persistError) {
+        console.error('[Scanner Raw Scan] Save failed:', persistError.message);
+        return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', rawSaveSuccess: false, rawSaveStatus: 'FAILED', total_new: 0, duplicates: 0, message: persistError.message });
+      }
     }
-
-    // ซิงค์เข้าสู่ samchuk_attendance.attendance_raw_scan ทันทีเมื่อบันทึกจริง (!preview)
-    let stagingInserted = 0;
-    if (!preview && cliResult.success && cliResult.affectedDates && cliResult.affectedDates.length > 0) {
-      try {
-        const syncStagingRes = await syncHosofficeToAttendanceRawScan({
-          dates: cliResult.affectedDates,
-          days: days || 3,
-          strategy: 'SKIP_DUPLICATES'
-        });
-        stagingInserted = syncStagingRes.inserted || 0;
-        console.log(`[Staging Sync] บันทึก ${stagingInserted} รายการเข้าสู่ samchuk_attendance.attendance_raw_scan`);
-      } catch (stgErr) {
-        console.warn('[Staging Sync Warning] Could not sync to attendance_raw_scan:', stgErr.message);
-      }
-
-      // นโยบายไม่เขียนลง hosoffice อัตโนมัติ: ล้างข้อมูลชั่วคราว SCAN_SYNC ออกจาก hosoffice.fingle_scan ทันที
-      try {
-        const poolHos = getHosofficePool();
-        const [delHos] = await poolHos.query(`DELETE FROM fingle_scan WHERE CREATE_BY = 'SCAN_SYNC'`);
-        if (delHos && delHos.affectedRows > 0) {
-          console.log(`[Cleanup HosOffice] เคลียร์ข้อมูลดิบชั่วคราว ${delHos.affectedRows} รายการออกจาก hosoffice.fingle_scan เรียบร้อย`);
-        }
-      } catch (cleanErr) {
-        console.warn('[Cleanup HosOffice Notice] ไม่สามารถเคลียร์ SCAN_SYNC ใน hosoffice:', cleanErr.message);
-      }
+    if (!cliResult.success) return res.status(502).json({ ...cliResult, readerSummary: { totalNew: cliResult.totalNew, duplicates: cliResult.duplicates }, rawSaveSuccess: false, rawSaveStatus: 'NOT_STARTED', totalNew: 0, total_new: 0, duplicates: 0, machines: scannerDbMachineSummaries(cliResult.machines, {}) });
+    cliResult.rawScan = persisted;
+    cliResult.rawSaveSuccess = !preview;
+    cliResult.rawSaveStatus = preview ? 'PREVIEW' : 'COMMITTED';
+    cliResult.pendingMappingCount = persisted.pendingMappingCount ?? null;
+    cliResult.unmappedCandidates = persisted.unmappedCandidates;
+    cliResult.readerSummary = { totalNew: cliResult.totalNew, duplicates: cliResult.duplicates, unmapped: cliResult.unmapped };
+    if (persisted) {
+      cliResult.totalNew = persisted.inserted;
+      cliResult.total_new = persisted.inserted;
+      cliResult.duplicates = persisted.skipped;
+      cliResult.unmapped = persisted.unmapped;
+      cliResult.affectedDates = persisted.affectedDates;
+      cliResult.machines = scannerDbMachineSummaries(cliResult.machines, persisted);
+      cliResult.message = preview
+        ? `ตรวจสอบ Raw Scan: พบ ${persisted.total} รายการ ยังไม่บันทึกข้อมูล`
+        : `บันทึก Raw Scan สำเร็จ: เพิ่ม ${persisted.inserted}, ปรับปรุง ${persisted.updated}, ซ้ำ ${persisted.skipped}`;
     }
 
     // ข้อ 13: ตรวจผลสำเร็จของการคำนวณแต่ละวัน และแยกสถานะ SUCCESS, PARTIAL, FAILED ชัดเจน
-    if (cliResult.success && cliResult.affectedDates && Array.isArray(cliResult.affectedDates) && cliResult.affectedDates.length > 0) {
+    if (!preview && cliResult.success && persisted && persisted.affectedDates.length > 0) {
       const calcSummaries = [];
+      const mappingPendingDates = [];
       const successDates = [];
       const failedDates = [];
 
-      for (const d of cliResult.affectedDates) {
+      for (const d of persisted.affectedDates) {
         try {
           const cRes = await calculateDailyAttendanceForDate(d);
-          if (cRes && cRes.success) {
+          if (cRes?.skipped && cRes.reason === 'WAITING_FOR_MAPPING') {
+            mappingPendingDates.push(d);
+          } else if (cRes && cRes.success) {
             successDates.push(d);
             calcSummaries.push(cRes);
           } else {
-            failedDates.push({ date: d, error: cRes?.message || 'Calculation returned false' });
+            failedDates.push({ date: d, error: cRes?.message || cRes?.error || 'Calculation returned false' });
           }
         } catch (calcErr) {
           failedDates.push({ date: d, error: calcErr.message });
@@ -4313,12 +4496,13 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
         }
       }
 
-      const calcStatus = failedDates.length === 0 ? 'SUCCESS' : (successDates.length > 0 ? 'PARTIAL' : 'FAILED');
+      const calcStatus = failedDates.length ? (successDates.length ? 'PARTIAL' : 'FAILED') : (mappingPendingDates.length ? 'WAITING_FOR_MAPPING' : 'SUCCESS');
       cliResult.autoCalculated = calcStatus === 'SUCCESS';
       cliResult.calculationStatus = calcStatus;
       cliResult.calculatedDates = successDates;
       cliResult.failedDates = failedDates;
       cliResult.calcSummaries = calcSummaries;
+      cliResult.mappingPendingDates = mappingPendingDates;
     } else {
       cliResult.autoCalculated = false;
       cliResult.calculationStatus = 'SKIPPED';
@@ -4326,7 +4510,10 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
       cliResult.failedDates = [];
     }
 
-    res.json(cliResult);
+    cliResult.calculationSuccess = cliResult.calculationStatus === 'SUCCESS';
+    if (cliResult.failedDates.length) { cliResult.success = false; cliResult.message = 'Raw scans saved; attendance calculation failed'; }
+    if (!preview) await recordScannerSync(cliResult, persisted, days, machine ?? machineNo, auto ? 'AUTO' : 'MANUAL');
+    res.status(cliResult.success ? 200 : 502).json(cliResult);
   } catch (err) {
     res.status(500).json({
       success: false,
@@ -4423,11 +4610,13 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       message: 'กระบวนการซิงค์ข้อมูลจากเครื่องสแกนกำลังทำงานอยู่ กรุณารอสักครู่'
     });
   }
+  if (req.body?.preview !== undefined && typeof req.body.preview !== 'boolean') return res.status(400).json({ success: false, message: 'preview must be boolean' });
   syncRunning = true;
   const startTime = Date.now();
 
   try {
-    await ensureTablesExist();
+    if ((req.body?.syncSource || 'SCANNERS') === 'SCANNERS') await assertScannerStorage(getDbPool());
+    else if (req.body?.preview !== true) await ensureTablesExist();
     const poolAtt = getDbPool();
     const { 
       machineNos = 'ALL', 
@@ -4442,6 +4631,16 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       strategy = 'SKIP_DUPLICATES',
       preview = false
     } = req.body || {};
+
+    // Reject malformed scanner windows instead of normalizing or falling back to today.
+    if (syncSource === 'SCANNERS') {
+      const validDay = value => typeof value === 'string' && validScannerDateTime(value + ' 00:00:00');
+      const validWindow = mode === 'TODAY' || (mode === 'DATE' && validDay(date)) ||
+        (mode === 'RANGE' && validDay(dateFrom) && validDay(dateTo) && dateFrom <= dateTo) ||
+        (mode === 'MONTH' && typeof month === 'string' && /^\d{4}-\d{2}$/.test(month) && validDay(month + '-01')) ||
+        (mode === 'YEAR' && /^\d{4}$/.test(String(year)) && validDay(String(year) + '-01-01'));
+      if (!validWindow) return res.status(400).json({ success: false, message: 'Invalid scanner date selection' });
+    }
 
     // 1. คำนวณชุดวันที่เป้าหมาย (targetDates) ตามเงื่อนไขที่เลือก 100%
     const targetDatesSet = new Set();
@@ -4460,7 +4659,7 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       let count = 0;
       while (cur <= end && count < 366) {
         targetDatesSet.add(cur.toISOString().substring(0, 10));
-        cur.setDate(cur.getDate() + 1);
+        cur.setUTCDate(cur.getUTCDate() + 1);
         count++;
       }
     } else if (mode === 'MONTH' && month) {
@@ -4475,16 +4674,20 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       const y = parseInt(year, 10);
       const isLeap = (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
       const totalDays = isLeap ? 366 : 365;
-      const dObj = new Date(y, 0, 1);
+      const dObj = new Date(Date.UTC(y, 0, 1));
       for (let i = 0; i < totalDays; i++) {
         targetDatesSet.add(dObj.toISOString().substring(0, 10));
-        dObj.setDate(dObj.getDate() + 1);
+        dObj.setUTCDate(dObj.getUTCDate() + 1);
       }
     } else {
       targetDatesSet.add(todayStr);
     }
 
     const targetDates = Array.from(targetDatesSet).sort();
+    if (!targetDates.length || targetDates.some(d => !validScannerDateTime(d + ' 00:00:00')) ||
+        (mode === 'RANGE' && (dateFrom > dateTo || targetDates[targetDates.length - 1] !== dateTo))) {
+      return res.status(400).json({ success: false, message: 'Invalid or unsupported date range (maximum 366 days)' });
+    }
 
     // ฟังก์ชันจัดรูปแบบวันที่ภาษาไทย พ.ศ. (dd/MM/yyyy)
     function formatThaiDateDisplay(dateStr) {
@@ -4525,120 +4728,83 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
         const earliestObj = new Date(earliestTargetDate);
         const diffDays = Math.ceil((today.getTime() - earliestObj.getTime()) / (1000 * 60 * 60 * 24));
         // +2 วัน เผื่อความคลาดเคลื่อนของเวลา/กะข้ามคืน
-        daysBack = Math.max(1, Math.min(180, diffDays + 2));
+        daysBack = Math.max(1, diffDays + 2);
       }
 
       console.log(`[ScannerReader] 🎯 เงื่อนไขที่เลือก: ${mode} (${targetLabel}) -> วันที่เป้าหมาย: [${targetDates.join(', ')}]`);
       console.log(`[ScannerReader] 📡 สั่งอ่านบัฟเฟอร์ฮาร์ดแวร์ย้อนหลัง ${daysBack} วัน เพื่อดึงข้อมูลให้ครอบคลุม ${targetLabel}...`);
 
-      let machineParam = undefined;
-      if (machineNos && machineNos !== 'ALL') {
-        const mArr = Array.isArray(machineNos) ? machineNos : [Number(machineNos)];
-        if (mArr.length === 1) {
-          machineParam = mArr[0];
-        }
+      const selectedMachines = scannerMachineSelection(machineNos);
+      const results = [];
+      for (const machineParam of selectedMachines) {
+        results.push(await executeScannerReaderCli({ auto: true, days: daysBack, machine: machineParam, preview }));
+        if (!results[results.length - 1].success) break;
       }
+      const cliResult = {
+        success: results.every(r => r.success === true),
+        message: results.find(r => !r.success)?.message,
+        machines: results.flatMap(r => r.machines || []),
+        scans: results.every(r => Array.isArray(r.scans)) ? results.flatMap(r => r.scans) : undefined,
+        totalRead: results.reduce((n, r) => n + (r.totalRead || 0), 0)
+      };
 
-      const cliResult = await executeScannerReaderCli({
-        auto: true,
-        days: daysBack,
-        machine: machineParam,
-        preview: preview
-      });
-
-      // บันทึกลง scanner_sync_log (N4, R10)
+      if (!cliResult.success) {
+        return res.status(502).json({ success: false, rawSaveSuccess: false, rawSaveStatus: 'NOT_STARTED', newCount: 0, totalInserted: 0, total_new: 0, duplicates: 0, duplicateCount: 0, message: cliResult.message || 'Scanner EXE failed', machines: scannerDbMachineSummaries(cliResult.machines, {}) });
+      }
+      let saved;
       try {
-        await poolAtt.query(`
-          INSERT INTO scanner_sync_log 
-          (sync_mode, machine_no, days, total_read, total_new, duplicates, unmapped, affected_dates, machines_summary, exit_code, error_message, duration_ms)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-          preview ? 'PREVIEW' : 'CUSTOM',
-          machineParam || null,
-          daysBack,
-          cliResult.totalRead || 0,
-          cliResult.totalNew || 0,
-          cliResult.duplicates || 0,
-          cliResult.unmapped || 0,
-          JSON.stringify(targetDates),
-          cliResult.machines ? JSON.stringify(cliResult.machines) : null,
-          cliResult.exitCode || 0,
-          cliResult.error || null,
-          cliResult.durationMs || (Date.now() - startTime)
-        ]);
-      } catch (logErr) {
-        console.warn('Record custom sync log error:', logErr.message);
+        saved = await persistScannerCliScans(cliResult, { dates: targetDates, machineNos, strategy, preview });
+      } catch (persistError) {
+        console.error('[Custom Scanner Raw Scan] Save failed:', persistError.message);
+        return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', rawSaveSuccess: false, rawSaveStatus: 'FAILED', total_new: 0, duplicates: 0, message: persistError.message });
       }
+      const stagingInserted = saved.inserted;
+      const stagingUpdated = saved.updated;
+      const stagingSkipped = saved.skipped;
+      const stagingTotal = saved.total;
 
-      // ซิงค์เฉพาะ targetDates เข้าสู่ samchuk_attendance.attendance_raw_scan (กรองเฉพาะวันที่เลือกอย่างเข้มงวด)
-      let stagingInserted = 0;
-      let stagingUpdated = 0;
-      let stagingSkipped = 0;
-      let stagingTotal = 0;
-
-      if (!preview && cliResult.success) {
-        try {
-          const syncStagingRes = await syncHosofficeToAttendanceRawScan({
-            dates: targetDates, // กรองเฉพาะ targetDates ที่เลือกเท่านั้น!
-            strategy: strategy || 'SKIP_DUPLICATES'
-          });
-          stagingInserted = syncStagingRes.inserted || 0;
-          stagingUpdated = syncStagingRes.updated || 0;
-          stagingSkipped = syncStagingRes.skipped || 0;
-          stagingTotal = syncStagingRes.total || (stagingInserted + stagingSkipped);
-          console.log(`[Staging Sync] บันทึกเฉพาะข้อมูลของ ${targetLabel} ลงใน samchuk_attendance.attendance_raw_scan สำเร็จ: +${stagingInserted} รายการใหม่ (ซ้ำเดิม ${stagingSkipped} รายการ, รวมในวันที่เลือก ${stagingTotal} รายการ)`);
-        } catch (stgErr) {
-          console.warn('[Staging Sync Warning] Could not sync to attendance_raw_scan:', stgErr.message);
-        }
-
-        // นโยบายไม่เขียนลง hosoffice อัตโนมัติ: ล้างข้อมูลชั่วคราว SCAN_SYNC ออกจาก hosoffice.fingle_scan ทันที
-        // เพื่อให้ hosoffice.fingle_scan สะอาด และคงไว้ให้ ADMIN เป็นคนกดส่ง (SCAN_PUSH) ผ่านเมนู "ส่งข้อมูลเข้า HOSOffice" เท่านั้น
-        try {
-          const poolHos = getHosofficePool();
-          const [delHos] = await poolHos.query(`DELETE FROM fingle_scan WHERE CREATE_BY = 'SCAN_SYNC'`);
-          if (delHos && delHos.affectedRows > 0) {
-            console.log(`[Cleanup HosOffice] เคลียร์ข้อมูลดิบชั่วคราว ${delHos.affectedRows} รายการออกจาก hosoffice.fingle_scan เรียบร้อย (คงไว้เฉพาะที่ ADMIN ส่งเอง)`);
-          }
-        } catch (cleanErr) {
-          console.warn('[Cleanup HosOffice Notice] ไม่สามารถเคลียร์ SCAN_SYNC ใน hosoffice:', cleanErr.message);
-        }
-      }
-
-      // คำนวณผลรายวันอัตโนมัติเฉพาะ targetDates หากบันทึกจริง (N3)
-      if (!preview && recalculate && targetDates.length > 0) {
-        for (const affDate of targetDates) {
+      const calculatedDates = [], failedDates = [], mappingPendingDates = [];
+      if (!preview && recalculate) {
+        for (const affDate of saved.affectedDates) {
           try {
-            await calculateDailyAttendanceForDate(affDate);
-            console.log(`[Auto-Calculate] คำนวณสรุปเวลาทำงานของวันที่ ${affDate} สำเร็จ`);
-          } catch (calcErr) {
-            console.error(`Auto calculate for ${affDate} error:`, calcErr.message);
-          }
+            const result = await calculateDailyAttendanceForDate(affDate);
+            if (result?.skipped && result.reason === 'WAITING_FOR_MAPPING') { mappingPendingDates.push(affDate); continue; }
+            if (!result?.success) throw new Error(result?.message || result?.error || 'Calculation returned false');
+            calculatedDates.push(affDate);
+          } catch (error) { failedDates.push({ date: affDate, error: error.message }); }
         }
       }
+      const calculationStatus = failedDates.length ? (calculatedDates.length ? 'PARTIAL' : 'FAILED')
+        : (mappingPendingDates.length ? 'WAITING_FOR_MAPPING' : (calculatedDates.length ? 'SUCCESS' : 'SKIPPED'));
+      if (!preview) await recordScannerSync({ ...cliResult, machines: scannerDbMachineSummaries(cliResult.machines, saved), failedDates }, saved, daysBack, selectedMachines.length === 1 ? selectedMachines[0] : null, 'CUSTOM');
 
-      const totalTargetFound = stagingTotal || (stagingInserted + stagingSkipped);
+      const totalTargetFound = stagingTotal;
       const responseMsg = preview
         ? `ตรวจสอบเครื่องสแกน (${targetLabel}): พบข้อมูลสแกนตรงตามเงื่อนไขที่เลือก ${totalTargetFound} รายการ (ระบบจะบันทึกเฉพาะวันที่เลือกนี้เท่านั้น)`
-        : `ดึงข้อมูลสแกนสำเร็จ: ดึงและบันทึกข้อมูล${targetLabel} เข้าสู่ samchuk_attendance.attendance_raw_scan เรียบร้อยแล้ว (เพิ่มใหม่ +${stagingInserted} รายการ, ข้อมูลเดิมในระบบ ${stagingSkipped} รายการ) และคำนวณผลสรุปเวลาทำงานของ${targetLabel}เรียบร้อยแล้ว`;
+        : `บันทึก Raw Scan สำเร็จ: เพิ่ม ${stagingInserted}, ปรับปรุง ${stagingUpdated}, ซ้ำ ${stagingSkipped}; calculation: ${calculationStatus}`;
 
-      return res.json({
-        success: cliResult.success,
+      return res.status(failedDates.length ? 502 : 200).json({
+        success: failedDates.length === 0,
+        rawSaveSuccess: !preview, rawSaveStatus: preview ? 'PREVIEW' : 'COMMITTED',
+        rawScan: saved, unmapped: saved.unmapped, unmappedCount: saved.unmapped, pendingMappingCount: saved.pendingMappingCount ?? null, unmappedCandidates: saved.unmappedCandidates,
+        calculationSuccess: calculationStatus === 'SUCCESS', mappingPendingDates,
+        calculationStatus, calculatedDates, failedDates, autoCalculated: calculationStatus === 'SUCCESS',
         preview,
         targetLabel,
         targetDates,
         targetDatesCount: targetDates.length,
         selectedDateMode: mode,
         totalFound: totalTargetFound,
-        newCount: stagingInserted,
+        newCount: stagingInserted, total_new: stagingInserted, duplicates: stagingSkipped,
         duplicateCount: stagingSkipped,
         totalInserted: stagingInserted,
         totalUpdated: stagingUpdated,
         totalSkipped: stagingSkipped,
         stagingInserted,
         stagingSkipped,
-        affectedDates: targetDates,
-        machines: cliResult.machines || [],
-        message: responseMsg
+        affectedDates: saved.affectedDates,
+        machines: scannerDbMachineSummaries(cliResult.machines, saved),
+        message: failedDates.length ? 'Raw scans saved; attendance calculation failed' : responseMsg
       });
     }
 
@@ -5117,6 +5283,8 @@ samRouter.get(samRoute('/api/scanners/check-dll'), (req, res) => {
 
 // 4.14 ส่งข้อมูลเข้า hosoffice (Batch Push) - Manual Push Only (ข้อ 9, 24)
 samRouter.post(samRoute('/api/push/batch'), requireRole(['ADMIN', 'HR']), async (req, res) => {
+  if (process.env.SAM_ATT_ENABLE_HOSOFFICE_PUSH !== 'true') return res.status(403).json({ success: false, error: 'HOSOFFICE_PUSH_DISABLED', message: 'ปิด Push ไป HOSOffice ระหว่างทดสอบ Sam_Att' });
+
   const { dateFrom, dateTo, machineNo } = req.body;
   const currentUserId = req.user ? req.user.userId : 1;
   const currentUsername = req.user ? req.user.username : 'ADMIN';

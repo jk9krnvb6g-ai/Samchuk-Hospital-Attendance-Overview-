@@ -62,6 +62,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewData, setPreviewData] = useState<{
     totalFound: number;
+    unmappedCandidates?: number;
     newCount: number;
     duplicateCount: number;
     sampleNew?: any[];
@@ -118,10 +119,10 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
           preview: true
         });
 
-        if (res.details?.preview || res.details?.totalFound !== undefined) {
+        if (res.success && (res.details?.preview || res.details?.totalFound !== undefined)) {
           setPreviewData(res.details);
         } else {
-          setResultMsg({ type: 'success', text: res.message });
+          setResultMsg({ type: res.success ? 'success' : 'error', text: res.message });
         }
       } else {
         const res = await attendanceStore.syncScannersCustom({
@@ -138,10 +139,10 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
           preview: true
         });
 
-        if (res.details?.preview || res.details?.totalFound !== undefined) {
+        if (res.success && (res.details?.preview || res.details?.totalFound !== undefined)) {
           setPreviewData(res.details);
         } else {
-          setResultMsg({ type: 'success', text: res.message });
+          setResultMsg({ type: res.success ? 'success' : 'error', text: res.message });
         }
       }
     } catch (err: any) {
@@ -574,6 +575,9 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                 </span>
               </div>
 
+              {syncSource === 'SCANNERS' ? (
+                <p className="text-xs text-teal-900">ยังไม่บันทึกข้อมูล จำนวนเพิ่มใหม่และข้อมูลซ้ำจะสรุปจากฐานข้อมูลเมื่อยืนยัน Sync{previewData.unmappedCandidates != null && ` — พบรายการที่ยังไม่มีบุคลากรตรงกัน ${previewData.unmappedCandidates} รายการ`}</p>
+              ) : (<>
               <div className="grid grid-cols-2 gap-2 text-center">
                 <div className="p-2.5 bg-white border border-emerald-200 rounded-lg shadow-2xs">
                   <div className="text-[10px] text-slate-500 font-medium">🟢 ข้อมูลใหม่ที่ยังไม่มีในระบบ</div>
@@ -601,6 +605,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
                   💡 ข้อมูลในช่วงเวลานี้มีครบในระบบแล้ว หากคุณกดยืนยันด้วยโหมด "ดึงเฉพาะข้อมูลใหม่" จะไม่มีการเปลี่ยนแปลงใดๆ หากต้องการเขียนทับข้อมูลเดิม ให้เลือกตัวเลือก "อัปเดตทับข้อมูลเดิม"
                 </div>
               )}
+              </>)}
             </div>
           )}
 

@@ -217,13 +217,14 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      {state.rawScansError && <div role="alert" className="p-3 bg-red-50 text-red-800 rounded-lg">{state.rawScansError} — ข้อมูลที่แสดงอาจยังไม่อัปเดต กรุณา Refresh อีกครั้ง</div>}
       {/* Page Title & Stats */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>MySQL 10.2.0.201 : attendance_raw_scan ({state.rawScans.length} รายการ)</span>
+              <span>MariaDB : attendance_raw_scan ({state.rawScans.length} รายการ)</span>
             </span>
           </div>
           <h2 className="text-base font-bold text-slate-800">
