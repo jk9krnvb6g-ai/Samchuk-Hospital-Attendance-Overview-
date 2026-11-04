@@ -7,7 +7,7 @@ const definitions = [...ddlText.matchAll(/CREATE TABLE IF NOT EXISTS samchuk_att
 }));
 function failure(message) { return Object.assign(new Error(message), { code: 'SCANNER_SCHEMA_NOT_READY' }); }
 async function identity(db) {
-  const [[row]] = await db.query('SELECT DATABASE() AS db, VERSION() AS version');
+  const [[row]] = await db.query("SELECT DATABASE() AS db, VERSION() AS version, SHA2(CONCAT_WS(':',@@hostname,@@server_id,@@port),256) AS server_identity");
   if (row.db !== SCHEMA) throw failure('Scanner operation requires database samchuk_attendance');
   return row;
 }
@@ -48,7 +48,7 @@ async function inspectScannerStorage(db, options = {}) {
 
   const storageTables = ['attendance_raw_scan','attendance_personnel','scanner_sync_log'];
   const storageReady = !missingTables.some(n => storageTables.includes(n)) && !missingColumns.some(c => storageTables.includes(c.table)) && !nonTransactional.some(n => storageTables.includes(n)) && !criticalShapeProblems.length && rawUniqueKeys.length > 0 && duplicateGroups === 0;
-  return { database: id.db, version: id.version, mariaDb1011: /10\.11\.\d+.*MariaDB/i.test(id.version), storageReady,
+  return { database: id.db, version: id.version, serverIdentity: id.server_identity, mariaDb1011: /10\.11\.\d+.*MariaDB/i.test(id.version), storageReady,
     calculationSchemaReady: !missingTables.length && !missingColumns.length && !nonTransactional.length && dailyUniqueKeys.length > 0,
     missingTables, missingColumns, nonTransactional, criticalShapeProblems, rawUniqueKeys, dailyUniqueKeys, redundantRawUniqueKeys: rawUniqueKeys.slice(1), duplicateGroups, duplicateExtraRows, pendingMappingCount };
 }
@@ -57,36 +57,69 @@ async function assertScannerStorage(db) {
   if (!report.storageReady) throw failure('Scanner schema is not ready; run the scoped schema inspection/migration separately');
   return report;
 }
-async function migrateScannerStorage(db) {
-  if (typeof db.getConnection === 'function') throw failure('Migration requires one dedicated connection, not a pool');
+async function snapshotScannerState(db) {
+  if (typeof db.getConnection === 'function') throw failure('Snapshot requires one dedicated read-only connection, not a pool');
+  await identity(db);
+  const tables = ['attendance_raw_scan','scanner_sync_log','attendance_daily_result','attendance_personnel','fingle_mapping'];
+  await db.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+  await db.query('START TRANSACTION READ ONLY');
+  try {
+    const snapshot = {};
+    for (const table of tables) {
+      const [columns] = await db.query('SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION',[SCHEMA,table]);
+      if (!columns.length || columns.some(c => !/^[a-zA-Z0-9_]+$/.test(c.name))) throw failure('Snapshot requires a known, initialized scanner schema');
+      const fields = columns.map(c => '\`' + c.name + '\`').join(',');
+      const [rows] = await db.query(`SELECT SHA2(JSON_ARRAY(${fields}),256) AS digest FROM samchuk_attendance.\`${table}\` ORDER BY id`);
+      const hash = require('node:crypto').createHash('sha256');
+      for (const row of rows) { if (!row.digest) throw failure('Snapshot digest is unavailable'); hash.update(row.digest + '\n'); }
+      snapshot[table] = { rows: rows.length, sha256: hash.digest('hex') };
+    }
+    await db.commit();
+    return { database: SCHEMA, tables: snapshot };
+  } catch (error) { await db.rollback(); throw error; }
+}
+async function planScannerMigration(db) {
   const before = await inspectScannerStorage(db);
-  if (!before.mariaDb1011) throw failure('This migration is validated for MariaDB 10.11 only');
-  if (before.criticalShapeProblems.length) throw failure('Existing raw identifier/time types or nullability need a separate migration; no automatic MODIFY');
-  if (before.nonTransactional.length) throw failure('Non-InnoDB tables require a separately reviewed conversion');
-  // Check duplicates even when optional columns are missing: no destructive deduplication.
-  const [rawColumns] = await db.query('SELECT COLUMN_NAME AS column_name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [SCHEMA,'attendance_raw_scan']);
-  if (['fingle_id','scan_date_time'].every(n => rawColumns.some(c => c.column_name === n))) {
-    const [[conflicts]] = await db.query('SELECT COUNT(*) AS n FROM (SELECT 1 FROM samchuk_attendance.attendance_raw_scan GROUP BY fingle_id,scan_date_time HAVING COUNT(*)>1) AS duplicates');
-    if (Number(conflicts.n)) throw failure('Duplicate raw groups exist; all rows retained. Resolve with the documented non-destructive review plan before adding a unique key');
-  }
+  const blockers = [];
+  if (!before.mariaDb1011) blockers.push('Migration requires MariaDB 10.11');
+  if (before.criticalShapeProblems.length) blockers.push('Existing raw identifier/time types or nullability need a separate migration; no automatic MODIFY');
+  if (before.nonTransactional.length) blockers.push('Non-InnoDB tables need a separately reviewed conversion');
+  if (before.duplicateGroups > 0) blockers.push('Duplicate raw groups exist; all rows retained');
   const [dailyColumns] = await db.query('SELECT COLUMN_NAME AS column_name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [SCHEMA,'attendance_daily_result']);
   if (['person_id','work_date','shift_id'].every(n => dailyColumns.some(c => c.column_name === n))) {
     const [[conflicts]] = await db.query('SELECT COUNT(*) AS n FROM (SELECT 1 FROM samchuk_attendance.attendance_daily_result GROUP BY work_date,person_id,shift_id HAVING COUNT(*)>1) AS duplicates');
-    if (Number(conflicts.n)) throw failure('Duplicate daily groups exist; no rows removed and no DDL applied');
+    if (Number(conflicts.n)) blockers.push('Duplicate daily groups exist; all rows retained');
   }
-  // Preflight unsafe column additions before the first DDL (DDL implicitly commits).
-  const additions = before.missingColumns.map(c => ({ ...c, definition: definitions.find(d => d.table === c.table).columns[c.column] }));
-  if (additions.some(c => /PRIMARY KEY|AUTO_INCREMENT|NOT NULL(?!.*DEFAULT)/i.test(c.definition))) throw failure('Missing required legacy columns need a separate data-aware migration; no DDL applied');
+  const actions = [];
+  for (const d of definitions) if (before.missingTables.includes(d.table)) actions.push({ kind: 'CREATE_TABLE', table: d.table, sql: d.sql });
+  for (const c of before.missingColumns) {
+    const definition = definitions.find(d => d.table === c.table).columns[c.column];
+    if (/PRIMARY KEY|AUTO_INCREMENT|NOT NULL(?!.*DEFAULT)/i.test(definition)) blockers.push('Unsafe required legacy column: ' + c.table + '.' + c.column);
+    else actions.push({ kind: 'ADD_COLUMN', table: c.table, column: c.column, sql: `ALTER TABLE samchuk_attendance.\`${c.table}\` ADD COLUMN IF NOT EXISTS ${definition}` });
+  }
+  // Optional missing raw columns must not hide conflicts from the plan.
+  if (before.duplicateGroups == null && !before.missingTables.includes('attendance_raw_scan') && !before.missingColumns.some(c => c.table === 'attendance_raw_scan' && ['fingle_id','scan_date_time'].includes(c.column))) {
+    const [[conflicts]] = await db.query('SELECT COUNT(*) AS n FROM (SELECT 1 FROM samchuk_attendance.attendance_raw_scan GROUP BY fingle_id,scan_date_time HAVING COUNT(*)>1) AS duplicates');
+    if (Number(conflicts.n)) blockers.push('Duplicate raw groups exist; all rows retained');
+  }
+  if (!before.rawUniqueKeys.length && !before.missingTables.includes('attendance_raw_scan')) actions.push({ kind: 'ADD_UNIQUE', table: 'attendance_raw_scan', sql: 'ALTER TABLE samchuk_attendance.attendance_raw_scan ADD UNIQUE KEY uq_scanner_fingerprint_time (fingle_id,scan_date_time)' });
+  if (!before.dailyUniqueKeys.length && !before.missingTables.includes('attendance_daily_result')) actions.push({ kind: 'ADD_UNIQUE', table: 'attendance_daily_result', sql: 'ALTER TABLE samchuk_attendance.attendance_daily_result ADD UNIQUE KEY uq_scanner_daily_person_shift (work_date,person_id,shift_id)' });
+  const content = { database: SCHEMA, version: before.version, serverIdentity: before.serverIdentity, actions, blockers };
+  const planHash = require('node:crypto').createHash('sha256').update(JSON.stringify(content)).digest('hex');
+  return { ...content, planHash, before, executable: blockers.length === 0, implicitCommit: true };
+}
+async function migrateScannerStorage(db, options = {}) {
+  if (typeof db.getConnection === 'function') throw failure('Migration requires one dedicated connection, not a pool');
+  await identity(db);
+  if (!/^[a-f0-9]{64}$/.test(options.approvedPlanHash || '')) throw failure('A reviewed, approved planHash is required before apply');
   const [[lock]] = await db.query("SELECT GET_LOCK('samchuk_attendance.scanner_migration',0) AS acquired");
   if (Number(lock.acquired) !== 1) throw failure('Another scanner migration holds the lock');
   try {
-    await identity(db);
-    for (const d of definitions) if (before.missingTables.includes(d.table)) await db.query(d.sql);
-    for (const c of additions) await db.query(`ALTER TABLE samchuk_attendance.\`${c.table}\` ADD COLUMN IF NOT EXISTS ${c.definition}`);
-    const afterColumns = await inspectScannerStorage(db);
-    if (!afterColumns.rawUniqueKeys.length) await db.query('ALTER TABLE samchuk_attendance.attendance_raw_scan ADD UNIQUE KEY uq_scanner_fingerprint_time (fingle_id,scan_date_time)');
-    if (!afterColumns.dailyUniqueKeys.length) await db.query('ALTER TABLE samchuk_attendance.attendance_daily_result ADD UNIQUE KEY uq_scanner_daily_person_shift (work_date,person_id,shift_id)');
-    return { before, after: await inspectScannerStorage(db) };
+    const plan = await planScannerMigration(db);
+    if (!plan.executable) throw failure(plan.blockers.join('; '));
+    if (plan.planHash !== options.approvedPlanHash) throw failure('Migration plan changed; inspect and obtain approval again. No DDL applied');
+    for (const action of plan.actions) await db.query(action.sql);
+    return { before: plan.before, plan, after: await inspectScannerStorage(db) };
   } finally { await db.query("SELECT RELEASE_LOCK('samchuk_attendance.scanner_migration')"); }
 }
-module.exports = { SCHEMA, definitions, inspectScannerStorage, assertScannerStorage, migrateScannerStorage };
+module.exports = { SCHEMA, definitions, inspectScannerStorage, assertScannerStorage, snapshotScannerState, planScannerMigration, migrateScannerStorage };

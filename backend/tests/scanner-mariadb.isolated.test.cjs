@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
-const {inspectScannerStorage,assertScannerStorage,migrateScannerStorage,definitions}=require('../scanner-storage.cjs');
+const {inspectScannerStorage,assertScannerStorage,migrateScannerStorage,planScannerMigration,snapshotScannerState,definitions}=require('../scanner-storage.cjs');
 const enabled=process.env.SAM_ATT_MARIADB_TEST_MODE==='ISOLATED_DISPOSABLE_ONLY';
 const source=fs.readFileSync(path.join(__dirname,'../server.cjs'),'utf8');
 function section(a,b){const from=source.indexOf(a),to=source.indexOf(b,from);assert.ok(from>=0&&to>from);return source.slice(from,to);}
@@ -35,9 +35,21 @@ test('MariaDB 10.11 isolated suite — NEVER run on shared hospital DB server',{
   const reset=async()=>{for(const table of ['attendance_person_roster','attendance_daily_result','attendance_raw_scan','fingle_mapping','attendance_personnel','attendance_shift','scanner_sync_log'])await pool.query('DELETE FROM '+table);};
   const people=async()=>{await pool.query("INSERT INTO attendance_personnel(person_id,fingle_id,hr_fullname) VALUES(99,11,'fixture-99'),(11,88,'fixture-unrelated')");};
   const rows=async()=> (await pool.query('SELECT * FROM attendance_raw_scan ORDER BY id'))[0];
+  await t.test('read-only migration plan lists concrete SQL and rejects missing or wrong approval before DDL',async()=>{
+   const c=await pool.getConnection();try{const plan=await planScannerMigration(c);assert.equal(plan.actions.length,9);assert.equal(plan.executable,true);assert.match(plan.planHash,/^[a-f0-9]{64}$/);assert.ok(plan.actions.every(a=>a.sql.includes('samchuk_attendance.')));
+    await assert.rejects(migrateScannerStorage(c),/approved planHash/);await assert.rejects(migrateScannerStorage(c,{approvedPlanHash:'0'.repeat(64)}),/plan changed/);
+    assert.equal((await c.query('SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA=?',['samchuk_attendance']))[0][0].n,0);
+   }finally{c.release();}
+  });
   await t.test('scoped migration creates scanner/calculation tables, is idempotent and leaves sentinel schema untouched',async()=>{
-   const c=await pool.getConnection();try{const first=await migrateScannerStorage(c);assert.equal(first.after.storageReady,true);assert.equal(first.after.calculationSchemaReady,true);assert.equal((await migrateScannerStorage(c)).after.storageReady,true);}finally{c.release();}
+   const c=await pool.getConnection();try{const first=await migrateScannerStorage(c, { approvedPlanHash: (await planScannerMigration(c)).planHash });assert.equal(first.after.storageReady,true);assert.equal(first.after.calculationSchemaReady,true);assert.equal((await migrateScannerStorage(c, { approvedPlanHash: (await planScannerMigration(c)).planHash })).after.storageReady,true);}finally{c.release();}
    assert.equal((await pool.query('SELECT marker FROM sam_att_test_sentinel.guard'))[0][0].marker,'unchanged');
+  });
+  await t.test('schema drift invalidates approved plan and requires a fresh approval',async()=>{
+   const c=await pool.getConnection();try{const old=await planScannerMigration(c);await c.query('ALTER TABLE samchuk_attendance.attendance_daily_result DROP COLUMN matched_out_scan_id');await assert.rejects(migrateScannerStorage(c,{approvedPlanHash:old.planHash}),/plan changed/);assert.ok((await inspectScannerStorage(c)).missingColumns.some(c=>c.column==='matched_out_scan_id'));await migrateScannerStorage(c,{approvedPlanHash:(await planScannerMigration(c)).planHash});}finally{c.release();}
+  });
+  await t.test('read-only snapshot detects updates at unchanged row counts without exporting personnel',async()=>{
+   await reset();await people();const c=await pool.getConnection();try{const before=await snapshotScannerState(c);await pool.query("UPDATE attendance_personnel SET hr_fullname='fixture-renamed' WHERE person_id=99");const after=await snapshotScannerState(c);assert.equal(before.tables.attendance_personnel.rows,after.tables.attendance_personnel.rows);assert.notEqual(before.tables.attendance_personnel.sha256,after.tables.attendance_personnel.sha256);assert.ok(!JSON.stringify(after).includes('fixture-renamed'));}finally{c.release();}
   });
   await t.test('empty personnel/mapping retains scans from all three machines as waiting and exact DB counts',async()=>{
    await reset();const h=handlers(pool);const r=await h.request('/api/scanners/sync-custom',{mode:'DATE',date:'2026-11-03',machineNos:'ALL'});
@@ -79,18 +91,18 @@ test('MariaDB 10.11 isolated suite — NEVER run on shared hospital DB server',{
   });
   await t.test('equivalent unique indexes are detected by columns, not assumed names',async()=>{
    await reset();await pool.query('ALTER TABLE attendance_raw_scan ADD UNIQUE KEY fixture_redundant (scan_date_time,fingle_id)');const report=await inspectScannerStorage(pool);assert.equal(report.rawUniqueKeys.length,2);assert.equal(report.redundantRawUniqueKeys.length,1);
-   const c=await pool.getConnection();try{await migrateScannerStorage(c);}finally{c.release();}assert.equal((await inspectScannerStorage(pool)).rawUniqueKeys.length,2);await pool.query('ALTER TABLE attendance_raw_scan DROP INDEX fixture_redundant');
+   const c=await pool.getConnection();try{await migrateScannerStorage(c, { approvedPlanHash: (await planScannerMigration(c)).planHash });}finally{c.release();}assert.equal((await inspectScannerStorage(pool)).rawUniqueKeys.length,2);await pool.query('ALTER TABLE attendance_raw_scan DROP INDEX fixture_redundant');
   });
   await t.test('duplicate existing data blocks migration with every row retained',async()=>{
    await reset();await pool.query('ALTER TABLE attendance_raw_scan DROP INDEX uq_fingle_scan');const sql="INSERT INTO attendance_raw_scan(machine_no,fingle_id,scan_date_time) VALUES(1,11,'2026-11-03 08:15:00')";await pool.query(sql);await pool.query(sql);
-   const c=await pool.getConnection();try{await assert.rejects(migrateScannerStorage(c),/Duplicate raw groups/);}finally{c.release();}assert.equal((await rows()).length,2);assert.equal((await inspectScannerStorage(pool)).duplicateExtraRows,1);
+   const c=await pool.getConnection();try{await assert.rejects(migrateScannerStorage(c, { approvedPlanHash: (await planScannerMigration(c)).planHash }),/Duplicate raw groups/);}finally{c.release();}assert.equal((await rows()).length,2);assert.equal((await inspectScannerStorage(pool)).duplicateExtraRows,1);
    // Test fixture cleanup only, after asserting preservation; never part of migration.
-   await pool.query('DELETE FROM attendance_raw_scan');const con=await pool.getConnection();try{await migrateScannerStorage(con);}finally{con.release();}
+   await pool.query('DELETE FROM attendance_raw_scan');const con=await pool.getConnection();try{await migrateScannerStorage(con, { approvedPlanHash: (await planScannerMigration(con)).planHash });}finally{con.release();}
   });
   await t.test('additive migration repairs missing optional/source columns without losing raw rows or Push audit',async()=>{
    await reset();const cli=payload();await handlers(pool).ctx.persistScannerCliScans(cli);const before=await rows();
    await pool.query('ALTER TABLE attendance_raw_scan DROP COLUMN source');await pool.query('ALTER TABLE attendance_daily_result DROP COLUMN source_scan_ids');
-   const c=await pool.getConnection();try{const r=await migrateScannerStorage(c);assert.equal(r.after.storageReady,true);assert.equal(r.after.calculationSchemaReady,true);}finally{c.release();}
+   const c=await pool.getConnection();try{const r=await migrateScannerStorage(c, { approvedPlanHash: (await planScannerMigration(c)).planHash });assert.equal(r.after.storageReady,true);assert.equal(r.after.calculationSchemaReady,true);}finally{c.release();}
    const after=await rows();assert.equal(after.length,before.length);for(let i=0;i<after.length;i++){assert.equal(after[i].id,before[i].id);assert.equal(after[i].push_status,before[i].push_status);assert.equal(after[i].source,'DEVICE');}
   });
   await t.test('OVERWRITE cannot erase an existing HR snapshot when personnel master is empty',async()=>{

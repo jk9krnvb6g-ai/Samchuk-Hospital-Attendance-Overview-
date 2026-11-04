@@ -3,7 +3,9 @@ param([Parameter(Mandatory=$true)][string]$RepositoryPath,[Parameter(Mandatory=$
 $ErrorActionPreference='Stop'
 $taskRepo=(Resolve-Path -LiteralPath $RepositoryPath).Path
 $taskRoot=[System.IO.Path]::GetFullPath($StagingRoot)
-if($taskRoot -match '(?i)\\inetpub\\|\\wwwroot\\' -or $taskRoot.TrimEnd('\') -eq [System.IO.Path]::GetPathRoot($taskRoot).TrimEnd('\')) {throw 'Choose a separate staging root outside live web roots and drive root'}
+$taskApprovedRoot='C:\inetpub\wwwroot\Sam_Att-Scanner-Test'
+$taskApproved=$taskRoot.TrimEnd('\') -ieq $taskApprovedRoot -or $taskRoot.StartsWith($taskApprovedRoot+'\',[StringComparison]::OrdinalIgnoreCase)
+if((!$taskApproved -and $taskRoot -match '(?i)\\inetpub\\|\\wwwroot\\') -or $taskRoot.TrimEnd('\') -eq [System.IO.Path]::GetPathRoot($taskRoot).TrimEnd('\')) {throw 'Only the explicit scanner-test subtree is allowed within IIS roots'}
 # Refuse reparse-point ancestors, preventing an apparently separate directory redirecting to live files.
 $taskAncestor=$taskRoot
 while($taskAncestor){
@@ -16,6 +18,13 @@ $taskCommit=(& git @taskGit rev-parse HEAD).Trim()
 if($LASTEXITCODE -ne 0 -or $taskCommit -notmatch '^[a-f0-9]{40}$'){throw 'A committed checkout is required'}
 if((& git @taskGit status --porcelain)){throw 'Commit or isolate pending edits before packaging'}
 if(-not(Test-Path -LiteralPath (Join-Path $taskRepo 'dist/index.html'))){throw 'Run npm ci and npm run build before staging'}
+$taskBuildEvidencePath=Join-Path $taskRepo 'dist/scanner-build.json'
+if(-not(Test-Path -LiteralPath $taskBuildEvidencePath)){throw 'Rebuild with scanner-build.json evidence before preparing release'}
+$taskBuildEvidence=Get-Content -LiteralPath $taskBuildEvidencePath -Raw|ConvertFrom-Json
+if($taskBuildEvidence.basePath -ne '/Sam_Att/'){throw 'This FILESERVER staging release requires /Sam_Att/ assets'}
+$taskRewrite=[xml](Get-Content -LiteralPath (Join-Path $taskRepo 'dist/web.config') -Raw)
+$taskProxyRules=@($taskRewrite.configuration.'system.webServer'.rewrite.rules.rule|Where-Object {$_.action.url -like 'http://127.0.0.1:3002/api/Sam_Att/*'})
+if(!$taskProxyRules.Count){throw 'Expected existing Gateway 3002 proxy rules are missing'}
 $taskRelease=Join-Path $taskRoot ($taskCommit.Substring(0,12)+'-'+(Get-Date -Format 'yyyyMMddHHmmss'))
 if(Test-Path -LiteralPath $taskRelease){throw 'Release already exists; refusing to overwrite'}
 New-Item -ItemType Directory -Path $taskRelease -Force | Out-Null
@@ -27,7 +36,7 @@ foreach($taskAsset in Get-ChildItem -LiteralPath (Join-Path $taskRepo 'dist') -R
  New-Item -ItemType Directory -Path (Split-Path -Path $taskDestination -Parent) -Force | Out-Null
  Copy-Item -LiteralPath $taskAsset.FullName -Destination $taskDestination
 }
-foreach($taskFile in @('package.json','package-lock.json','backend/server.cjs','backend/scanner-storage.cjs','backend/scanner-db-admin.cjs','backend/migrations/scanner-mariadb-10.11.sql','backend/tests/scanner-mariadb.readonly.test.cjs','docs/scanner-mariadb-fileserver.md')){
+foreach($taskFile in @('package.json','package-lock.json','backend/server.cjs','backend/scanner-storage.cjs','backend/scanner-staging.cjs','backend/scanner-db-admin.cjs','backend/migrations/scanner-mariadb-10.11.sql','backend/tests/scanner-mariadb.readonly.test.cjs','docs/scanner-mariadb-fileserver.md','docs/scanner-staging-acceptance.md')){
  Copy-Item -LiteralPath (Join-Path $taskRepo $taskFile) -Destination (Join-Path $taskRelease $taskFile)
 }
 Copy-Item -LiteralPath (Join-Path $taskRepo 'backend/modules/sam_att') -Destination (Join-Path $taskRelease 'backend/modules') -Recurse

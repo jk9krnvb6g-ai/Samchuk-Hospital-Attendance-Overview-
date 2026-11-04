@@ -1,3 +1,5 @@
+> ขั้นตอนล่าสุดสำหรับ FILESERVER staging อยู่ที่ [Staging Acceptance](scanner-staging-acceptance.md): migration ต้องแสดงแผนและอนุมัติ planHash, releaseอนุญาตเฉพาะscanner-test subtree และActivationไม่restartProduction
+
 # Sam_Att — MariaDB 10.11.10 และ Windows FILESERVER
 
 เอกสารนี้ใช้ข้อเท็จจริงล่าสุด: FILESERVER เป็น Web/Application Server, Frontend HTTPS 3001, Central API Gateway 3002, DB host `10.1.0.201`, MariaDB `10.11.10`, schema `samchuk_attendance` ระบบ Sam_Att ยังไม่เปิดใช้งานจริง เจ้าของอนุญาตให้ปรับ schema/ข้อมูลเฉพาะฐานนี้ ไม่กำหนด Backup ฐานนี้เป็นเงื่อนไขบังคับ
@@ -72,7 +74,11 @@ try { $env:SAM_ATT_DB_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringB
 finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($taskPtr) }
 try {
     $env:SAM_ATT_MIGRATION_CONFIRM = 'APPLY_SAMCHUK_ATTENDANCE_ONLY'
-    npm run scanner:db:migrate
+    $taskPlan = (& node backend/scanner-db-admin.cjs --plan | Out-String) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or !$taskPlan.executable) { throw 'Migration plan blocked' }
+    $taskPlan | ConvertTo-Json -Depth 15 | Write-Host
+    if ((Read-Host 'Type APPLY samchuk_attendance followed by the displayed planHash') -cne ('APPLY samchuk_attendance '+$taskPlan.planHash)) { throw 'Approval not supplied' }
+    npm run scanner:db:migrate -- --approved-plan $taskPlan.planHash
     if ($LASTEXITCODE -ne 0) { throw 'Migration stopped; inspect before retrying' }
     npm run scanner:db:inspect
     if ($LASTEXITCODE -ne 0) { throw 'Post-migration inspection failed' }

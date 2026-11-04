@@ -38,7 +38,8 @@ const express = require('express');
 const cors = require('cors');
 const net = require('net');
 const mysql = require('mysql2/promise');
-const { assertScannerStorage } = require('./scanner-storage.cjs');
+const { assertScannerStorage, inspectScannerStorage } = require('./scanner-storage.cjs');
+const { captureScannerIdentity, stagingEvidence } = require('./scanner-staging.cjs');
 const http = require('http');
 const { execFile } = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
@@ -51,6 +52,8 @@ process.env.TZ = process.env.TZ || 'Asia/Bangkok';
 let syncRunning = false;
 
 const crypto = require('crypto');
+// Capture loaded code identity once: changing a file on disk cannot impersonate a reloaded module.
+const scannerLoadedIdentity = captureScannerIdentity(__dirname);
 
 const app = express();
 const PORT = process.env.API_PORT || 3002;
@@ -3293,6 +3296,9 @@ samRouter.post(samRoute('/api/scanners/test-all'), async (req, res) => {
 // 4.12 Scanner CLI Reader (ScannerSyncCli.exe) Integration - N1, N2, N4
 // --------------------------------------------------------------------------
 function getScannerReaderExePath() {
+  const current = getActiveConfig();
+  if (typeof current.scannerReaderExePath === 'string' && current.scannerReaderExePath) return path.resolve(current.scannerReaderExePath);
+  if (current.scannerStagingAcceptance === true) return path.join(__dirname, '__staging_reader_not_configured__.exe');
   const envPath = process.env.SCAN_READER_EXE || process.env.SCANNER_CLI_PATH;
   const candidates = [
     envPath,
@@ -4391,6 +4397,25 @@ async function calculateDailyAttendanceForDate(workDate) {
 }
 
 // 4.12.1 N1: แทนที่ /api/scanners/sync ด้วยการเรียก Standalone Reader ผ่าน execFile
+// Protected read-only evidence for an explicitly enabled staging router only.
+samRouter.get(samRoute('/api/scanners/staging-status'), requireRole(['ADMIN','HR']), async (req,res) => {
+  const current = getActiveConfig();
+  if (current.scannerStagingAcceptance !== true) return res.status(404).json({success:false,error:'STAGING_NOT_ENABLED'});
+  const context = routerContextStorage.getStore();
+  if (!context?.dbPool) return res.status(503).json({success:false,error:'SCOPED_POOL_REQUIRED'});
+  try {
+    const storage = await inspectScannerStorage(context.dbPool);
+    const evidence = stagingEvidence({sourceRoot:path.resolve(__dirname,'..'),identity:scannerLoadedIdentity,
+      stagingInstance:current.scannerStagingInstance,poolScoped:true,
+      pushEnabled:process.env.SAM_ATT_ENABLE_HOSOFFICE_PUSH==='true',
+      migrationEnabled:process.env.ALLOW_SCHEMA_MIGRATION==='true'||process.env.AUTO_MIGRATE_ON_STARTUP==='true'||current.allowSchemaMigration===true||current.allowMigration===true},storage);
+    const reader = getScannerReaderExePath();
+    evidence.readerSha256 = fs.existsSync(reader) ? crypto.createHash('sha256').update(fs.readFileSync(reader)).digest('hex') : null;
+    evidence.safeToSync = evidence.safeToSync && evidence.readerSha256 !== null;
+    return res.json(evidence);
+  } catch(error) { return res.status(503).json({success:false,error:error.code||'STAGING_INSPECTION_FAILED',message:'Staging evidence is unavailable'}); }
+});
+
 samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
   // N2: ตรวจสอบสถานะการทำงานเพื่อป้องกันรันซ้อน (Sync Mutex Lock)
   if (syncRunning) {

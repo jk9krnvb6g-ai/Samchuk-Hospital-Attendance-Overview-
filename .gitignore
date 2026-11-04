@@ -22,3 +22,6 @@ TestResults/
 !backend/*.dll
 !backend/bin/*
 !backend/**/FK623Attend.dll.example
+
+# Versioned artifacts prepared inside the explicit scanner staging worktree
+/scanner-releases/
