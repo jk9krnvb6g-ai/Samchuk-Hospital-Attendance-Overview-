@@ -62,6 +62,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewData, setPreviewData] = useState<{
     totalFound: number;
+    unmappedCandidates?: number;
     newCount: number;
     duplicateCount: number;
     sampleNew?: any[];
@@ -575,7 +576,7 @@ export const CustomSyncModal: React.FC<CustomSyncModalProps> = ({
               </div>
 
               {syncSource === 'SCANNERS' ? (
-                <p className="text-xs text-teal-900">ยังไม่บันทึกข้อมูล จำนวนเพิ่มใหม่และข้อมูลซ้ำจะสรุปจากฐานข้อมูลเมื่อยืนยัน Sync</p>
+                <p className="text-xs text-teal-900">ยังไม่บันทึกข้อมูล จำนวนเพิ่มใหม่และข้อมูลซ้ำจะสรุปจากฐานข้อมูลเมื่อยืนยัน Sync{previewData.unmappedCandidates != null && ` — พบรายการที่ยังไม่มีบุคลากรตรงกัน ${previewData.unmappedCandidates} รายการ`}</p>
               ) : (<>
               <div className="grid grid-cols-2 gap-2 text-center">
                 <div className="p-2.5 bg-white border border-emerald-200 rounded-lg shadow-2xs">

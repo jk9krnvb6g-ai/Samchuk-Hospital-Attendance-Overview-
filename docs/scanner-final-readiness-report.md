@@ -1,3 +1,5 @@
+> อัปเดต 4 พ.ย. 2569: ผล MariaDB 10.11.10 แบบแยกและข้อเท็จจริง FILESERVER/DB host ล่าสุดอยู่ใน [รายงาน MariaDB](scanner-mariadb-readiness-report.md) และ [คู่มือ FILESERVER](scanner-mariadb-fileserver.md) ข้อความ MySQL unavailable/10.2.0.201 ด้านล่างเป็นประวัติรอบก่อน ไม่ใช่ผลล่าสุด ห้ามใช้ legacy CREATE/DROP suite บน shared hospital server
+
 # รายงานความพร้อมขั้นสุดท้าย — Sam_Att Scanner Integration
 
 จัดทำวันที่ 3 พฤศจิกายน 2569 (Asia/Bangkok) สำหรับตรวจเช้าวันถัดไป

@@ -224,7 +224,7 @@ export const RawScansPage: React.FC<RawScansPageProps> = ({
           <div className="flex flex-wrap items-center gap-2 mb-1">
             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>MySQL 10.2.0.201 : attendance_raw_scan ({state.rawScans.length} รายการ)</span>
+              <span>MariaDB : attendance_raw_scan ({state.rawScans.length} รายการ)</span>
             </span>
           </div>
           <h2 className="text-base font-bold text-slate-800">

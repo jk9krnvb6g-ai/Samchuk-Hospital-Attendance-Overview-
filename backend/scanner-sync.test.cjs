@@ -20,12 +20,13 @@ function harness(options = {}) {
     release() { calls.push('release'); },
     async query(sql, values) {
       calls.push(sql);
-      if (options.dbFail && values[2] === 13) throw new Error('DB write failed');
+      if (options.dbFail && values?.[2] === 13) throw new Error('DB write failed');
       if (sql.startsWith('INSERT')) {
         const key = `${values[2]}_${values[3]}`;
         if (rows.has(key)) throw Object.assign(new Error('duplicate'), { code: 'ER_DUP_ENTRY' });
         rows.set(key, { id: rows.size + 1, values, push: 'PENDING' }); return [{ affectedRows: 1 }];
       }
+      if (sql.includes('COUNT(*) AS pending')) return [[{ pending: [...rows.values()].filter(r => r.values[16] === 0).length }]];
       if (sql.startsWith('SELECT')) return [[...rows.values()].filter(r => r.values[2] === values[0] && r.values[3] === values[1]).map(r => ({ id: r.id }))];
       if (sql.startsWith('UPDATE')) return [{ affectedRows: 1 }];
       throw new Error('Unexpected query ' + sql);
@@ -39,10 +40,11 @@ function harness(options = {}) {
   }};
   const ctx = vm.createContext({ console: { log(){}, warn(){}, error(){} }, getDbPool: () => pool,
     toBangkokDateTimeStr: () => '2026-11-03 10:00:00', syncRunning: false,
+    assertScannerStorage: async () => { if (options.schemaFail) throw new Error("Schema inspection failed"); },
     ensureTablesExist: async () => calls.push('DDL'), samRoute: x => x,
     samRouter: { post: (path, fn) => routes[path] = fn },
     executeScannerReaderCli: async args => { exeCalls.push(args); return options.cli ? options.cli(args) : payload(); },
-    calculateDailyAttendanceForDate: async d => { calls.push('calculate:' + d); if (options.calcThrow) throw new Error('calc throw'); return { success: !options.calcFail && !options.calcFailureDates?.includes(d) }; }
+    calculateDailyAttendanceForDate: async d => { calls.push('calculate:' + d); if (options.calcThrow) throw new Error('calc throw'); return options.calcWaiting ? { success: true, skipped: true, reason: 'WAITING_FOR_MAPPING' } : { success: !options.calcFail && !options.calcFailureDates?.includes(d) }; }
   });
   vm.runInContext(helpers + normalRoute + customRoute, ctx);
   async function request(path, body) {
@@ -223,3 +225,19 @@ test('malformed scanner windows cannot normalize into another date or default to
     assert.equal(result.code, 400); assert.equal(h.exeCalls.length, 0); assert.equal(h.calls.length, 0);
   }
 });
+
+test('empty personnel stores raw scans and duplicate retries do not inflate waiting counters', async () => {
+  const h = harness({ people: [] });
+  const first = await h.ctx.persistScannerCliScans(payload()); assert.equal(first.inserted, 1); assert.equal(first.unmapped, 1); assert.equal(first.pendingMappingCount, 1);
+  const second = await h.ctx.persistScannerCliScans(payload()); assert.equal(second.inserted, 0); assert.equal(second.skipped, 1); assert.equal(second.unmapped, 0); assert.equal(second.pendingMappingCount, 1);
+});
+for (const path of ['/api/scanners/sync', '/api/scanners/sync-custom']) {
+  test(path + ' mapping wait explicitly preserves raw save success', async () => {
+    const h = harness({ people: [], calcWaiting: true }); const result = await h.request(path, { mode: 'TODAY' });
+    assert.equal(result.body.success, true); assert.equal(result.body.rawSaveSuccess, true); assert.equal(result.body.rawSaveStatus, 'COMMITTED'); assert.equal(result.body.calculationStatus, 'WAITING_FOR_MAPPING'); assert.equal(result.body.autoCalculated, false); assert.equal(result.body.pendingMappingCount, 1);
+  });
+  test(path + ' schema failure never executes reader or legacy schema bootstrap', async () => {
+    const h = harness({ schemaFail: true }); const result = await h.request(path, { mode: 'TODAY' });
+    assert.equal(result.body.success, false); assert.equal(h.exeCalls.length, 0); assert.ok(!h.calls.includes('DDL'));
+  });
+}

@@ -65,3 +65,13 @@ test('MySQL integration preflight refuses remote hosts and production-default po
     }), error => { assert.match(error.stdout + error.stderr, expected); return true; });
   }
 });
+
+test('both HOSOffice Push endpoints are disabled by default before any DB access', async () => {
+  for (const route of ['/api/hosoffice/test-push','/api/push/batch']) {
+    const start = source.indexOf("samRouter.post(samRoute('" + route + "')");
+    const end = source.indexOf('\n});',start)+5; let handler;
+    const ctx = vm.createContext({process:{env:{}},samRoute:x=>x,requireRole:()=>()=>{},samRouter:{post:(_p,...handlers)=>handler=handlers.at(-1)},getHosofficePool:()=>{throw new Error('Push must not access HOSOffice');}});
+    vm.runInContext(source.slice(start,end),ctx);
+    const response={status(n){this.code=n;return this},json(b){this.body=b}};await handler({body:{}},response);assert.equal(response.code,403);assert.equal(response.body.error,'HOSOFFICE_PUSH_DISABLED');
+  }
+});

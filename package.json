@@ -17,7 +17,11 @@
     "lint": "tsc --noEmit",
     "test:scanner": "node --test backend/scanner-sync.test.cjs backend/tests/scanner-reader-contract.test.cjs",
     "test:scanner:frontend": "node --import tsx --test src/tests/scanner-sync.test.ts",
-    "test:scanner:mysql": "node --test backend/tests/scanner-mysql.integration.test.cjs"
+    "test:scanner:mysql": "node --test backend/tests/scanner-mariadb.readonly.test.cjs",
+    "test:scanner:mariadb:isolated": "node --test backend/tests/scanner-mariadb.isolated.test.cjs",
+    "test:scanner:mariadb:readonly": "node --test backend/tests/scanner-mariadb.readonly.test.cjs",
+    "scanner:db:inspect": "node backend/scanner-db-admin.cjs",
+    "scanner:db:migrate": "node backend/scanner-db-admin.cjs --apply"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

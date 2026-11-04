@@ -93,3 +93,12 @@ test('browser-like store startup only loads data; it never requests scanner sync
   const output = execFileSync(process.execPath, ['--import','tsx','--input-type=module','-e',script], { cwd: process.cwd(), encoding: 'utf8', timeout: 5000, windowsHide: true });
   assert.match(output, /"scannerSyncRequests":0/);
 });
+
+test('sync message distinguishes committed raw success from calculation failure and shows pending mapping', () => {
+ const message = scannerSyncMessage({ success:false, rawSaveSuccess:true, message:'calculation failed', totalInserted:3, totalUpdated:0, totalSkipped:1, pendingMappingCount:3 });
+ assert.match(message,/บันทึก Raw Scan สำเร็จ/); assert.match(message,/รอจับคู่ 3/);
+});
+test('mapping wait is a saved result, not a false calculation success', () => {
+ const message = scannerSyncMessage({ success:true, rawSaveSuccess:true, message:'saved', totalInserted:3, pendingMappingCount:3, calculationStatus:'WAITING_FOR_MAPPING' });
+ assert.match(message,/รอข้อมูลบุคลากรก่อนคำนวณ Attendance/);
+});

@@ -28,6 +28,7 @@ function handlers(pool, payload = fixture()) {
   const routes = {}, events = [];
   const context = vm.createContext({ console, getDbPool: () => pool, syncRunning: false,
     samRoute: x => x, samRouter: { post: (p, fn) => routes[p] = fn, get: (p, fn) => routes['GET ' + p] = fn },
+    assertScannerStorage: async () => {},
     ensureTablesExist: async () => events.push('ensureTables'),
     toBangkokDateTimeStr: () => '2026-11-03 12:00:00', executeScannerReaderCli: async () => structuredClone(payload),
     calculateDailyAttendanceForDate: async date => {
@@ -51,6 +52,7 @@ test('Scanner MySQL integration (10 cases; isolated disposable database only)', 
   assert.ok(['127.0.0.1', '::1'].includes(host), 'Only numeric loopback test hosts are allowed');
   assert.ok(Number.isInteger(port) && port > 0 && port <= 65535 && port !== 3306, 'Use a dedicated non-production test port, not 3306');
   assert.equal(process.env.SCANNER_TEST_MYSQL_USER, 'sam_att_test_runner', 'Use the dedicated disposable-instance account');
+  assert.equal(process.env.SCANNER_TEST_DISPOSABLE_SERVER, 'I_CREATED_AN_EMPTY_LOCAL_INSTANCE', 'Legacy CREATE/DROP suite is forbidden on a shared server');
   const mysql = require('mysql2/promise');
   const database = 'sam_att_scanner_test_' + crypto.randomBytes(8).toString('hex');
   assert.match(database, /^sam_att_scanner_test_[a-f0-9]{16}$/);

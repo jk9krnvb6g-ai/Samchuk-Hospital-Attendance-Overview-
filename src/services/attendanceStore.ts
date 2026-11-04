@@ -30,7 +30,11 @@ export function scannerSyncMessage(result: any): string {
   if (result?.preview || (result?.totalInserted === undefined && !result?.rawScan)) return message;
   const counts = `เพิ่ม ${result.totalInserted ?? result.rawScan?.inserted ?? 0}, ปรับปรุง ${result.totalUpdated ?? result.rawScan?.updated ?? 0}, ซ้ำ ${result.totalSkipped ?? result.duplicateCount ?? result.rawScan?.skipped ?? 0}`;
   const failures = result.failedDates?.map((d: any) => `${d.date}: ${d.error}`).join('; ');
-  return `${message} (${counts})${failures ? ` — ${failures}` : ''}`;
+  const pending = result.pendingMappingCount ?? result.unmappedCount ?? result.unmapped;
+  const mapping = pending == null ? '' : `, รอจับคู่ ${pending}`;
+  const saved = result.rawSaveSuccess && result.success === false ? 'บันทึก Raw Scan สำเร็จ แต่คำนวณไม่สำเร็จ: ' : '';
+  const waiting = result.calculationStatus === 'WAITING_FOR_MAPPING' ? ' — รอข้อมูลบุคลากรก่อนคำนวณ Attendance' : '';
+  return `${saved}${message} (${counts}${mapping})${waiting}${failures ? ` — ${failures}` : ''}`;
 }
 
 const STORAGE_KEY = 'samchuk_attendance_v2_state';
@@ -436,7 +440,7 @@ class AttendanceStore {
       totalNew: grandTotalNew,
       duplicates: grandDuplicates,
       processedCount: this.state.rawScans.length,
-      message: backendSyncResult?.message
+      message: scannerSyncMessage(backendSyncResult)
     };
   }
 

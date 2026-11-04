@@ -38,6 +38,7 @@ const express = require('express');
 const cors = require('cors');
 const net = require('net');
 const mysql = require('mysql2/promise');
+const { assertScannerStorage } = require('./scanner-storage.cjs');
 const http = require('http');
 const { execFile } = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
@@ -3226,6 +3227,8 @@ samRouter.get(samRoute('/api/hosoffice/personnel'), async (req, res) => {
 
 // ข้อ 5 & 10: ปิด Endpoint สร้างข้อมูลจำลองและการสั่ง CREATE TABLE ใน HOSOffice
 samRouter.post(samRoute('/api/hosoffice/test-push'), async (req, res) => {
+  if (process.env.SAM_ATT_ENABLE_HOSOFFICE_PUSH !== 'true') return res.status(403).json({ success: false, error: 'HOSOFFICE_PUSH_DISABLED', message: 'ปิด Push ไป HOSOffice ระหว่างทดสอบ Sam_Att' });
+
   return res.status(403).json({
     success: false,
     error: 'ENDPOINT_DISABLED',
@@ -3582,8 +3585,8 @@ async function persistScannerCliScans(cliResult, options = {}) {
     }
     filtered.push({ scan, machineNo, fid, ip, rawDate });
   }
-  if (options.preview) return { inserted: 0, updated: 0, skipped: 0, unmapped: 0, machineCounts: {}, total: filtered.length, affectedDates: [...new Set(filtered.map(x => x.rawDate.slice(0, 10)))].sort() };
-  let inserted = 0, updated = 0, skipped = 0, unmapped = 0;
+  if (options.preview) return { inserted: 0, updated: 0, skipped: 0, unmapped: 0, machineCounts: {}, unmappedCandidates: filtered.filter(x => !peopleByFinger.get(x.fid)).length, total: filtered.length, affectedDates: [...new Set(filtered.map(x => x.rawDate.slice(0, 10)))].sort() };
+  let inserted = 0, updated = 0, skipped = 0, unmapped = 0, pendingMappingCount = 0;
   const affectedDates = new Set();
   const machineCounts = {};
   const connection = await pool.getConnection();
@@ -3592,7 +3595,6 @@ async function persistScannerCliScans(cliResult, options = {}) {
     for (const { scan, machineNo, fid, ip, rawDate } of filtered) {
       const counts = machineCounts[machineNo] ||= { newCount: 0, duplicates: 0, updated: 0, unmapped: 0 };
       const person = peopleByFinger.get(fid);
-      if (!person) counts.unmapped++;
       const values = [
         machineNo, ip, fid, rawDate,
         scan.verifyMode == null ? null : Number(scan.verifyMode),
@@ -3609,7 +3611,6 @@ async function persistScannerCliScans(cliResult, options = {}) {
         person?.hr_department_sub_id ?? null,
         person ? 1 : 0
       ];
-      if (!person) unmapped++;
       const overwrite = options.strategy === 'OVERWRITE';
       // Plain INSERT propagates truncation/constraint errors instead of INSERT IGNORE.
       // Duplicate detection comes from the existing unique (fingle_id, scan_date_time).
@@ -3621,24 +3622,29 @@ async function persistScannerCliScans(cliResult, options = {}) {
            hr_department_sub_id, hr_mapped, push_status, source)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 'DEVICE')`, values);
         inserted++; counts.newCount++;
+        if (!person) { unmapped++; counts.unmapped++; }
         affectedDates.add(rawDate.slice(0, 10));
       } catch (error) {
         if (error.code !== 'ER_DUP_ENTRY') throw error;
         const [existing] = await connection.query(
-          'SELECT id FROM attendance_raw_scan WHERE fingle_id = ? AND scan_date_time = ? FOR UPDATE', [fid, rawDate]);
+          'SELECT id, hr_mapped FROM attendance_raw_scan WHERE fingle_id = ? AND scan_date_time = ? FOR UPDATE', [fid, rawDate]);
         if (existing.length !== 1) throw error;
         if (overwrite) {
           // Never reset push status, source, machine provenance or push audit fields.
-          await connection.query(`UPDATE attendance_raw_scan SET
+          if (person) await connection.query(`UPDATE attendance_raw_scan SET
             verify_mode=?, in_out_mode=?, person_id=?, hr_fullname=?, hr_position_name=?,
             hr_leavel_name=?, hr_dep_name=?, hr_dep_sub_name=?, hr_person_type_name=?,
             hr_person_type_id=?, hr_department_id=?, hr_department_sub_id=?, hr_mapped=? WHERE id=?`,
             [...values.slice(4), existing[0].id]);
+          else await connection.query('UPDATE attendance_raw_scan SET verify_mode=?, in_out_mode=? WHERE id=?', [values[4], values[5], existing[0].id]);
           updated++; counts.updated++;
+          if (!person && !existing[0].hr_mapped) { unmapped++; counts.unmapped++; }
           affectedDates.add(rawDate.slice(0, 10));
         } else { skipped++; counts.duplicates++; }
       }
     }
+    const [[pending]] = await connection.query('SELECT COUNT(*) AS pending FROM attendance_raw_scan WHERE hr_mapped=0');
+    pendingMappingCount = Number(pending.pending);
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -3646,7 +3652,7 @@ async function persistScannerCliScans(cliResult, options = {}) {
   } finally {
     connection.release();
   }
-  return { inserted, updated, skipped, unmapped, machineCounts, total: filtered.length, affectedDates: [...affectedDates].sort() };
+  return { inserted, updated, skipped, unmapped, pendingMappingCount, machineCounts, total: filtered.length, affectedDates: [...affectedDates].sort() };
 }
 
 // ============================================================================
@@ -3812,6 +3818,8 @@ async function calculateDailyAttendanceForDate(workDate) {
     console.error('[Calc Error - Personnel]', err.message);
     return { success: false, error: err.message, code: err.code, step: 'QUERY_PERSONNEL' };
   }
+
+  if (!personnelRows.length) return { success: true, skipped: true, reason: 'WAITING_FOR_MAPPING', workDate, message: 'รอข้อมูลบุคลากร: เก็บ Raw Scan แล้ว ยังไม่คำนวณ Attendance' };
 
   const personnelByPersonId = new Map();
   const personnelByFingleId = new Map();
@@ -4398,7 +4406,7 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
   const startTime = Date.now();
 
   try {
-    if (req.body?.preview !== true) await ensureTablesExist();
+    await assertScannerStorage(getDbPool());
     const { auto = true, days = 3, machineNo, machine, preview = false } = req.body || {};
 
     const dates = scannerRecentDates(days);
@@ -4417,14 +4425,19 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
         persisted = await persistScannerCliScans(cliResult, { preview, machineNos: machine ?? machineNo, dates });
       } catch (persistError) {
         console.error('[Scanner Raw Scan] Save failed:', persistError.message);
-        return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', message: persistError.message });
+        return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', rawSaveSuccess: false, rawSaveStatus: 'FAILED', total_new: 0, duplicates: 0, message: persistError.message });
       }
     }
-    if (!cliResult.success) return res.status(502).json(cliResult);
+    if (!cliResult.success) return res.status(502).json({ ...cliResult, readerSummary: { totalNew: cliResult.totalNew, duplicates: cliResult.duplicates }, rawSaveSuccess: false, rawSaveStatus: 'NOT_STARTED', totalNew: 0, total_new: 0, duplicates: 0, machines: scannerDbMachineSummaries(cliResult.machines, {}) });
     cliResult.rawScan = persisted;
+    cliResult.rawSaveSuccess = !preview;
+    cliResult.rawSaveStatus = preview ? 'PREVIEW' : 'COMMITTED';
+    cliResult.pendingMappingCount = persisted.pendingMappingCount ?? null;
+    cliResult.unmappedCandidates = persisted.unmappedCandidates;
     cliResult.readerSummary = { totalNew: cliResult.totalNew, duplicates: cliResult.duplicates, unmapped: cliResult.unmapped };
     if (persisted) {
       cliResult.totalNew = persisted.inserted;
+      cliResult.total_new = persisted.inserted;
       cliResult.duplicates = persisted.skipped;
       cliResult.unmapped = persisted.unmapped;
       cliResult.affectedDates = persisted.affectedDates;
@@ -4437,17 +4450,20 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
     // ข้อ 13: ตรวจผลสำเร็จของการคำนวณแต่ละวัน และแยกสถานะ SUCCESS, PARTIAL, FAILED ชัดเจน
     if (!preview && cliResult.success && persisted && persisted.affectedDates.length > 0) {
       const calcSummaries = [];
+      const mappingPendingDates = [];
       const successDates = [];
       const failedDates = [];
 
       for (const d of persisted.affectedDates) {
         try {
           const cRes = await calculateDailyAttendanceForDate(d);
-          if (cRes && cRes.success) {
+          if (cRes?.skipped && cRes.reason === 'WAITING_FOR_MAPPING') {
+            mappingPendingDates.push(d);
+          } else if (cRes && cRes.success) {
             successDates.push(d);
             calcSummaries.push(cRes);
           } else {
-            failedDates.push({ date: d, error: cRes?.message || 'Calculation returned false' });
+            failedDates.push({ date: d, error: cRes?.message || cRes?.error || 'Calculation returned false' });
           }
         } catch (calcErr) {
           failedDates.push({ date: d, error: calcErr.message });
@@ -4455,12 +4471,13 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
         }
       }
 
-      const calcStatus = failedDates.length === 0 ? 'SUCCESS' : (successDates.length > 0 ? 'PARTIAL' : 'FAILED');
+      const calcStatus = failedDates.length ? (successDates.length ? 'PARTIAL' : 'FAILED') : (mappingPendingDates.length ? 'WAITING_FOR_MAPPING' : 'SUCCESS');
       cliResult.autoCalculated = calcStatus === 'SUCCESS';
       cliResult.calculationStatus = calcStatus;
       cliResult.calculatedDates = successDates;
       cliResult.failedDates = failedDates;
       cliResult.calcSummaries = calcSummaries;
+      cliResult.mappingPendingDates = mappingPendingDates;
     } else {
       cliResult.autoCalculated = false;
       cliResult.calculationStatus = 'SKIPPED';
@@ -4468,6 +4485,7 @@ samRouter.post(samRoute('/api/scanners/sync'), async (req, res) => {
       cliResult.failedDates = [];
     }
 
+    cliResult.calculationSuccess = cliResult.calculationStatus === 'SUCCESS';
     if (cliResult.failedDates.length) { cliResult.success = false; cliResult.message = 'Raw scans saved; attendance calculation failed'; }
     if (!preview) await recordScannerSync(cliResult, persisted, days, machine ?? machineNo, auto ? 'AUTO' : 'MANUAL');
     res.status(cliResult.success ? 200 : 502).json(cliResult);
@@ -4572,7 +4590,8 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
   const startTime = Date.now();
 
   try {
-    if (req.body?.preview !== true) await ensureTablesExist();
+    if ((req.body?.syncSource || 'SCANNERS') === 'SCANNERS') await assertScannerStorage(getDbPool());
+    else if (req.body?.preview !== true) await ensureTablesExist();
     const poolAtt = getDbPool();
     const { 
       machineNos = 'ALL', 
@@ -4705,32 +4724,33 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
       };
 
       if (!cliResult.success) {
-        return res.status(502).json({ success: false, message: cliResult.message || 'Scanner EXE failed', machines: cliResult.machines || [] });
+        return res.status(502).json({ success: false, rawSaveSuccess: false, rawSaveStatus: 'NOT_STARTED', newCount: 0, totalInserted: 0, total_new: 0, duplicates: 0, duplicateCount: 0, message: cliResult.message || 'Scanner EXE failed', machines: scannerDbMachineSummaries(cliResult.machines, {}) });
       }
       let saved;
       try {
         saved = await persistScannerCliScans(cliResult, { dates: targetDates, machineNos, strategy, preview });
       } catch (persistError) {
         console.error('[Custom Scanner Raw Scan] Save failed:', persistError.message);
-        return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', message: persistError.message });
+        return res.status(502).json({ success: false, error: 'RAW_SCAN_SAVE_FAILED', rawSaveSuccess: false, rawSaveStatus: 'FAILED', total_new: 0, duplicates: 0, message: persistError.message });
       }
       const stagingInserted = saved.inserted;
       const stagingUpdated = saved.updated;
       const stagingSkipped = saved.skipped;
       const stagingTotal = saved.total;
 
-      const calculatedDates = [], failedDates = [];
+      const calculatedDates = [], failedDates = [], mappingPendingDates = [];
       if (!preview && recalculate) {
         for (const affDate of saved.affectedDates) {
           try {
             const result = await calculateDailyAttendanceForDate(affDate);
-            if (!result?.success) throw new Error(result?.message || 'Calculation returned false');
+            if (result?.skipped && result.reason === 'WAITING_FOR_MAPPING') { mappingPendingDates.push(affDate); continue; }
+            if (!result?.success) throw new Error(result?.message || result?.error || 'Calculation returned false');
             calculatedDates.push(affDate);
           } catch (error) { failedDates.push({ date: affDate, error: error.message }); }
         }
       }
       const calculationStatus = failedDates.length ? (calculatedDates.length ? 'PARTIAL' : 'FAILED')
-        : (calculatedDates.length ? 'SUCCESS' : 'SKIPPED');
+        : (mappingPendingDates.length ? 'WAITING_FOR_MAPPING' : (calculatedDates.length ? 'SUCCESS' : 'SKIPPED'));
       if (!preview) await recordScannerSync({ ...cliResult, machines: scannerDbMachineSummaries(cliResult.machines, saved), failedDates }, saved, daysBack, selectedMachines.length === 1 ? selectedMachines[0] : null, 'CUSTOM');
 
       const totalTargetFound = stagingTotal;
@@ -4740,6 +4760,9 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
 
       return res.status(failedDates.length ? 502 : 200).json({
         success: failedDates.length === 0,
+        rawSaveSuccess: !preview, rawSaveStatus: preview ? 'PREVIEW' : 'COMMITTED',
+        rawScan: saved, unmapped: saved.unmapped, unmappedCount: saved.unmapped, pendingMappingCount: saved.pendingMappingCount ?? null, unmappedCandidates: saved.unmappedCandidates,
+        calculationSuccess: calculationStatus === 'SUCCESS', mappingPendingDates,
         calculationStatus, calculatedDates, failedDates, autoCalculated: calculationStatus === 'SUCCESS',
         preview,
         targetLabel,
@@ -4747,7 +4770,7 @@ samRouter.post(samRoute('/api/scanners/sync-custom'), async (req, res) => {
         targetDatesCount: targetDates.length,
         selectedDateMode: mode,
         totalFound: totalTargetFound,
-        newCount: stagingInserted,
+        newCount: stagingInserted, total_new: stagingInserted, duplicates: stagingSkipped,
         duplicateCount: stagingSkipped,
         totalInserted: stagingInserted,
         totalUpdated: stagingUpdated,
@@ -5235,6 +5258,8 @@ samRouter.get(samRoute('/api/scanners/check-dll'), (req, res) => {
 
 // 4.14 ส่งข้อมูลเข้า hosoffice (Batch Push) - Manual Push Only (ข้อ 9, 24)
 samRouter.post(samRoute('/api/push/batch'), requireRole(['ADMIN', 'HR']), async (req, res) => {
+  if (process.env.SAM_ATT_ENABLE_HOSOFFICE_PUSH !== 'true') return res.status(403).json({ success: false, error: 'HOSOFFICE_PUSH_DISABLED', message: 'ปิด Push ไป HOSOffice ระหว่างทดสอบ Sam_Att' });
+
   const { dateFrom, dateTo, machineNo } = req.body;
   const currentUserId = req.user ? req.user.userId : 1;
   const currentUsername = req.user ? req.user.username : 'ADMIN';
